@@ -98,6 +98,69 @@ def test_split_command_exam(tmp_path):
     assert all((Path(p) / "images").is_dir() for p in payload["unit_dirs"])
 
 
+LECTURE_GRID = ("## 模块一\n\n"
+                "+------------------+\n"
+                "| **例1**（多选）    |\n"
+                "+------------------+\n"
+                "| 题干一            |\n"
+                "+------------------+\n"
+                "| **例2**（多选）    |\n"
+                "+------------------+\n"
+                "| 题干二            |\n"
+                "+------------------+\n")
+
+
+def test_slice_preview_prints_cleaned_lecture(tmp_path):
+    raw = tmp_path / "讲义_raw.md"
+    raw.write_text(LECTURE_GRID, encoding="utf-8")
+    r = run("slice", "--raw", str(raw), "--mode", "lecture", "--preview")
+    assert r.returncode == 0, r.stderr
+    assert "**例1**（多选）" in r.stdout
+    assert "+---" not in r.stdout and "|" not in r.stdout
+
+
+def test_slice_preview_requires_raw(tmp_path):
+    r = run("slice", "--preview", "--json")
+    assert r.returncode == 2
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["error"]["code"] == "usage"
+
+
+def test_slice_requires_boundaries_without_preview(tmp_path):
+    raw = tmp_path / "a.md"
+    raw.write_text("正文", encoding="utf-8")
+    r = run("slice", "--raw", str(raw), "--json")
+    assert r.returncode == 2
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["error"]["code"] == "usage"
+
+
+def test_slice_lecture_boundaries_from_preview(tmp_path):
+    """智能拆分流程：先 preview 取清理后正文定行号，再 slice。"""
+    raw = tmp_path / "讲义_raw.md"
+    raw.write_text(LECTURE_GRID, encoding="utf-8")
+    preview = run("slice", "--raw", str(raw), "--mode", "lecture", "--preview")
+    assert preview.returncode == 0, preview.stderr
+    lines = preview.stdout.splitlines()
+    i1 = lines.index("**例1**（多选）")
+    i2 = lines.index("**例2**（多选）")
+    bpath = tmp_path / "boundaries.json"
+    bpath.write_text(json.dumps({
+        "raw": str(raw),
+        "mode": "lecture",
+        "base_name": "讲义",
+        "boundaries": [
+            {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
+            {"name": "单元2", "start_line": i2 + 1, "end_line": len(lines)},
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+    r = run("slice", "--boundaries", str(bpath), "--out-root", str(tmp_path / "out"), "--json")
+    assert r.returncode == 0, r.stderr
+    payload = json.loads(r.stdout)
+    assert len(payload["unit_dirs"]) == 2
+    u1 = (Path(payload["unit_dirs"][0]) / "单元1.md").read_text(encoding="utf-8")
+    assert "**例1**" in u1 and "**例2**" not in u1
+
 def test_precheck_split_command(tmp_path):
     paper = tmp_path / "卷子"
     for i in (1, 2):

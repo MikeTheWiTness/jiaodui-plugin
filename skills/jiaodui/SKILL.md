@@ -21,7 +21,11 @@ description: K-12 试卷/讲义校对总入口。judgement 交给 agent，确定
 1. 转换：`jiaodui convert <源文件>` → `_raw.md` + `images/`（已经是 md 可跳过）。
 2. 拆分：`jiaodui split <raw_md> --subject 高中物理 --mode exam|lecture`（默认规则拆分）。
    - **讲义模式默认执行完整导入清理**（与旧仓 `clean_enabled` 默认开启一致，顺序固定）：`fix_latex_escapes` 还原 pandoc 过度转义 → `comprehensive_clean` 去表格竖线 → `clean_intent` 清【出题意图】 → `fix_floating_images` 把浮进选项 A 的题图挪回独立行 → `normalize_option_spacing` 压选项/解答长空格 → `strip_decor_images` 清装饰图。pandoc 会把讲义渲染成网格表，`**例1**`/`**练1**` 落在表格行内（行首是竖线）；不清理则 `section_pattern` 命中不到，整篇会塌成一个超长单元。仅在需要保留原始表格做对照时才加 `--no-clean`（此时六步全不执行）。
-3. 抽查：`jiaodui precheck-split <输出目录>`，看单元数、各单元首行、字符数分布、空单元与超长单元；异常才升级智能拆分（派拆分子 agent 出边界清单 → `jiaodui slice --boundaries`）。
+3. 抽查：`jiaodui precheck-split <输出目录>`，看单元数、各单元首行、字符数分布、空单元与超长单元；异常才升级智能拆分：
+   1. 取清理后正文：`jiaodui slice --raw <raw_md> --mode lecture --subject <学科> --preview`（讲义模式；试卷模式直接读 raw）；
+   2. 派拆分子 agent 在**该文本**上定边界行号，写边界清单 JSON；
+   3. `jiaodui slice --boundaries <清单.json> --subject <学科>`。
+   - 讲义模式必须先清理（去网格表竖线、清【出题意图】、挪浮图、压空格）再切；用原始 raw 的行号定边界会错位（第一单元混入下一题、后续单元为空）。`--subject` 必须与 `--preview` 一致，否则【出题意图】清理结果不同、行号随之错位。
 4. 扫描：`jiaodui status <paper_dir>`，只派发未开始 / 未过校验的单元。
 5. 滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。
 6. 子 agent：读源文 + `images/` + 学科 references → 校对 → 写 `_校对报告.md` → `jiaodui verify-report --unit <dir>`；不过则按结构化原因**自修 ≤3 轮**。
@@ -55,7 +59,8 @@ jiaodui check-env
 jiaodui convert <file> [--out-dir D] [--base-name N] [--mathjax]
 jiaodui split <raw_md> --subject 高中物理 --mode exam|lecture [--out-root D] [--images-dir D]
 jiaodui precheck-split <dir>
-jiaodui slice --boundaries <清单.json> [--raw R] [--out-root D] [--mode exam|lecture]
+jiaodui slice --boundaries <清单.json> [--raw R] [--out-root D] [--mode exam|lecture] [--subject 学科]
+jiaodui slice --raw R --mode lecture [--subject 学科] --preview   # 只打印清理后正文，供定边界行号
 jiaodui status <paper_dir>
 jiaodui verify-report --unit <dir> [--source S]
 jiaodui parse-report --unit <dir> [--source S] [--legacy]

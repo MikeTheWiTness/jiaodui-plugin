@@ -28,6 +28,7 @@ from .log import log
 from .markers import (INLINE_MARKER_CAPTURE_RE, MARKER_NOOP,
                       MARKER_RESTORE_NEW, audit_markers)
 from .markers import scan_math_spans as _scan_math_spans
+from .report_parse import parse_reasons
 
 # \| 是 LaTeX 转义竖线（\left\|…\right\|），整体属于原文字段，不得当分隔符
 _PAT = INLINE_MARKER_CAPTURE_RE
@@ -425,7 +426,7 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
                 else:
                     all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
                 continue
-            reasons = _parse_reasons(part[reason_idx:])
+            reasons = parse_reasons(part[reason_idx:])
             body = part[marker_idx:reason_idx]
             body = "\n".join(
                 l for l in body.splitlines()
@@ -565,15 +566,6 @@ def _read_unit_source(paper_path: Path, qid: str) -> str | None:
         return unit_md.read_text(encoding="utf-8")
     except OSError:
         return None
-
-
-def _parse_reasons(part: str) -> dict:
-    reasons = {}
-    for line in part.splitlines():
-        m = re.match(r"^\s*(\d+)\.\s+(.+)$", line)
-        if m:
-            reasons[int(m.group(1))] = m.group(2).strip()
-    return reasons
 
 
 def _rewrite_images(body: str, q_dir: Path, img_root: Path) -> str:

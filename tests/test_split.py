@@ -5,8 +5,8 @@
 """
 from pathlib import Path
 
-from jiaodui.split import (SplitResult, precheck_split, slice_by_boundaries,
-                           split_exam, split_lecture)
+from jiaodui.split import (SplitResult, lecture_cleaned_text, precheck_split,
+                           slice_by_boundaries, split_exam, split_lecture)
 
 
 def _md_names(unit_dir: Path):
@@ -333,8 +333,37 @@ class TestSliceByBoundaries:
         slice_by_boundaries("ignored", boundaries, str(tmp_path / "out"), "sl", "exam")
         assert not list((tmp_path / "out").rglob("*_clean.md"))
 
+    def test_lecture_boundaries_must_follow_cleaned_text(self, tmp_path):
+        """智能拆分行号必须基于清理后正文（否则第一单元混题、第二单元为空）。"""
+        raw = ("## 模块一\n\n"
+               "+------------------+\n"
+               "| **例1**（多选）    |\n"
+               "+------------------+\n"
+               "| 题干一            |\n"
+               "+------------------+\n"
+               "| **例2**（多选）    |\n"
+               "+------------------+\n"
+               "| 题干二            |\n"
+               "+------------------+\n")
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text(raw, encoding="utf-8")
 
-# ─── 拆分预检 ─────────────────────────────────────────────
+        cleaned = lecture_cleaned_text(str(raw_path), "lec")
+        lines = cleaned.splitlines()
+        i1 = lines.index("**例1**（多选）")
+        i2 = lines.index("**例2**（多选）")
+        assert "|" not in cleaned
+        boundaries = [
+            {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
+            {"name": "单元2", "start_line": i2 + 1, "end_line": len(lines)},
+        ]
+        result = slice_by_boundaries(str(raw_path), boundaries,
+                                     str(tmp_path / "out"), "lec", "lecture")
+        assert len(result.units) == 2
+        t1 = _text(tmp_path / "out" / "lec" / "单元1" / "单元1.md")
+        t2 = _text(tmp_path / "out" / "lec" / "单元2" / "单元2.md")
+        assert "**例1**" in t1 and "题干一" in t1 and "**例2**" not in t1
+        assert "**例2**" in t2 and "题干二" in t2
 
 class TestPrecheckSplit:
     def _make_unit(self, base: Path, name: str, text: str):

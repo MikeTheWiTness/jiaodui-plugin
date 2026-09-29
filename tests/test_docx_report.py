@@ -466,6 +466,44 @@ class TestEscapedPipeInMarkers(unittest.TestCase):
             self.assertNotIn(r"\left|{E}_{1}-{E}_{2}\right|", cmt)
 
 
+@PANDOC_REQUIRED
+class TestReasonRangeMapping(unittest.TestCase):
+    """回归：修改原因区间编号（1-2.）必须映射到范围内每一条批注。"""
+
+    @classmethod
+    def setUpClass(cls):
+        if not find_pandoc():
+            raise unittest.SkipTest("pandoc 不可用，跳过 docx 报告测试")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="_docx_reason_range_")
+        self.paper = os.path.join(self.tmp, "测试试卷")
+        q = os.path.join(self.paper, "第1题")
+        os.makedirs(q)
+        report = (
+            "# 第1题 校对报告\n\n轻微问题\n\n"
+            "### 标记原文\n编号：第1题\n内容：\n"
+            "句子【1|甲|乙】与【2|丙|丁】以及【3|戊|己】。\n\n"
+            "### 修改原因\n1-2. 甲乙两处同类问题。\n3. 戊处单独问题。\n"
+        )
+        with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
+            f.write(report)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_range_reason_reaches_every_comment(self):
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        self.assertIsNotNone(docx_path)
+        z = zipfile.ZipFile(docx_path)
+        cmt = z.read("word/comments.xml").decode("utf-8")
+        ids = re.findall(r'<w:comment w:id="(\d+)"[^>]*>(.*?)</w:comment>', cmt, re.S)
+        self.assertEqual([i for i, _ in ids], ["1", "2", "3"])
+        by_id = {i: body for i, body in ids}
+        self.assertIn("甲乙两处同类问题", by_id["1"])
+        self.assertIn("甲乙两处同类问题", by_id["2"])
+        self.assertIn("戊处单独问题", by_id["3"])
+
 class TestConvertMultilineTables(unittest.TestCase):
     """回归：_convert_multiline_tables 不得把普通 bullet 列表误判为表格。
 

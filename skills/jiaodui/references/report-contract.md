@@ -22,13 +22,13 @@
 | 修改原因对应 | 编号与标记一一对应；多、少、错位 → 拒绝 | `reason.missing`（标记缺原因）、`reason.orphan`（原因多编号）、`marker.duplicate-num`（编号重复） |
 | 严重度总结行 | 四值之一；缺失 / 非法 / `无问题` 却含错误标记 → 拒绝 | `severity.missing`、`severity.invalid`、`severity.contradiction` |
 | 原文完整性 | 去掉标记语法、把各标记还原为「原文字段」后，与单元源文**逐段比对**；缺段、重段、改变未标记正文 → 拒绝 | `integrity.missing-paragraph`、`integrity.extra-paragraph`、`integrity.duplicate-paragraph`、`integrity.changed` |
-| 找不到源文 | 无法做原文完整性比对，仅格式与标记检查生效 → 告警 | `integrity.no-source`（warning） |
+| 找不到源文 | 源文缺失或为空，无法做原文全文比对 → **拒绝**（历史产物兼容走显式 `--legacy`） | `integrity.no-source`（error） |
 | 空原文字段 | 原文字段为空 → 拒绝 | `original.empty` |
 | 空操作 | 原文 == 改为（完全相同）→ 拒绝 | `original.noop` |
 | 原文字段定位 | 无法在源文定位 → **unknown 只告警，不算失败**（LaTeX 装饰差异会让合法标记也定位不到） | `locate.unknown`（warning） |
 | 原文字段与源文不符 | 原文字段对不上、但「改为」对得上（源文此处即「改为」）→ 拒绝：原文字段必须逐字一致 | `original.not-locatable` |
 | 改为与原文无法区分 | 归一化后相同 → 记「需人工确认」，**不拒绝**（宁可多保留一条批注也不静默丢真实发现） | `marker.manual-review`（manual） |
-| 涉及 unknown 的正文差异 | 源文与重建正文有差异但涉及无法定位字段 → 保留 unknown 警告，降级 | `integrity.unknown-diff`（warning） |
+| 涉及 unknown 的正文差异 | **仅当差异完全落在一个真实 `$…$` 公式区间内**（公式字段的 LaTeX 装饰差异）才降级为告警；公式之间的普通正文差异仍按缺段/多段/改动**拒绝** | `integrity.unknown-diff`（warning，仅限公式字段内） |
 | 报告本身 | 报告为空 → 拒绝；文件不存在 → 拒绝 | `report.empty`、`report.missing` |
 
 > 注意：`locate.unknown` 与 `integrity.changed` 不能混为一类——对**无法定位**给警告，对**可确定的源文缺漏**给失败。

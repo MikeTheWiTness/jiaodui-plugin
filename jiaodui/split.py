@@ -65,6 +65,37 @@ def prepare_lecture_content(content: str, problem_markers=None) -> str:
     content = normalize_option_spacing_text(content)
     return strip_decor_images(content)
 
+
+def _clean_lecture(content: str, config: dict | None = None) -> str:
+    """讲义清理的唯一入口：按学科配置合并【出题意图】标志后清理正文。"""
+    from .convert import get_intent_problem_markers
+
+    return prepare_lecture_content(
+        content, problem_markers=get_intent_problem_markers(config))
+
+
+def lecture_cleaned_text(raw_md, base_name: str = "",
+                         config: dict | None = None) -> str:
+    """返回讲义导入清理后的正文（与 split/slice 同源）。
+
+    智能拆分必须在**清理后**的正文上定边界行号：`slice` 会先做同一套清理，
+    若边界来自原始 raw（带网格表竖线、表格边框、被压缩前的空格），行号必然
+    错位——实测会出现第一单元混入下一题、第二单元变空。正确流程是先取本函数
+    输出，在其上定行号，再 `slice --boundaries`。
+
+    Args:
+        raw_md: raw markdown 路径（也接受正文）。
+        base_name: 仅用于推导图片源目录，preview 不需要。
+        config: 学科配置（标准化前后均可），与 `slice --subject` 保持一致。
+
+    Returns:
+        清理后的 Markdown 正文。
+    """
+    config = _ensure_normalized(config)
+    content, _ = _load_raw(raw_md, (base_name or "").strip(), {})
+    return _clean_lecture(content, config)
+
+
 # ─── 统一的单元标记（ADR-0017 决策5） ──────────────────────────
 
 UNIT_START_MARKER = r"(\\?#){6}\s*单元开始\s*(\\?#){6}"
@@ -604,10 +635,7 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
     config = _ensure_normalized(config)
     content, src_media = _load_raw(raw_md, base_name, raw_config)
     if clean:
-        from .convert import get_intent_problem_markers
-
-        content = prepare_lecture_content(
-            content, problem_markers=get_intent_problem_markers(config))
+        content = _clean_lecture(content, config)
     result = SplitResult()
     if not content.strip():
         result.warnings.append("源文为空，未识别到任何单元")
@@ -692,7 +720,8 @@ def _slice_lines(lines: list[str], start_line, end_line) -> str:
 
 def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
                         base_name: str, mode: str = "exam",
-                        *, clean: bool = True) -> SplitResult:
+                        *, clean: bool = True,
+                        config: dict | None = None) -> SplitResult:
     """按边界清单确定性切片（智能拆分用）。
 
     boundaries 兼容两种写法：
@@ -701,14 +730,17 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
 
     mode 决定兜底命名：`exam` → 第N题，`lecture` → 单元N；边界名本身已是契约名
     时沿用边界名。写盘纪律与 split_exam / split_lecture 完全一致。
+
+    **讲义模式的行号必须基于清理后的正文**：本函数先做导入清理再按行号切片，
+    边界定号请先用 :func:`lecture_cleaned_text`（或 `jiaodui slice --preview`）
+    取得同一份文本。`config` 必须与 preview 时一致，否则【出题意图】清理结果
+    可能不同、行号随之错位。
     """
     base_name = (base_name or "").strip()
+    config = _ensure_normalized(config)
     content, src_media = _load_raw(raw_md, base_name, {})
     if clean and str(mode).lower() == "lecture":
-        # 讲义边界清单必须是在同一清理后的正文上定出的行号，
-        # 否则切片结果与规则拆分的单元正文不一致（切片入口没有学科配置，
-        # 【出题意图】清理只能用通用标志，学科独有标志由 split 路径覆盖）。
-        content = prepare_lecture_content(content)
+        content = _clean_lecture(content, config)
     lines = content.splitlines()
     result = SplitResult()
     if not boundaries:

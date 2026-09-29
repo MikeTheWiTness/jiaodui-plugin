@@ -121,8 +121,31 @@ def _split(args: argparse.Namespace) -> int:
 
 
 def cmd_slice(args: argparse.Namespace) -> int:
-    from .split import slice_by_boundaries
+    from .split import lecture_cleaned_text, slice_by_boundaries
 
+    # 学科配置可选：给定时【出题意图】清理与规则 split 完全一致。
+    config = _resolve_subject_config(args.subject) if args.subject else {}
+
+    if args.preview:
+        if not args.raw:
+            raise UsageError("--preview 需要 --raw <raw_md>")
+        raw_path = Path(args.raw)
+        if not raw_path.is_file():
+            raise NotFoundError(f"raw md 不存在：{raw_path}")
+        mode = args.mode or "lecture"
+        base_name = args.base_name or raw_path.stem.replace("_raw", "")
+        if str(mode).lower() == "lecture" and not args.no_clean:
+            cleaned = lecture_cleaned_text(str(raw_path), base_name, config)
+        else:
+            cleaned = raw_path.read_text(encoding="utf-8")
+        if args.json:
+            _json_out({"ok": True, "mode": mode, "cleaned": cleaned})
+        else:
+            print(cleaned)
+        return ExitCode.OK
+
+    if not args.boundaries:
+        raise UsageError("slice 需要 --boundaries <清单.json>，或用 --preview 查看清理后正文")
     bpath = Path(args.boundaries)
     if not bpath.is_file():
         raise NotFoundError(f"边界清单不存在：{bpath}")
@@ -141,8 +164,10 @@ def cmd_slice(args: argparse.Namespace) -> int:
     mode = args.mode or data.get("mode", "exam")
     base_name = args.base_name or data.get("base_name") or raw_path.stem.replace("_raw", "")
     out_root = Path(args.out_root) if args.out_root else (Path(data["out_root"]) if data.get("out_root") else raw_path.parent)
+    if not args.subject and data.get("subject"):
+        config = _resolve_subject_config(data["subject"])
     result = slice_by_boundaries(str(raw_path), boundaries, str(out_root), base_name, mode,
-                                 clean=not args.no_clean)
+                                 clean=not args.no_clean, config=config)
     payload = {"ok": True, "unit_dirs": result.unit_dirs, "units": result.units,
                "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
     if args.json:
@@ -364,13 +389,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=_split)
 
     sp = sub.add_parser("slice", help="按边界清单确定性切片")
-    sp.add_argument("--boundaries", required=True)
+    sp.add_argument("--boundaries")
     sp.add_argument("--raw")
     sp.add_argument("--out-root")
     sp.add_argument("--base-name")
     sp.add_argument("--mode", choices=["exam", "lecture"])
+    sp.add_argument("--subject", help="学科配置（与 split 一致，影响讲义出题意图清理）")
     sp.add_argument("--no-clean", action="store_true",
                     help="讲义模式跳过导入清理（边界行号须与清理后正文一致）")
+    sp.add_argument("--preview", action="store_true",
+                    help="只打印讲义清理后的正文（供智能拆分定边界行号），不写盘")
     sp.set_defaults(func=cmd_slice)
 
     sp = sub.add_parser("precheck-split", help="拆分预检")
