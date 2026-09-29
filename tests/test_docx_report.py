@@ -1350,3 +1350,32 @@ class TestBuildDocxAudit:
 
 if __name__ == "__main__":
     unittest.main()
+
+def test_anchor_pairing_ok():
+    from jiaodui.docx_report import _check_anchor_pairing
+    doc = ('<w:commentRangeStart w:id="1"/><w:p/><w:commentRangeEnd w:id="1"/>'
+           '<w:r><w:commentReference w:id="1"/></w:r>')
+    ok, problems = _check_anchor_pairing(doc, {"1"})
+    assert ok and not problems
+
+
+def test_anchor_pairing_detects_id_mismatch():
+    from jiaodui.docx_report import _check_anchor_pairing
+    doc = ('<w:commentRangeStart w:id="1"/><w:commentRangeEnd w:id="999"/>'
+           '<w:commentReference w:id="999"/>')
+    ok, problems = _check_anchor_pairing(doc, {"1"})
+    assert not ok
+    assert any(("不一致" in p) or ("缺少" in p) for p in problems)
+
+
+def test_anchor_pairing_detects_duplicate_and_order():
+    from jiaodui.docx_report import _check_anchor_pairing
+    dup = ('<w:commentRangeStart w:id="1"/><w:commentRangeStart w:id="1"/>'
+           '<w:commentRangeEnd w:id="1"/><w:commentReference w:id="1"/>')
+    ok, problems = _check_anchor_pairing(dup, {"1"})
+    assert not ok and any("重复" in p for p in problems)
+    bad_order = ('<w:commentRangeStart w:id="1"/><w:commentReference w:id="1"/>'
+                 '<w:commentRangeEnd w:id="1"/>')
+    ok2, problems2 = _check_anchor_pairing(bad_order, {"1"})
+    assert not ok2 and any("顺序" in p for p in problems2)
+

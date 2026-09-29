@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .errors import (ContractError, ExitCode, JiaoduiError, NotFoundError,
-                     UnsupportedError, UsageError, VerifyFailedError, emit_error)
+from .errors import (BusinessError, ContractError, ExitCode, JiaoduiError,
+                     NotFoundError, UnsupportedError, UsageError, VerifyFailedError,
+                     emit_error)
 from .log import log, set_quiet
 
 
@@ -62,7 +63,11 @@ def cmd_check_env(args: argparse.Namespace) -> int:
         for h in report.host_checks_required:
             log(f"   - {h}")
         print(json.dumps({"ok": report.ok}, ensure_ascii=False))
-    return ExitCode.OK if report.ok else ExitCode.ENV
+    if not report.ok:
+        failed = [i.name for i in report.items if i.required and not i.ok]
+        raise BusinessError(f"环境预检未通过：{failed}", code="env",
+                            exit_code=ExitCode.ENV, details={"failed": failed})
+    return ExitCode.OK
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
@@ -225,7 +230,10 @@ def cmd_parse_report(args: argparse.Namespace) -> int:
     else:
         log(f" {'✅' if ok else '❌'} _校对数据.json：{data_path(unit)}")
         print(json.dumps(payload, ensure_ascii=False))
-    return ExitCode.OK if ok else ExitCode.CONTRACT
+    if not ok:
+        raise BusinessError(f"报告无法解析为 _校对数据.json：{unit}", code="parse_failed",
+                            details={"unit": str(unit)})
+    return ExitCode.OK
 
 
 def _parse_kv(values: list[str]) -> dict:
@@ -267,7 +275,10 @@ def cmd_calc(args: argparse.Namespace) -> int:
         _json_out(payload)
     else:
         print(json.dumps(result, ensure_ascii=False, default=str))
-    return ExitCode.OK if result.get("success") else ExitCode.CONTRACT
+    if not result.get("success"):
+        raise BusinessError(str(result.get("error") or "calc 执行失败"), code="calc_failed",
+                            details={"op": op})
+    return ExitCode.OK
 
 
 def cmd_build_report(args: argparse.Namespace) -> int:
@@ -281,7 +292,10 @@ def cmd_build_report(args: argparse.Namespace) -> int:
     else:
         log(f" 拼入 {len(result.included)}，失败 {len(result.failed)}，跳过 {len(result.skipped)}")
         print(json.dumps(payload, ensure_ascii=False))
-    return ExitCode.OK if result.out_path else ExitCode.CONTRACT
+    if not result.out_path:
+        raise BusinessError("整卷报告未生成：没有可处理的单元",
+                            code="build_report_failed", details={"warnings": result.warnings})
+    return ExitCode.OK
 
 
 def cmd_build_docx(args: argparse.Namespace) -> int:
@@ -297,7 +311,15 @@ def cmd_build_docx(args: argparse.Namespace) -> int:
             f"{result.formula_fallback_count}，缺失 {result.missing_count}，"
             f"标题批注 {result.heading_comment_count}")
         print(json.dumps(payload, ensure_ascii=False, default=str))
-    return ExitCode.OK if payload["ok"] else ExitCode.CONTRACT
+    if not payload["ok"]:
+        raise BusinessError(
+            "Word 交付未通过复核（缺失/被排除/锚点结构不一致）",
+            code="docx_incomplete",
+            details={"missing_count": result.missing_count,
+                     "excluded_units": result.excluded_units,
+                     "anchor_structure_ok": result.anchor_structure_ok,
+                     "warnings": result.warnings})
+    return ExitCode.OK
 
 
 # ---------------------------------------------------------------- parser

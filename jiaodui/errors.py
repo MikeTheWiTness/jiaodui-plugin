@@ -80,6 +80,17 @@ class VerifyFailedError(JiaoduiError):
     exit_code = ExitCode.VERIFY_FAILED
 
 
+class BusinessError(JiaoduiError):
+    """通用业务失败：调用方指定 code 与退出码，统一走 stderr JSON 出口。"""
+
+    def __init__(self, message: str, *, code: str = "contract",
+                 exit_code: int = ExitCode.CONTRACT,
+                 details: dict[str, Any] | None = None, location: str | None = None):
+        super().__init__(message, details=details, location=location)
+        self.code = code
+        self.exit_code = exit_code
+
+
 def emit_error(exc: BaseException) -> int:
     """把异常输出为一行 JSON 到 stderr，返回退出码。"""
     if isinstance(exc, JiaoduiError):

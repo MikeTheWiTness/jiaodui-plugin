@@ -182,3 +182,43 @@ def test_verify_rejects_report_without_source(tmp_path):
     payload = json.loads(r.stdout)
     assert any(e["code"] == "integrity.no-source" for e in payload["errors"])
 
+
+
+def test_calc_business_failure_emits_stderr_json():
+    r = run("calc", "evaluate", "--json")
+    assert r.returncode == 6
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["error"]["code"] == "calc_failed"
+
+
+def test_build_report_empty_emits_stderr_json(tmp_path):
+    empty = tmp_path / "空卷"
+    empty.mkdir()
+    r = run("build-report", str(empty), "--json")
+    assert r.returncode == 6
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["error"]["code"] == "build_report_failed"
+
+
+def test_build_docx_nonexistent_dir_emits_stderr_json(tmp_path):
+    r = run("build-docx", str(tmp_path / "不存在"), "--json")
+    assert r.returncode == 6
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["error"]["code"] == "docx_incomplete"
+
+
+def test_build_docx_excluded_emits_stderr_json(tmp_path):
+    import shutil
+    if not (shutil.which("pandoc") or Path("/usr/local/bin/pandoc").is_file()):
+        import pytest as _pytest
+        _pytest.skip("需要 pandoc")
+    paper = tmp_path / "卷子"
+    unit = paper / "第1题"
+    unit.mkdir(parents=True)
+    (unit / "第1题.md").write_text("设a为$O$点。", encoding="utf-8")
+    (unit / "_校对报告.md").write_text("不合规。", encoding="utf-8")
+    r = run("build-docx", str(paper), "--quiet", "--json")
+    assert r.returncode == 6
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["error"]["code"] == "docx_incomplete"
+

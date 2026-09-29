@@ -128,7 +128,12 @@ def parse_reason_entries(reasons_section: str | None) -> list[tuple[int, str]]:
         return []
     reasons_section = _trim_reasons_section(reasons_section)
     entries: list[tuple[int, str]] = []
-    if re.search(r"(?:^|\n)[ \t]*[①-⑳]", reasons_section):
+    # 两类编号各自独立解析；同时出现时合并，交由调用方统一判重/查孤立。
+    # 不允许「出现圈号就整段只按圈号解析」，否则阿拉伯数字条目被静默丢弃。
+    circled_present = bool(re.search(r"(?:^|\n)[ \t]*[①-⑳]", reasons_section))
+    ascii_present = bool(re.search(
+        r"(?:^|\n)[ \t]*\d+(?:\s*[-–]\s*\d+)?[ \t]*[\.\)、]", reasons_section))
+    if circled_present:
         for rm in _REASON_CIRCLED_RE.finditer(reasons_section):
             sn = _circle_to_int(rm.group(1)[0])
             en = _circle_to_int(rm.group(2)) if rm.group(2) else sn
@@ -137,7 +142,7 @@ def parse_reason_entries(reasons_section: str | None) -> list[tuple[int, str]]:
                 continue
             lo, hi = sorted((sn, en if en is not None else sn))
             entries.extend((n, rt) for n in range(lo, hi + 1))
-    else:
+    if ascii_present:
         for rm in _REASON_ASCII_RE.finditer(reasons_section):
             sn = int(rm.group(1))
             en = int(rm.group(2)) if rm.group(2) else sn

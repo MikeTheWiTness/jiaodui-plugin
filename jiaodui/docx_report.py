@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import itertools
 import os
+from collections import Counter
 import re
 import shutil
 import subprocess
@@ -191,6 +192,45 @@ def _audit_generated_docx(out_path: str | None, included: list[str],
     return actual, comment_ids, warnings
 
 
+def _check_anchor_pairing(doc_xml: str, comment_ids: set[str]) -> tuple[bool, list[str]]:
+    """逐 id 校验批注锚点三段与 comments.xml 是否一一配对。
+
+    数量一致只是附加检查：本函数要求每个 comment id 恰好有 1 个
+    commentRangeStart / commentRangeEnd / commentReference，且三段顺序正确、
+    无重复、与 comments.xml 的 id 集合完全一致。
+    """
+    problems: list[str] = []
+
+    def _ids(pattern: str) -> list[str]:
+        return re.findall(pattern, doc_xml)
+
+    starts = _ids(r'<w:commentRangeStart w:id="(\d+)"')
+    ends = _ids(r'<w:commentRangeEnd w:id="(\d+)"')
+    refs = _ids(r'<w:commentReference w:id="(\d+)"')
+    c_starts, c_ends, c_refs = Counter(starts), Counter(ends), Counter(refs)
+
+    if set(starts) != comment_ids:
+        missing = sorted(comment_ids - set(starts))
+        extra = sorted(set(starts) - comment_ids)
+        problems.append(f"commentRangeStart 与 comments.xml 不一致（缺 {missing}、多 {extra}）")
+    for label, counter in (("commentRangeStart", c_starts), ("commentRangeEnd", c_ends),
+                           ("commentReference", c_refs)):
+        dup = sorted(k for k, v in counter.items() if v > 1)
+        if dup:
+            problems.append(f"{label} 出现重复 id：{dup}")
+        miss = sorted(comment_ids - set(counter))
+        if miss:
+            problems.append(f"{label} 缺少 id：{miss}")
+    for cid in sorted(comment_ids):
+        if c_starts.get(cid, 0) == 1 and c_ends.get(cid, 0) == 1 and c_refs.get(cid, 0) == 1:
+            ps = doc_xml.find(f'<w:commentRangeStart w:id="{cid}"')
+            pe = doc_xml.find(f'<w:commentRangeEnd w:id="{cid}"')
+            pr = doc_xml.find(f'<w:commentReference w:id="{cid}"')
+            if not (0 <= ps < pe < pr):
+                problems.append(f"批注 {cid} 的 start/end/reference 顺序错误")
+    return (not problems), problems
+
+
 def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
     """生成 Word 批注版，并在生成后解压复核「实际锚点」是否与错误标记对账。
 
@@ -285,15 +325,14 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
     # 全局硬门槛交叉复核：正文三段锚点数量、comments.xml 批注数必须相等，
     # 且等于「marker 锚点 + 无问题标题批注」。
     expected_ids = result.anchor_count + result.heading_comment_count
-    n_start = len(re.findall(r'<w:commentRangeStart w:id="\d+"', doc_xml))
-    n_end = len(re.findall(r'<w:commentRangeEnd w:id="\d+"', doc_xml))
-    n_ref = len(re.findall(r'<w:commentReference w:id="\d+"', doc_xml))
-    result.anchor_structure_ok = bool(out_path) and (
-        n_start == n_end == n_ref == len(comment_ids) == expected_ids)
-    if out_path and not result.anchor_structure_ok:
+    pairing_ok, pairing_problems = _check_anchor_pairing(doc_xml, comment_ids)
+    count_ok = (len(comment_ids) == expected_ids)
+    result.anchor_structure_ok = bool(out_path) and pairing_ok and count_ok
+    for problem in pairing_problems:
+        result.warnings.append(f"锚点配对不一致：{problem}（不交付）")
+    if out_path and not count_ok:
         result.warnings.append(
-            f"锚点三段/批注数不一致：start={n_start} end={n_end} ref={n_ref} "
-            f"comments={len(comment_ids)} 期望={expected_ids}（不交付）")
+            f"锚点批注数 {len(comment_ids)} 与期望 {expected_ids} 不一致（不交付）")
     if comment_ids and not (result.marker_count or result.heading_comment_count):
         result.warnings.append(f"docx 含 {len(comment_ids)} 条批注锚点，但报告未解析出任何标记")
     log(f"🔎 Word 报告复核：标记 {result.marker_count} = 锚点 {result.anchor_count} + "

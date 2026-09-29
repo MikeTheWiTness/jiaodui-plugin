@@ -1,7 +1,7 @@
 """verify-report 双向契约测试（PRD §5.2 / §9）。
 
-不合格必被拒 + 合格必被接受；unknown 只豁免落在其字段内的差异；
-无法区分只记需人工确认；无法完成全文比对（空正文 / 源文缺失）必须拒绝。
+不合格必被拒 + 合格必被接受；unknown 只豁免「可确定落在一个公式字段内」的差异；
+无法区分只记需人工确认；无法完成全文比对（空正文 / 源文缺失 / 缺段 / 重段）必须拒绝。
 """
 from __future__ import annotations
 
@@ -28,18 +28,26 @@ NO_ISSUE = f"""无问题
 无
 """
 
-SOURCE3 = "第一段含 a 与 b。\n\n第二段不变。\n\n第三段原文。"
+SOURCE3 = "第一段含 $a$ 与 b。\n\n第二段不变。\n\n第三段原文。"
 
-# 第一段含无法定位的 unknown 标记，第三段是未标记正文篡改
+# 第一段含无法定位的公式 unknown 标记，第三段是未标记正文篡改
 UNKNOWN_PLUS_TAMPER = """一般问题
 ### 标记原文
-第一段含【1|x|y】与 b。
+第一段含【1|$\\mathrm{a}$|$b$】与 b。
 
 第二段不变。
 
 第三段被篡改。
 ### 修改原因
 1. 测试。
+"""
+
+SOURCE_MATH = "设$a$为$O$点，b为1。"
+MATH_UNKNOWN = """一般问题
+### 标记原文
+设【1|$\\mathrm{a}$|$b$】为$O$点，b为1。
+### 修改原因
+1. 原因。
 """
 
 
@@ -68,7 +76,6 @@ def test_no_issue_with_full_source_body_accepted():
 
 
 def test_empty_marked_body_rejected_when_source_nonempty():
-    """空「标记原文」不得绕过全文比对；源文有内容即判缺段。"""
     text = "无问题\n### 标记原文\n\n### 修改原因\n无\n"
     r = verify_report_text(text, SOURCE)
     assert not r.ok
@@ -145,6 +152,14 @@ def test_reason_range_overlap_rejected():
     assert "reason.duplicate" in _codes(r)
 
 
+def test_mixed_reason_numbering_not_silently_dropped():
+    # 混用「1.」与「①」；统一判重后必须发现重复/孤立，不能静默丢弃阿拉伯数字条目
+    text = VALID.replace("1. 参数写错。", "1. 原因甲\n① 原因乙")
+    r = verify_report_text(text, SOURCE)
+    assert not r.ok
+    assert "reason.duplicate" in _codes(r)
+
+
 def test_malformed_marker_rejected():
     text = VALID.replace("【1|a|b】", "【1a|b】")
     r = verify_report_text(text, SOURCE)
@@ -165,20 +180,55 @@ def test_escaped_pipe_does_not_split_field():
     assert "syntax.field-count" not in _codes(r)
 
 
-def test_unknown_localization_is_warning_not_error():
+def test_unknown_math_field_confined_is_warning():
+    """公式字段内的 unknown 差异：逐段一一对齐后仍为警告，不拒绝。"""
+    r = verify_report_text(MATH_UNKNOWN, SOURCE_MATH)
+    assert r.ok, [i.message for i in r.errors]
+    assert "locate.unknown" in _codes(r, WARNING)
+    assert "integrity.unknown-diff" in _codes(r, WARNING)
+
+
+def test_unknown_non_math_field_rejected():
+    """非公式的 unknown 差异不属于「LaTeX 标记字段」豁免范围 → 拒绝。"""
     text = VALID.replace("【1|a|b】", "【1|x|y】")
     r = verify_report_text(text, SOURCE)
-    assert "locate.unknown" in _codes(r, WARNING)
-    assert "locate.unknown" not in _codes(r, ERROR)
-    assert any(i.code in {"locate.unknown", "integrity.unknown-diff"} for i in r.warnings)
+    assert not r.ok
+
+
+def test_unknown_math_field_cannot_absorb_prose():
+    """公式字段的通配符不得吸收整句未标记正文。"""
+    source = "首部$a$。重要条件不能删。尾部"
+    report = ("一般问题\n### 标记原文\n首部【1|$\\mathrm{a}$|$b$】尾部\n"
+              "### 修改原因\n1. 原因。\n")
+    r = verify_report_text(report, source)
+    assert not r.ok
+    assert _codes(r) & {"integrity.extra-paragraph", "integrity.missing-paragraph"}
+
+
+def test_unknown_cannot_hide_missing_paragraph():
+    """只保留带 unknown 的第一段、丢掉第二段 → 缺段必须被拒绝。"""
+    source = "第一段含 $a$ 与 b。\n\n第二段必须保留。"
+    report = ("一般问题\n### 标记原文\n第一段含【1|$\\mathrm{a}$|$b$】与 b。\n"
+              "### 修改原因\n1. 原因。\n")
+    r = verify_report_text(report, source)
+    assert not r.ok
+    assert "integrity.missing-paragraph" in _codes(r, ERROR)
+
+
+def test_unknown_cannot_duplicate_paragraph():
+    """同一源文段在报告里被复制成两个 unknown 段 → 多段/重段必须被拒绝。"""
+    source = "设 $a$ 为。"
+    report = ("一般问题\n### 标记原文\n设【1|$\\mathrm{a}$|$b$】为。\n\n"
+              "设【2|$\\mathrm{a}$|$c$】为。\n### 修改原因\n1. 甲。\n2. 乙。\n")
+    r = verify_report_text(report, source)
+    assert not r.ok
+    assert "integrity.extra-paragraph" in _codes(r, ERROR)
 
 
 def test_unknown_does_not_excuse_other_paragraph_tampering():
-    """unknown 只豁免其所在字段的差异；其他段落的未标记篡改仍须拒绝。"""
     r = verify_report_text(UNKNOWN_PLUS_TAMPER, SOURCE3)
     assert not r.ok, [i.code for i in r.warnings]
-    assert "integrity.changed" in _codes(r, ERROR) or \
-        "integrity.extra-paragraph" in _codes(r, ERROR)
+    assert _codes(r) & {"integrity.extra-paragraph", "integrity.missing-paragraph"}
     assert any(i.code == "integrity.unknown-diff" for i in r.warnings)
 
 
@@ -204,7 +254,6 @@ def test_empty_report_rejected():
 
 
 def test_source_missing_rejected():
-    """新契约：无法完成全文比对即拒绝；历史兼容走显式 legacy 路径。"""
     r = verify_report_text(VALID, None)
     assert not r.ok
     assert "integrity.no-source" in _codes(r, ERROR)

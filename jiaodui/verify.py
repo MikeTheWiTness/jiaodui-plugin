@@ -20,7 +20,6 @@ import re
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 from pathlib import Path
 
 from . import markers as M
@@ -252,27 +251,98 @@ def _reconstruct_with_unknown_tokens(marked_section: str, unknown_nums: set[int]
     return M.INLINE_MARKER_CAPTURE_RE.sub(_repl, marked_section)
 
 
-def _wildcard_pattern(compressed_para: str) -> str | None:
-    """含 unknown 占位符的段落 → 正则（占位符处匹配任意内容）；否则 None。"""
-    if not _UNKNOWN_TOKEN_RE.search(compressed_para):
+_MATH_HINT_RE = re.compile(r"[\\$^_{}]")
+"""unknown 字段是否含公式/LaTeX 特征（只有这类差异才允许豁免）。"""
+
+_MATH_SPAN_PATTERN = r"(?:\$\$[^$]*\$\$|\$[^$\n]*\$)"
+"""unknown 字段只能对应源文里的一个公式片段（内联或同一行的 $$…$$）。
+
+不允许用无边界通配符吸收正文：否则「删掉一整句未标记条件」会被公式差异掩盖。
+"""
+
+
+def _is_math_field(audit: M.MarkerAudit) -> bool:
+    """unknown 的原/改字段是否可视为公式字段。"""
+    return bool(_MATH_HINT_RE.search(audit.original or "")
+                or _MATH_HINT_RE.search(audit.correction or ""))
+
+
+def _paragraph_pattern(compressed_para: str, exempt_nums: set[int]) -> str | None:
+    """含 unknown 占位符的段落 → 正则；占位符只匹配一个公式片段。
+
+    任意占位符不在可豁免集合（unknown 且为公式字段）内时返回 None：
+    该段落差异一律判为正文改动，避免普通正文被公式差异吸收。
+    """
+    tokens = list(_UNKNOWN_TOKEN_RE.finditer(compressed_para))
+    if not tokens:
         return None
+    for tok in tokens:
+        num = int(re.search(r"\d+", tok.group(0)).group())
+        if num not in exempt_nums:
+            return None
     parts = _UNKNOWN_TOKEN_RE.split(compressed_para)
     pattern = ""
     for i, part in enumerate(parts):
         pattern += re.escape(part)
         if i < len(parts) - 1:
-            pattern += ".*"
+            pattern += "(?:" + _MATH_SPAN_PATTERN + ")"
     return pattern
+
+
+def _paras_match(src_c: str, rep_c: str, pattern: str | None) -> str | None:
+    """段落匹配：'exact' / 'relaxed'（差异仅落在公式字段内）/ None。"""
+    if src_c == rep_c:
+        return "exact"
+    if pattern and re.fullmatch(pattern, src_c, re.DOTALL):
+        return "relaxed"
+    return None
+
+
+def _align_paragraphs(src_c: list[str], rep_c: list[str],
+                      patterns: list[str | None]):
+    """按顺序做一对一 DP 对齐，返回 (pairs, unmatched_src, unmatched_rep)。
+
+    只有单调且一一对应的匹配才算数：未匹配的源文段判缺段，未匹配的报告段判多段/重段，
+    因此「只留带 unknown 的第一段」「把一段复制成两段」都会被拒绝。
+    """
+    n, m = len(src_c), len(rep_c)
+    kind: list[list[str | None]] = [[None] * m for _ in range(n)]
+    for i in range(n):
+        for j in range(m):
+            kind[i][j] = _paras_match(src_c[i], rep_c[j], patterns[j])
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            best = max(dp[i + 1][j], dp[i][j + 1])
+            if kind[i][j]:
+                best = max(best, 1 + dp[i + 1][j + 1])
+            dp[i][j] = best
+    pairs: list[tuple[int, int, str]] = []
+    i = j = 0
+    while i < n and j < m:
+        if kind[i][j] and dp[i][j] == 1 + dp[i + 1][j + 1]:
+            pairs.append((i, j, kind[i][j]))  # type: ignore[arg-type]
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    matched_src = {i for i, _, _ in pairs}
+    matched_rep = {j for _, j, _ in pairs}
+    return (pairs,
+            [i for i in range(n) if i not in matched_src],
+            [j for j in range(m) if j not in matched_rep])
 
 
 def _check_integrity(text: str, marked_section: str | None, source_text: str | None,
                      issues: list[VerifyIssue]) -> dict:
     """全文逐段比对：缺段 / 重段 / 改变未标记正文 → 拒绝。
 
-    空「标记原文」不再直接放行：源文有内容即判缺段。源文缺失/为空视为无法完成
-    全文比对 → 拒绝（历史兼容留给显式 legacy 路径）。
-    unknown 标记只豁免「落在其字段内」的差异：段落其余文字仍须与源文逐字一致，
-    否则判为未标记正文被改动。
+    - 空「标记原文」不再放行：源文有内容即判缺段；源文缺失/为空直接拒绝。
+    - 段落按顺序一一对齐：未匹配的源文段 = 缺段，未匹配的报告段 = 多段/重段。
+    - unknown 只豁免「可确定落在一个公式字段内」的差异：占位符只允许匹配源文里的
+      一个 $…$ 公式片段；非公式字段或无法判定时不豁免，正文差异一律拒绝。
     """
     stats = {"source_paragraphs": 0, "report_paragraphs": 0,
              "missing_paragraphs": 0, "extra_paragraphs": 0, "duplicate_paragraphs": 0}
@@ -285,7 +355,9 @@ def _check_integrity(text: str, marked_section: str | None, source_text: str | N
         return stats
 
     audits = M.audit_markers(body, source_text) if body else []
-    unknown_nums = {a.num for a in audits if a.verdict == M.MARKER_UNKNOWN}
+    unknown = [a for a in audits if a.verdict == M.MARKER_UNKNOWN]
+    unknown_nums = {a.num for a in unknown}
+    exempt_nums = {a.num for a in unknown if _is_math_field(a)}
     reconstructed = _reconstruct_with_unknown_tokens(body, unknown_nums)
     src_paras = [p for p in _paragraphs(source_text) if p.strip()]
     rep_paras = [p for p in _paragraphs(reconstructed) if p.strip()]
@@ -293,56 +365,28 @@ def _check_integrity(text: str, marked_section: str | None, source_text: str | N
     stats["report_paragraphs"] = len(rep_paras)
     src_c = [_compress(p) for p in src_paras]
     rep_c = [_compress(p) for p in rep_paras]
+    patterns = [_paragraph_pattern(rep_c[j], exempt_nums) for j in range(len(rep_c))]
 
-    sm = SequenceMatcher(None, src_c, rep_c, autojunk=False)
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag == "equal":
-            continue
-        if tag == "delete":
-            for k in range(i1, i2):
-                stats["missing_paragraphs"] += 1
-                issues.append(VerifyIssue(
-                    "integrity.missing-paragraph",
-                    f"源文第 {k + 1} 段在报告中缺失（缺段）",
-                    location=f"源文段 {k + 1}"))
-        elif tag == "insert":
-            for k in range(j1, j2):
-                stats["extra_paragraphs"] += 1
-                issues.append(VerifyIssue(
-                    "integrity.extra-paragraph",
-                    f"报告多出源文没有的段落（改变未标记正文或重段）：{rep_paras[k][:40]}…",
-                    location=f"报告段 {k + 1}"))
-        else:
-            # replace：只把「差异完全落在 unknown 标记字段内」的段落降级为警告，
-            # 其余报告段落一律判为篡改（不再因为全文存在 unknown 就整体放行）。
-            confined, unconfined = [], []
-            for k in range(j1, j2):
-                pattern = _wildcard_pattern(rep_c[k])
-                matched = bool(pattern) and any(
-                    re.fullmatch(pattern, sp, re.DOTALL) for sp in src_c[i1:i2])
-                (confined if matched else unconfined).append(k)
-            for k in confined:
-                issues.append(VerifyIssue(
-                    "integrity.unknown-diff",
-                    f"报告段 {k + 1} 与源文的差异仅落在无法定位的标记字段内，保留 unknown 警告",
-                    severity=WARNING))
-            if unconfined:
-                stats["missing_paragraphs"] += (i2 - i1)
-                stats["extra_paragraphs"] += len(unconfined)
-                issues.append(VerifyIssue(
-                    "integrity.changed",
-                    f"正文与源文不一致（源文段 {i1 + 1}-{i2} ↔ 报告段 {j1 + 1}-{j2}）："
-                    "未标记正文不得改动"))
-
-    # 重段：同一段在报告中出现次数多于源文
-    rep_counts = Counter(rep_c)
-    src_counts = Counter(src_c)
-    for para, count in rep_counts.items():
-        if count > 1 and src_counts.get(para, 0) < count:
-            stats["duplicate_paragraphs"] += count - max(src_counts.get(para, 0), 1) + 1
+    pairs, unmatched_src, unmatched_rep = _align_paragraphs(src_c, rep_c, patterns)
+    for i in unmatched_src:
+        stats["missing_paragraphs"] += 1
+        issues.append(VerifyIssue(
+            "integrity.missing-paragraph",
+            f"源文第 {i + 1} 段在报告中缺失（缺段）",
+            location=f"源文段 {i + 1}"))
+    for j in unmatched_rep:
+        stats["extra_paragraphs"] += 1
+        preview = _UNKNOWN_TOKEN_RE.sub("【标记字段】", rep_paras[j])[:40]
+        issues.append(VerifyIssue(
+            "integrity.extra-paragraph",
+            f"报告第 {j + 1} 段在源文中没有对应（多段/重段或未标记正文被改动）：{preview}…",
+            location=f"报告段 {j + 1}"))
+    for i, j, kind in pairs:
+        if kind == "relaxed":
             issues.append(VerifyIssue(
-                "integrity.duplicate-paragraph",
-                f"段落重复 {count} 次（源文仅 {src_counts.get(para, 0)} 次）：{para[:40]}…"))
+                "integrity.unknown-diff",
+                f"报告段 {j + 1} 与源文第 {i + 1} 段的差异仅落在一个公式字段内，保留 unknown 警告",
+                severity=WARNING))
     return stats
 
 
