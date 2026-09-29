@@ -257,3 +257,34 @@ def test_source_missing_rejected():
     r = verify_report_text(VALID, None)
     assert not r.ok
     assert "integrity.no-source" in _codes(r, ERROR)
+
+
+def test_between_formula_prose_cannot_be_absorbed():
+    """两个真实公式之间的正文不能被伪公式通配符吸收。"""
+    source = "首部$a$重要条件$b$尾部"
+    report = ("一般问题\n### 标记原文\n首部$a【1|$\\mathrm{x}$|$y$】b$尾部\n"
+              "### 修改原因\n1. 原因。\n")
+    r = verify_report_text(report, source)
+    assert not r.ok
+    assert _codes(r) & {"integrity.missing-paragraph", "integrity.extra-paragraph"}
+
+
+def test_local_formula_marker_accepted():
+    """只标记公式内部局部内容：差异落在一个真实公式区间内 → 接受（仅警告）。"""
+    source = "已知 $a+b$。"
+    report = ("一般问题\n### 标记原文\n已知 $【1|$\\mathrm{a}$|c】+b$。\n"
+              "### 修改原因\n1. 原因。\n")
+    r = verify_report_text(report, source)
+    assert r.ok, [i.message for i in r.errors]
+    assert "integrity.unknown-diff" in _codes(r, WARNING)
+
+
+def test_ordinary_marker_kept_literal_near_formula():
+    """普通标记的原文不得因邻近公式而丢失：应与公式局部标记一起被接受。"""
+    source = "设a与$x$满足条件。"
+    report = ("一般问题\n### 标记原文\n设【1|a|b】与【2|$\\mathrm{x}$|$c$】满足条件。\n"
+              "### 修改原因\n1. 甲。\n2. 乙。\n")
+    r = verify_report_text(report, source)
+    assert r.ok, [i.message for i in r.errors]
+    assert "integrity.unknown-diff" in _codes(r, WARNING)
+

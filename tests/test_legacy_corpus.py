@@ -3,8 +3,8 @@
 - 不合格必被拒：空操作、未标记正文被改动（含标记切断 $...$ 公式导致的字段外差异）。
 - 合格必被接受：其余报告通过严格新契约（含图片、公式、答案详解）。
 
-预期在修正闸门后重新逐份标注（2026-09-29）：unknown 只豁免落在其字段内的差异，
-因此把「标记切断 $...$ 公式、装饰美元落在字段外」的报告也判为不合格。
+预期在修正闸门后逐份标注（2026-09-29）：unknown 只豁免「吸收片段落在源文真实
+$...$ 公式区间内」的差异；据此第18题（差异全在公式内）为合格，其余为不合格。
 
 语料不在位时整文件 skip；可用 JIAODUI_LEGACY_CORPUS 指向旧仓 output 目录。
 旧仓 HEAD 1c45243 完全冻结，本测试只读。
@@ -28,8 +28,9 @@ _PAPER = _CORPUS / "拆题结果" / "2026年7月21日高中物理作业"
 pytestmark = pytest.mark.skipif(not _PAPER.is_dir(), reason="旧仓语料不在位（只读参考）")
 
 # 冻结语料逐份标注的预期结果（闸门修正后重新标注，不因新版结果更换）
-EXPECTED_REJECTED = {"第3题", "第5题", "第7题", "第10题", "第13题",
-                     "第15题", "第17题", "第18题"}
+# 第18题的 unknown 差异经「源文真实公式区间」复核后确认全部落在公式内，
+# 属合法局部公式标记，已从拒绝集合移除（这正是收紧误拒的回归证据）。
+EXPECTED_REJECTED = {"第3题", "第5题", "第7题", "第10题", "第13题", "第15题", "第17题"}
 # 拒绝原因逐份标注：空操作，或全文比对失败（缺段/多段/未标记正文）
 _ANNOTATED_REASONS = {
     "第5题": ("空操作",),
@@ -39,7 +40,6 @@ _ANNOTATED_REASONS = {
     "第13题": ("缺段", "多段", "未标记正文"),
     "第15题": ("缺段", "多段", "未标记正文"),
     "第17题": ("缺段", "多段", "未标记正文"),
-    "第18题": ("缺段", "多段", "未标记正文"),
 }
 
 
@@ -62,7 +62,7 @@ def test_rejected_reasons_are_annotated():
 
 def test_accepted_reports_pass_strict_contract():
     accepted = [u for u in scan_status(_PAPER).units if u.state == COMPLETED]
-    assert len(accepted) == 10
+    assert len(accepted) == 11
     for u in accepted:
         result = verify_unit(u.dir)
         assert result.ok, (u.unit, [i.message for i in result.errors])

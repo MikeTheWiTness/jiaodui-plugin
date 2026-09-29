@@ -209,10 +209,6 @@ def _check_anchor_pairing(doc_xml: str, comment_ids: set[str]) -> tuple[bool, li
     refs = _ids(r'<w:commentReference w:id="(\d+)"')
     c_starts, c_ends, c_refs = Counter(starts), Counter(ends), Counter(refs)
 
-    if set(starts) != comment_ids:
-        missing = sorted(comment_ids - set(starts))
-        extra = sorted(set(starts) - comment_ids)
-        problems.append(f"commentRangeStart 与 comments.xml 不一致（缺 {missing}、多 {extra}）")
     for label, counter in (("commentRangeStart", c_starts), ("commentRangeEnd", c_ends),
                            ("commentReference", c_refs)):
         dup = sorted(k for k, v in counter.items() if v > 1)
@@ -221,6 +217,9 @@ def _check_anchor_pairing(doc_xml: str, comment_ids: set[str]) -> tuple[bool, li
         miss = sorted(comment_ids - set(counter))
         if miss:
             problems.append(f"{label} 缺少 id：{miss}")
+        extra = sorted(set(counter) - comment_ids)
+        if extra:
+            problems.append(f"{label} 出现没有对应批注的额外 id：{extra}")
     for cid in sorted(comment_ids):
         if c_starts.get(cid, 0) == 1 and c_ends.get(cid, 0) == 1 and c_refs.get(cid, 0) == 1:
             ps = doc_xml.find(f'<w:commentRangeStart w:id="{cid}"')

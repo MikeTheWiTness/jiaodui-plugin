@@ -254,24 +254,18 @@ def _reconstruct_with_unknown_tokens(marked_section: str, unknown_nums: set[int]
 _MATH_HINT_RE = re.compile(r"[\\$^_{}]")
 """unknown 字段是否含公式/LaTeX 特征（只有这类差异才允许豁免）。"""
 
-_MATH_SPAN_PATTERN = r"(?:\$\$[^$]*\$\$|\$[^$\n]*\$)"
-"""unknown 字段只能对应源文里的一个公式片段（内联或同一行的 $$…$$）。
-
-不允许用无边界通配符吸收正文：否则「删掉一整句未标记条件」会被公式差异掩盖。
-"""
-
-
 def _is_math_field(audit: M.MarkerAudit) -> bool:
     """unknown 的原/改字段是否可视为公式字段。"""
     return bool(_MATH_HINT_RE.search(audit.original or "")
                 or _MATH_HINT_RE.search(audit.correction or ""))
 
 
-def _paragraph_pattern(compressed_para: str, exempt_nums: set[int]) -> str | None:
-    """含 unknown 占位符的段落 → 正则；占位符只匹配一个公式片段。
+def _paragraph_pattern(compressed_para: str, exempt_nums: set[int]):
+    """含豁免占位符的段落 → (正则, 占位符个数)；不可豁免的段落返回 None。
 
-    任意占位符不在可豁免集合（unknown 且为公式字段）内时返回 None：
-    该段落差异一律判为正文改动，避免普通正文被公式差异吸收。
+    正则里每个占位符用命名组 (?P<gN>.*?) 表示；匹配成功后再逐组检查它对应的
+    源文区间是否真的落在一个公式区间内（见 _relaxed_match）——因此既不会像
+    无边界通配符那样吸收公式旁的正文，也允许只标记公式内部的局部内容。
     """
     tokens = list(_UNKNOWN_TOKEN_RE.finditer(compressed_para))
     if not tokens:
@@ -282,24 +276,43 @@ def _paragraph_pattern(compressed_para: str, exempt_nums: set[int]) -> str | Non
             return None
     parts = _UNKNOWN_TOKEN_RE.split(compressed_para)
     pattern = ""
+    groups = 0
     for i, part in enumerate(parts):
         pattern += re.escape(part)
         if i < len(parts) - 1:
-            pattern += "(?:" + _MATH_SPAN_PATTERN + ")"
-    return pattern
+            groups += 1
+            pattern += f"(?P<g{groups}>.*?)"
+    return pattern, groups
 
 
-def _paras_match(src_c: str, rep_c: str, pattern: str | None) -> str | None:
-    """段落匹配：'exact' / 'relaxed'（差异仅落在公式字段内）/ None。"""
+def _relaxed_match(src_c: str, pat_info, src_spans: list[tuple[int, int]]) -> bool:
+    """占位符吸收的每一段源文都必须落在同一个真实公式区间内。"""
+    pattern, groups = pat_info
+    m = re.fullmatch(pattern, src_c)
+    if not m:
+        return False
+    for gi in range(1, groups + 1):
+        s, e = m.span(f"g{gi}")
+        if s == e:
+            continue  # 未吸收任何字符
+        if not any(a <= s and e <= b for a, b in src_spans):
+            return False
+    return True
+
+
+def _paras_match(src_c: str, rep_c: str, pat_info,
+                 src_spans: list[tuple[int, int]]) -> str | None:
+    """段落匹配：'exact' / 'relaxed'（差异仅落在真实公式区间内）/ None。"""
     if src_c == rep_c:
         return "exact"
-    if pattern and re.fullmatch(pattern, src_c, re.DOTALL):
+    if pat_info and _relaxed_match(src_c, pat_info, src_spans):
         return "relaxed"
     return None
 
 
 def _align_paragraphs(src_c: list[str], rep_c: list[str],
-                      patterns: list[str | None]):
+                      patterns: list,
+                      src_spans: list[list[tuple[int, int]]]):
     """按顺序做一对一 DP 对齐，返回 (pairs, unmatched_src, unmatched_rep)。
 
     只有单调且一一对应的匹配才算数：未匹配的源文段判缺段，未匹配的报告段判多段/重段，
@@ -309,7 +322,7 @@ def _align_paragraphs(src_c: list[str], rep_c: list[str],
     kind: list[list[str | None]] = [[None] * m for _ in range(n)]
     for i in range(n):
         for j in range(m):
-            kind[i][j] = _paras_match(src_c[i], rep_c[j], patterns[j])
+            kind[i][j] = _paras_match(src_c[i], rep_c[j], patterns[j], src_spans[i])
     dp = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(n - 1, -1, -1):
         for j in range(m - 1, -1, -1):
@@ -341,8 +354,9 @@ def _check_integrity(text: str, marked_section: str | None, source_text: str | N
 
     - 空「标记原文」不再放行：源文有内容即判缺段；源文缺失/为空直接拒绝。
     - 段落按顺序一一对齐：未匹配的源文段 = 缺段，未匹配的报告段 = 多段/重段。
-    - unknown 只豁免「可确定落在一个公式字段内」的差异：占位符只允许匹配源文里的
-      一个 $…$ 公式片段；非公式字段或无法判定时不豁免，正文差异一律拒绝。
+    - unknown 只豁免「可确定落在一个真实公式区间内」的差异：先用 scan_math_spans
+      标出源文真正的 $…$ 区间，占位符吸收的源文片段必须落在同一个区间内；公式内部
+      的局部字段可以豁免，但公式之间的普通正文（即使两侧都是 $）不可被吸收。
     """
     stats = {"source_paragraphs": 0, "report_paragraphs": 0,
              "missing_paragraphs": 0, "extra_paragraphs": 0, "duplicate_paragraphs": 0}
@@ -356,18 +370,21 @@ def _check_integrity(text: str, marked_section: str | None, source_text: str | N
 
     audits = M.audit_markers(body, source_text) if body else []
     unknown = [a for a in audits if a.verdict == M.MARKER_UNKNOWN]
-    unknown_nums = {a.num for a in unknown}
+    # 只有「公式字段」的 unknown 才替换为占位符；其余（含非公式 unknown）保留
+    # 原文字面参与全文比对，避免因邻近公式的装饰差异丢掉普通标记的原文信息。
     exempt_nums = {a.num for a in unknown if _is_math_field(a)}
-    reconstructed = _reconstruct_with_unknown_tokens(body, unknown_nums)
+    reconstructed = _reconstruct_with_unknown_tokens(body, exempt_nums)
     src_paras = [p for p in _paragraphs(source_text) if p.strip()]
     rep_paras = [p for p in _paragraphs(reconstructed) if p.strip()]
     stats["source_paragraphs"] = len(src_paras)
     stats["report_paragraphs"] = len(rep_paras)
     src_c = [_compress(p) for p in src_paras]
     rep_c = [_compress(p) for p in rep_paras]
+    src_spans = [M.scan_math_spans(p) for p in src_c]
     patterns = [_paragraph_pattern(rep_c[j], exempt_nums) for j in range(len(rep_c))]
 
-    pairs, unmatched_src, unmatched_rep = _align_paragraphs(src_c, rep_c, patterns)
+    pairs, unmatched_src, unmatched_rep = _align_paragraphs(
+        src_c, rep_c, patterns, src_spans)
     for i in unmatched_src:
         stats["missing_paragraphs"] += 1
         issues.append(VerifyIssue(

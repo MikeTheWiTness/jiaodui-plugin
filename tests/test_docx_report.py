@@ -1379,3 +1379,14 @@ def test_anchor_pairing_detects_duplicate_and_order():
     ok2, problems2 = _check_anchor_pairing(bad_order, {"1"})
     assert not ok2 and any("顺序" in p for p in problems2)
 
+
+
+def test_anchor_pairing_detects_extra_end_and_reference():
+    from jiaodui.docx_report import _check_anchor_pairing
+    doc = ('<w:commentRangeStart w:id="1"/><w:commentRangeEnd w:id="1"/>'
+           '<w:r><w:commentReference w:id="1"/></w:r>'
+           '<w:commentRangeEnd w:id="999"/><w:r><w:commentReference w:id="999"/></w:r>')
+    ok, problems = _check_anchor_pairing(doc, {"1"})
+    assert not ok
+    assert any("999" in p for p in problems)
+
