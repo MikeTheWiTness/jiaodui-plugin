@@ -177,6 +177,64 @@ class TestSplitLecture:
         assert result.copied == 1
         assert (tmp_path / "out" / "lec" / "单元1" / "images" / "pic.png").exists()
 
+    def test_section_mode_cleans_grid_tables_before_split(self, tmp_path):
+        """讲义导入清理：pandoc 网格表包裹的 **例N** 必须先清表格再按 section 拆分。
+
+        真实讲义（第 6 讲校对测试.docx）经 pandoc 转成网格表后，「**例1**（多选）」
+        落在表格行里（行首是竖线）；旧仓导入阶段默认执行 comprehensive_clean
+        （去竖线、丢表框线），例题标题回到行首后才被 section_pattern 命中。
+        新仓若不做这一步，整篇会塌成一个超长单元。
+        """
+        lec = ("## 模块一 模型：起振问题\n\n"
+               "+--------------------------------+\n"
+               "| 模型大招                        |\n"
+               "+================================+\n"
+               "| **例1**（多选）                  |\n"
+               "+================================+\n"
+               "| 题干一                          |\n"
+               "+--------------------------------+\n"
+               "| **例2**（多选）                  |\n"
+               "+================================+\n"
+               "| 题干二                          |\n"
+               "+--------------------------------+\n")
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text(lec, encoding="utf-8")
+        result = split_lecture(str(raw_path), str(tmp_path / "out"), "lec", {})
+        assert len(result.units) >= 3
+        firsts = [u["first_line"] for u in result.units]
+        assert any(f.startswith("**例1**") for f in firsts)
+        for u in result.units:
+            text = _text(Path(u["file"]))
+            assert "|" not in text, "网格表竖线应被清理"
+
+    def test_images_dir_override_accepts_convert_output_root(self, tmp_path):
+        """--images-dir 传 convert --json 的 images_dir（{base}_images 根目录）也能复制。"""
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text("## 小节\n\n![图](./pic.png)\n正文\n", encoding="utf-8")
+        images_root = tmp_path / "lec_images"
+        media = images_root / "media"
+        media.mkdir(parents=True)
+        (media / "pic.png").write_bytes(b"png")
+        result = split_lecture(str(raw_path), str(tmp_path / "out"), "lec",
+                               {"images_source": str(images_root)})
+        assert result.copied == 1
+        assert result.missing == 0
+
+    def test_no_clean_keeps_table_wrapping(self, tmp_path):
+        """--no-clean：保留原始网格表包裹，例题标题不在行首，只能拆出更少的单元。"""
+        lec = ("## 模块一\n\n"
+               "+------------------+\n"
+               "| **例1**（多选）    |\n"
+               "+------------------+\n"
+               "| 题干一            |\n"
+               "+------------------+\n")
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text(lec, encoding="utf-8")
+        result = split_lecture(str(raw_path), str(tmp_path / "out"), "lec", {},
+                               clean=False)
+        assert len(result.units) == 1
+        assert "|" in _text(Path(result.units[0]["file"]))
+
 
 # ─── 边界切片 ─────────────────────────────────────────────
 

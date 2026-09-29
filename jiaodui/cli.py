@@ -106,7 +106,10 @@ def _split(args: argparse.Namespace) -> int:
     if args.mode == "exam":
         result = split_exam(str(raw_path), str(out_root), base_name, config)
     else:
-        result = split_lecture(str(raw_path), str(out_root), base_name, config)
+        # 讲义默认执行导入清理（表格清理 + 装饰图清除），与旧仓 clean_enabled 默认一致；
+        # --no-clean 保留原始表格包裹，供排查/对照使用。
+        result = split_lecture(str(raw_path), str(out_root), base_name, config,
+                               clean=not args.no_clean)
     payload = {"ok": True, "units": result.units, "unit_dirs": result.unit_dirs,
                "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
     if args.json:
@@ -138,7 +141,8 @@ def cmd_slice(args: argparse.Namespace) -> int:
     mode = args.mode or data.get("mode", "exam")
     base_name = args.base_name or data.get("base_name") or raw_path.stem.replace("_raw", "")
     out_root = Path(args.out_root) if args.out_root else (Path(data["out_root"]) if data.get("out_root") else raw_path.parent)
-    result = slice_by_boundaries(str(raw_path), boundaries, str(out_root), base_name, mode)
+    result = slice_by_boundaries(str(raw_path), boundaries, str(out_root), base_name, mode,
+                                 clean=not args.no_clean)
     payload = {"ok": True, "unit_dirs": result.unit_dirs, "units": result.units,
                "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
     if args.json:
@@ -355,6 +359,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out-root")
     sp.add_argument("--base-name")
     sp.add_argument("--images-dir")
+    sp.add_argument("--no-clean", action="store_true",
+                    help="讲义模式跳过导入清理（保留原始表格包裹）")
     sp.set_defaults(func=_split)
 
     sp = sub.add_parser("slice", help="按边界清单确定性切片")
@@ -363,6 +369,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out-root")
     sp.add_argument("--base-name")
     sp.add_argument("--mode", choices=["exam", "lecture"])
+    sp.add_argument("--no-clean", action="store_true",
+                    help="讲义模式跳过导入清理（边界行号须与清理后正文一致）")
     sp.set_defaults(func=cmd_slice)
 
     sp = sub.add_parser("precheck-split", help="拆分预检")

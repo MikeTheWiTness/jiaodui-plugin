@@ -20,11 +20,29 @@ from pathlib import Path
 from .config import (get_compiled_title_patterns, get_exam_question_pattern,
                      get_lecture_split_mode, get_nav_patterns, get_section_pattern,
                      normalize_subject_config)
+from .decor_utils import strip_decor_images
 from .errors import ContractError
 from .image_utils import ImageCopyResult, copy_md_images
 from .log import log
 from .paths import IMAGES_DIR, SKIP_MARKER_FILE, find_source_md
 from .units import scan_unit_dirs
+
+
+def prepare_lecture_content(content: str) -> str:
+    """讲义导入清理（移植旧仓导入阶段，默认开启）。
+
+    旧仓讲义流程在拆分前固定执行两件事，新仓此前只移植了函数、从未调用，
+    导致 pandoc 渲染成网格表的讲义（``| **例1**（多选） |``）拆不开：
+
+    1. ``comprehensive_clean``：去表格竖线、丢表框线、保护公式、规整空行；
+    2. ``strip_decor_images``：清除板块标题行的小装饰图标。
+
+    清理后 ``**例1**`` 等例题标题回到行首，``section_pattern`` 才能命中。
+    幂等：已清理过的正文再跑一次结果不变。
+    """
+    from .convert import comprehensive_clean
+
+    return strip_decor_images(comprehensive_clean(content))
 
 # ─── 统一的单元标记（ADR-0017 决策5） ──────────────────────────
 
@@ -161,6 +179,10 @@ def _load_raw(raw_md, base_name: str, config: dict | None = None):
     override = (config.get("source_images_dir") or config.get("images_source_dir")
                 or config.get("images_source"))
     src_media = Path(override) if override else None
+    if src_media is not None and (src_media / "media").is_dir():
+        # 兼容 `convert --json` 返回的 images_dir：那是 `{base}_images` 根目录，
+        # 图片实际在它的 media/ 子目录，直接传进来曾经一张都复制不到。
+        src_media = src_media / "media"
 
     looks_path = isinstance(raw_md, Path) or (
         isinstance(raw_md, str)
@@ -538,7 +560,8 @@ def _drop_title_only_units(units):
     return kept
 
 
-def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict) -> SplitResult:
+def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
+                  *, clean: bool = True) -> SplitResult:
     """讲义模式：按 section/title 规则切成 `单元N/单元N.md`，附 `images/`。
 
     行为契约（移植自 default_split_lecture）：
@@ -559,6 +582,8 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict) -
     raw_config = config if isinstance(config, dict) else {}
     config = _ensure_normalized(config)
     content, src_media = _load_raw(raw_md, base_name, raw_config)
+    if clean:
+        content = prepare_lecture_content(content)
     result = SplitResult()
     if not content.strip():
         result.warnings.append("源文为空，未识别到任何单元")
@@ -642,7 +667,8 @@ def _slice_lines(lines: list[str], start_line, end_line) -> str:
 
 
 def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
-                        base_name: str, mode: str = "exam") -> SplitResult:
+                        base_name: str, mode: str = "exam",
+                        *, clean: bool = True) -> SplitResult:
     """按边界清单确定性切片（智能拆分用）。
 
     boundaries 兼容两种写法：
@@ -654,6 +680,10 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
     """
     base_name = (base_name or "").strip()
     content, src_media = _load_raw(raw_md, base_name, {})
+    if clean and str(mode).lower() == "lecture":
+        # 讲义边界清单必须是在同一清理后的正文上定出的行号，
+        # 否则切片结果与规则拆分的单元正文不一致。
+        content = prepare_lecture_content(content)
     lines = content.splitlines()
     result = SplitResult()
     if not boundaries:

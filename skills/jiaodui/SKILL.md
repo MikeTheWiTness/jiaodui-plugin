@@ -15,10 +15,12 @@ description: K-12 试卷/讲义校对总入口。judgement 交给 agent，确定
 1. `jiaodui check-env` 必须通过（Python≥3.12、sympy / python-docx / Pillow / lxml、pandoc）。它只证明本地依赖，**不证明宿主能力**。
 2. 派发任何校对子 agent **之前**，主 agent 必须实际派发一次，让子 agent 读取一张**真实本地图片**，确认其视觉能力。失败 → **拒绝本次执行**，不得静默跳过图片检查（D14）。
 3. 同时确认宿主支持：一层扁平子 agent、子 agent 能在单元目录内写文件并回传一行摘要。
+4. 读图探针必须覆盖**透明底 PNG**：本流程配图多为透明底黑线稿（实测 alpha=0 像素占 93–95%），直接读图会呈现为空白；要求子 agent 先合成白底再判读，否则会把「透明图空白」误判成读图失败或漏检图片内容。
 
 ## 3. 完整流程
 1. 转换：`jiaodui convert <源文件>` → `_raw.md` + `images/`（已经是 md 可跳过）。
 2. 拆分：`jiaodui split <raw_md> --subject 高中物理 --mode exam|lecture`（默认规则拆分）。
+   - **讲义模式默认执行导入清理**（`comprehensive_clean` 表格清理 + 装饰图清除，与旧仓 `clean_enabled` 默认开启一致）：pandoc 会把讲义渲染成网格表，`**例1**`/`**练1**` 落在表格行内，行首是竖线；不清理则 `section_pattern` 命中不到，整篇会塌成一个超长单元。仅在需要保留原始表格做对照时才加 `--no-clean`。
 3. 抽查：`jiaodui precheck-split <输出目录>`，看单元数、各单元首行、字符数分布、空单元与超长单元；异常才升级智能拆分（派拆分子 agent 出边界清单 → `jiaodui slice --boundaries`）。
 4. 扫描：`jiaodui status <paper_dir>`，只派发未开始 / 未过校验的单元。
 5. 滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。
