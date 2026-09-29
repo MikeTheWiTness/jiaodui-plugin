@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -284,39 +285,50 @@ def _paragraph_segments(compressed_para: str, exempt_nums: set[int]):
     return segments
 
 
-def _match_segments(segments: list, s: str, spans: list[tuple[int, int]],
-                    si: int, pos: int, memo: dict) -> bool:
-    """递归匹配：占位符只能匹配「完整落在某一个公式区间内」的片段。
+def _match_segments(segments: list[str | None], s: str,
+                    spans: list[tuple[int, int]]) -> bool:
+    """逐段迭代维护可达源文位置，不让标记数量受 Python 递归深度限制。
 
-    空匹配同样受区间约束（要求所在位置位于某个公式区间内），因此
-    「源文没有任何公式却凭空插入带原文字段的标记」不会被放行。
+    非空匹配须完整落在同一个公式区间内且覆盖公式内容；可同时包含分隔符，
+    以支持整条公式标记，但不能只拿分隔符冒充原文字段。
+    空匹配仅允许在公式内容内部（含内容首尾的插入点），不能位于分隔符中间或
+    整条公式前后；公式内的 LaTeX 间距差异仍可仅告警。
     """
-    if si == len(segments):
-        return pos == len(s)
-    key = (si, pos)
-    if key in memo:
-        return memo[key]
-    seg = segments[si]
-    ok = False
-    if seg is not None:
-        ok = s.startswith(seg, pos) and _match_segments(
-            segments, s, spans, si + 1, pos + len(seg), memo)
-    else:
-        for a, b in spans:
-            if a <= pos <= b:
-                for end in range(pos, b + 1):
-                    if _match_segments(segments, s, spans, si + 1, end, memo):
-                        ok = True
-                        break
-            if ok:
-                break
-    memo[key] = ok
-    return ok
+    limits = []
+    for a, b in spans:
+        delimiter_width = 2 if s.startswith("$$", a) else 1
+        limits.append((a, b, a + delimiter_width, b - delimiter_width))
+
+    reachable = {0}
+    for segment in segments:
+        if segment is not None:
+            reachable = {
+                pos + len(segment) for pos in reachable if s.startswith(segment, pos)
+            }
+        else:
+            ordered = sorted(reachable)
+            following: set[int] = set()
+            for a, b, content_start, content_end in limits:
+                index = bisect_left(ordered, a)
+                if index == len(ordered) or ordered[index] >= b:
+                    continue
+                first = ordered[index]
+                # 同一公式的最小可达起点足以覆盖其余起点的非空终点。
+                # 空匹配只允许落在内容范围；非空匹配必须与内容有交集。
+                if content_start <= first <= content_end:
+                    following.add(first)
+                if first < content_end:
+                    following.update(range(max(first + 1, content_start + 1), b + 1))
+            reachable = following
+        if not reachable:
+            return False
+    return len(s) in reachable
 
 
-def _relaxed_match(src_c: str, segments: list, src_spans: list[tuple[int, int]]) -> bool:
+def _relaxed_match(src_c: str, segments: list[str | None],
+                   src_spans: list[tuple[int, int]]) -> bool:
     """占位符吸收的每一段源文都必须落在同一个真实公式区间内。"""
-    return _match_segments(segments, src_c, src_spans, 0, 0, {})
+    return _match_segments(segments, src_c, src_spans)
 
 
 def _paras_match(src_c: str, rep_c: str, seg_info,

@@ -71,3 +71,27 @@ def test_scan_status_counts(tmp_path):
     ps = scan_status(tmp_path)
     c = ps.counts()
     assert c["total"] == 2 and c[COMPLETED] == 1 and c[NOT_STARTED] == 1
+
+
+def test_many_formula_markers_do_not_abort_paper_scan(tmp_path):
+    """含大量公式标记的合法单元不能中断整卷状态扫描。"""
+    _make_unit(tmp_path, name="第1题", report=VALID)
+    unit = _make_unit(tmp_path, name="第2题")
+    count = 600
+    source = "、".join(["$a$"] * count) + "。"
+    marked = "、".join(
+        rf"【{i}|$\mathrm{{a}}$|$b$】" for i in range(1, count + 1)
+    ) + "。"
+    reasons = "\n".join(f"{i}. 修正变量。" for i in range(1, count + 1))
+    (unit / "第2题.md").write_text(source, encoding="utf-8")
+    (unit / "_校对报告.md").write_text(
+        f"一般问题\n### 标记原文\n{marked}\n### 修改原因\n{reasons}\n",
+        encoding="utf-8",
+    )
+    _make_unit(tmp_path, name="第3题")
+
+    result = scan_status(tmp_path)
+    assert result.counts()[COMPLETED] == 2
+    assert result.counts()[NOT_STARTED] == 1
+    assert result.counts()["total"] == 3
+    assert result.units[1].marker_count == count

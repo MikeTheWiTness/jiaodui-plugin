@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from jiaodui.verify import ERROR, MANUAL, WARNING, verify_report_text
 
 SOURCE = """设a为$O$点，b为1。
@@ -326,3 +328,65 @@ def test_adjacent_formulas_two_markers_accepted():
     assert r.ok, [i.message for i in r.errors]
     assert "integrity.unknown-diff" in _codes(r, WARNING)
 
+
+@pytest.mark.parametrize(
+    ("source", "marked"),
+    [
+        ("这是$x$普通正文。", "这是【1|$z$|$w$】$x$普通正文。"),
+        ("这是$x$普通正文。", "这是$x$【1|$z$|$w$】普通正文。"),
+        ("这是$$x$$普通正文。", "这是【1|$z$|$w$】$$x$$普通正文。"),
+        ("这是$$x$$普通正文。", "这是$$x$$【1|$z$|$w$】普通正文。"),
+        ("这是$$x$$普通正文。", "这是$【1|$z$|$w$】$x$$普通正文。"),
+        ("这是$$x$$普通正文。", "这是$$x$【1|$z$|$w$】$普通正文。"),
+        ("这是$x$普通正文。", "这是【1|$z$|$w$】x$普通正文。"),
+        ("这是$x$普通正文。", "这是$x【1|$z$|$w$】普通正文。"),
+        ("这是$$x$$普通正文。", "这是【1|$z$|$w$】$x$$普通正文。"),
+        ("这是$$x$$普通正文。", "这是$$x$【1|$z$|$w$】普通正文。"),
+        ("取 $x$ $y$。", "取 $x$【1|$z$|$w$】$y$。"),
+    ],
+    ids=["inline-before", "inline-after", "display-before", "display-after",
+         "inside-display-opening", "inside-display-closing",
+         "inline-opening-delimiter", "inline-closing-delimiter",
+         "display-opening-delimiter", "display-closing-delimiter", "between"],
+)
+def test_phantom_marker_at_formula_boundary_rejected(source, marked):
+    """公式两侧、分隔符及相邻公式之间不能凭空插入非空原文字段。"""
+    report = f"一般问题\n### 标记原文\n{marked}\n### 修改原因\n1. 修正变量。\n"
+    result = verify_report_text(report, source)
+    assert not result.ok
+    assert "integrity.extra-paragraph" in _codes(result, ERROR)
+
+
+@pytest.mark.parametrize(
+    ("source", "marked"),
+    [
+        ("值为$x$。", r"值为$【1|\,|\;】x$。"),
+        ("值为$x$。", r"值为$x【1|\,|\;】$。"),
+        ("值为$$x$$。", r"值为$$【1|\,|\;】x$$。"),
+        ("值为$$x$$。", r"值为$$x【1|\,|\;】$$。"),
+    ],
+    ids=["inline-content-start", "inline-content-end",
+         "display-content-start", "display-content-end"],
+)
+def test_zero_width_latex_decoration_inside_formula_accepted(source, marked):
+    """公式内容内部的 LaTeX 间距差异仍只告警，不因拒绝边界插入而误拒。"""
+    report = f"轻微问题\n### 标记原文\n{marked}\n### 修改原因\n1. 调整公式间距。\n"
+    result = verify_report_text(report, source)
+    assert result.ok, [issue.message for issue in result.errors]
+    assert "integrity.unknown-diff" in _codes(result, WARNING)
+
+
+@pytest.mark.parametrize("count", [500, 1200])
+def test_many_formula_markers_do_not_depend_on_recursion_limit(count):
+    """每条差异仅为公式字体装饰，合法性不随标记数跨过递归上限而改变。"""
+    source = "、".join(["$a$"] * count) + "。"
+    marked = "、".join(
+        rf"【{i}|$\mathrm{{a}}$|$b$】" for i in range(1, count + 1)
+    ) + "。"
+    reasons = "\n".join(f"{i}. 修正变量。" for i in range(1, count + 1))
+    report = f"一般问题\n### 标记原文\n{marked}\n### 修改原因\n{reasons}\n"
+    result = verify_report_text(report, source)
+    assert result.ok, [issue.message for issue in result.errors]
+    assert result.marker_count == count
+    assert result.stats["missing_paragraphs"] == 0
+    assert result.stats["extra_paragraphs"] == 0

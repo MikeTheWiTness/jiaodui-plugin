@@ -153,3 +153,48 @@ def test_docx_result_ok_requires_anchor_structure(tmp_path):
     assert DocxBuildResult(**base, anchor_structure_ok=False).ok is False
     assert DocxBuildResult(**base, anchor_structure_ok=True).ok is True
 
+
+@pytest.mark.skipif(not Path(PANDOC).is_file(), reason="需要 pandoc")
+def test_formula_boundary_phantom_excluded_from_delivery(tmp_path):
+    """边界上的伪造字段须被所有下游拒绝，且不影响合格单元进入汇总。"""
+    import zipfile
+
+    from jiaodui.docx_report import build_docx
+
+    paper = tmp_path / "测试卷"
+    valid_unit = paper / "第1题"
+    valid_unit.mkdir(parents=True)
+    (valid_unit / "第1题.md").write_text("参数a。", encoding="utf-8")
+    (valid_unit / "_校对报告.md").write_text(
+        "一般问题\n### 标记原文\n参数【1|a|b】。\n### 修改原因\n1. 修正参数。\n",
+        encoding="utf-8",
+    )
+    invalid_unit = paper / "第2题"
+    invalid_unit.mkdir()
+    source = "这是$x$普通正文。"
+    invalid_report = (
+        "一般问题\n### 标记原文\n这是$x$【1|$z$|$w$】普通正文。\n"
+        "### 修改原因\n1. 修正变量。\n"
+    )
+    (invalid_unit / "第2题.md").write_text(source, encoding="utf-8")
+    (invalid_unit / "_校对报告.md").write_text(invalid_report, encoding="utf-8")
+
+    assert not verify_unit(invalid_unit).ok
+    status = scan_status(paper)
+    assert status.counts()[COMPLETED] == 1
+    assert status.counts()[DELIVERED_UNVERIFIED] == 1
+    aggregate = build_report(paper)
+    assert [u["unit"] for u in aggregate.included] == ["第1题"]
+    assert [u["unit"] for u in aggregate.failed] == ["第2题"]
+    assert "【1|$z$|$w$】" not in Path(aggregate.out_path).read_text(encoding="utf-8")
+
+    docx = build_docx(str(paper))
+    assert not docx.ok
+    assert [u["unit"] for u in docx.excluded_units] == ["第2题"]
+    assert docx.marker_count == docx.anchor_count == 1
+    assert docx.missing_count == 0
+    with zipfile.ZipFile(docx.out_path) as archive:
+        xml = archive.read("word/document.xml").decode("utf-8")
+    assert "<m:t>z</m:t>" not in xml
+    assert (invalid_unit / "第2题.md").read_text(encoding="utf-8") == source
+    assert (invalid_unit / "_校对报告.md").read_text(encoding="utf-8") == invalid_report
