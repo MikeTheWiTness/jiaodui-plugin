@@ -154,13 +154,25 @@ def test_flow_gate_rejects_and_excludes(tmp_path):
     assert r.returncode == 0, r.stderr
     paper = Path(tmp_path / "out" / "卷子")
     unit = paper / "第1题"
-    # 未标记正文被改动：源文是 a，报告写 b，且没有标记
-    changed = _unit_source(unit).replace("a", "b", 1)
-    (unit / "_校对报告.md").write_text(
-        "一般问题\n\n### 标记原文\n" + changed
-        + "\n\n### 修改原因\n1. 原因。\n", encoding="utf-8")
+    src = _unit_source(unit)
+    report = unit / "_校对报告.md"
+
+    # 先构造能过闸门的对照报告：标记与原因一一对应，正文与源文一致。
+    report.write_text(_report(src, "求a的值", "求 $a$ 的值"), encoding="utf-8")
+    control = run("verify-report", "--unit", str(unit), "--json")
+    assert control.returncode == 0, control.stderr
+
+    # 只改未标记正文：保持同一标记与原因，只改标记之外的源文字。
+    tampered = src.replace("设a为", "设b为", 1)
+    assert tampered != src
+    report.write_text(_report(tampered, "求a的值", "求 $a$ 的值"), encoding="utf-8")
     v = run("verify-report", "--unit", str(unit), "--json")
     assert v.returncode == 4
+    errors = json.loads(v.stdout)["errors"]
+    assert any(e["code"].startswith("integrity.") for e in errors), errors
+    # 失败必须来自正文完整性，而不是原因缺配（否则该测试没有真正验证完整性闸门）
+    assert not any(e["code"].startswith("reason.") for e in errors), errors
+
     st = run("status", str(paper), "--json")
     assert st.returncode == 0
     state = json.loads(st.stdout)
