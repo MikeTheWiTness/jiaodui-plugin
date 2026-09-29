@@ -5,12 +5,18 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - 需求与契约：[docs/PRD.html](docs/PRD.html)
 - 执行顺序与完成判据：[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 - 仓库约定（AI 助手必读）：[AGENTS.md](AGENTS.md)
+- M0 验收：[docs/M0.md](docs/M0.md)　·　M1 端到端验收：[docs/M1.md](docs/M1.md)
 - 基线复算：[docs/BASELINE.md](docs/BASELINE.md)
 - 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)
 
-## 当前状态：M0（骨架）
+## 当前状态：M1（高中物理端到端竖切已跑通）
 
-已实现可安装的 `jiaodui` Python 包与 11 个 v1 命令：
+M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已完成高中物理一条真实竖切：
+`convert → split → 5 个单元子 agent 校对 → verify-report → build-report → build-docx`。
+真机结果：5/5 单元首次通过校验；Word 复核 **标记 24 = 锚点 24 + 公式兜底 0，缺失 0**；
+不合格报告被排除出汇总与交付（反向验证退出码 4 / 6）。详见 [docs/M1.md](docs/M1.md)。
+
+已实现 11 个 v1 命令：
 
 | 命令 | 作用 |
 | --- | --- |
