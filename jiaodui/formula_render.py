@@ -94,6 +94,16 @@ def _ensure_matplotlib() -> bool:
     return True
 
 
+def matplotlib_available() -> bool:
+    """matplotlib 是否真正可加载（而非仅装了个包）。
+
+    调用 :func:`_ensure_matplotlib` 做一次真实 import：pip 装的 C 扩展若被
+    macOS 代码签名拒绝（Team ID 不一致）会在此返回 False，供 check-env 与测试
+    统一定位「已安装但无法加载」的退化，而不是用 find_spec 误判为可用。
+    """
+    return _ensure_matplotlib()
+
+
 def __getattr__(name: str):
     """惰性属性：from .formula_render import _CJK_FONT 时才触发 matplotlib 解析。"""
     if name == "_CJK_FONT":

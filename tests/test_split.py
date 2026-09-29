@@ -235,6 +235,61 @@ class TestSplitLecture:
         assert len(result.units) == 1
         assert "|" in _text(Path(result.units[0]["file"]))
 
+    def test_import_cleanup_applies_intent_floating_and_spacing(self, tmp_path):
+        """讲义导入清理接线：清【出题意图】、挪浮图、压选项空格。"""
+        lec = ("## 模块一\n\n"
+               "【出题意图】本题想考波动图像。\n"
+               "**例1**（多选）\n"
+               "题干一\n\n"
+               "A. ![test](./pic.png){width=\"1in\"}   选项甲\n"
+               "B. 选项乙\n")
+        media = tmp_path / "lec_images" / "media"
+        media.mkdir(parents=True)
+        (media / "pic.png").write_bytes(b"png")
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text(lec, encoding="utf-8")
+        result = split_lecture(str(raw_path), str(tmp_path / "out"), "lec",
+                               {"wrapped_patterns": [r"例\d+"]})
+        text = _text(Path(result.units[-1]["file"]))
+        assert "【出题意图】" not in text
+        assert "**例1**" in text
+        # 题图挪到独立行，且排在 A. 选项之前
+        assert "![](./images/pic.png)" in text
+        assert text.index("![](./images/pic.png)") < text.index("A.  选项甲")
+        # 4 个以上连续空格被压成 2 个
+        assert "    " not in text
+
+    def test_config_markers_enable_subject_specific_intent_clean(self, tmp_path):
+        """学科独有标志（真题）经 config 合并后才会被【出题意图】清理。"""
+        lec = ("## 模块一\n\n"
+               "【出题意图】说明。\n"
+               "**真题1**\n"
+               "题干\n")
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text(lec, encoding="utf-8")
+
+        r1 = split_lecture(str(raw_path), str(tmp_path / "o1"), "lec",
+                           {"wrapped_patterns": [r"例\d+"]})
+        assert "【出题意图】" in _text(Path(r1.units[0]["file"]))
+
+        r2 = split_lecture(str(raw_path), str(tmp_path / "o2"), "lec",
+                           {"wrapped_patterns": [r"例\d+", r"真题\d+"]})
+        assert "【出题意图】" not in _text(Path(r2.units[0]["file"]))
+
+    def test_no_clean_skips_intent_and_floating_image_cleanup(self, tmp_path):
+        """clean=False（--no-clean）时三项导入清理都不执行。"""
+        lec = ("## 模块一\n\n"
+               "【出题意图】说明。\n"
+               "**例1**\n"
+               "A. ![test](./pic.png)   选项\n")
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text(lec, encoding="utf-8")
+        result = split_lecture(str(raw_path), str(tmp_path / "out"), "lec", {},
+                               clean=False)
+        text = _text(Path(result.units[0]["file"]))
+        assert "【出题意图】" in text
+        assert "A. ![test](./pic.png)   选项" in text
+
 
 # ─── 边界切片 ─────────────────────────────────────────────
 

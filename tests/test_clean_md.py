@@ -1,7 +1,7 @@
-"""测试 jiaodui.convert 的 comprehensive_clean 与 md 后处理契约。
+"""测试 jiaodui.convert 的 comprehensive_clean、出题意图清理与 md 后处理契约。
 
-comprehensive_clean 部分逐字移植自旧仓 tests/test_comprehensive_clean.py
-（去掉出题意图清理一节，该功能不在本次移植范围）。
+comprehensive_clean 与出题意图清理（clean_intent_markers）两节均逐字移植自
+旧仓 tests/test_comprehensive_clean.py，期望值原样保留。
 """
 import sys
 from pathlib import Path
@@ -9,9 +9,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jiaodui.convert import (
+    DEFAULT_INTENT_PROBLEM_MARKERS,
+    clean_intent_markers,
     clean_md_file,
     clean_md_text,
     comprehensive_clean,
+    get_intent_problem_markers,
     normalize_caret_tilde,
     post_process_md,
 )
@@ -21,7 +24,6 @@ from jiaodui.decor_utils import (
     strip_decor_images,
     strip_decor_images_from_file,
 )
-
 
 # ============================================================
 # 基础功能
@@ -870,3 +872,387 @@ class TestNormalizeCaretTildeRobustness:
         """**v^2^** — 粗体包裹上标，标记保持不动"""
         result = normalize_caret_tilde("**v^2^**")
         assert result == "**v<上标>2</上标>**"
+
+
+class TestIntentMarkerCleanup:
+    """清理【出题意图】段落"""
+
+    def test_basic_intent_with_xiaoshiniudao(self):
+        """【出题意图】→ **小试牛刀1**：删除意图保留题目"""
+        input_text = (
+            "前面的内容。\n\n"
+            "【出题意图】\n"
+            "**小试牛刀1**（2016·甘肃平凉市一模）\n"
+            "阅读下面的宋词。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result, f"出题意图残留: {result}"
+        assert '**小试牛刀1**' in result
+        assert '前面的内容' in result
+        assert '阅读下面的宋词' in result
+
+    def test_intent_with_inline_text(self):
+        """【出题意图】意象自身特点... → **小试牛刀2**"""
+        input_text = (
+            "上文。\n\n"
+            "【出题意图】意象自身特点：\"浮云\"这一意象，一般含有人物漂泊之意。\n"
+            "**小试牛刀2**（2025・湖南高三月考卷）\n"
+            "阅读下面的诗歌。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**小试牛刀2**' in result
+        assert '上文' in result
+        assert '阅读下面的诗歌' in result
+
+    def test_intent_with_li_pattern(self):
+        """【出题意图】→ **例1**"""
+        input_text = (
+            "内容。\n\n"
+            "【出题意图】\n"
+            "**例1**（2020・北京卷）\n"
+            "阅读下面的诗歌。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**例1**' in result
+        assert '阅读下面的诗歌' in result
+
+    def test_intent_with_lian_pattern(self):
+        """【出题意图】→ **练1**"""
+        input_text = (
+            "内容。\n\n"
+            "【出题意图】这里有一些说明文字。\n"
+            "**练1**\n"
+            "题目内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**练1**' in result
+        assert '题目内容' in result
+
+    def test_multiple_intent_sections(self):
+        """多个【出题意图】段全部清理"""
+        input_text = (
+            "开头。\n\n"
+            "【出题意图】第一段意图说明。\n"
+            "**小试牛刀1**\n"
+            "第一题内容。\n\n"
+            "中间内容。\n\n"
+            "【出题意图】第二段意图说明。\n"
+            "**例1**\n"
+            "第二题内容。\n\n"
+            "结尾。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**小试牛刀1**' in result
+        assert '**例1**' in result
+        assert '开头' in result
+        assert '第一题内容' in result
+        assert '中间内容' in result
+        assert '第二题内容' in result
+        assert '结尾' in result
+
+    def test_intent_without_following_marker_preserved(self):
+        """【出题意图】后无题目编号 → 保留不删"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】这里没有后续题目编号。\n"
+            "这是一段普通内容。\n\n"
+            "结尾。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' in result
+        assert '这是一段普通内容' in result
+
+    def test_intent_at_end_of_file(self):
+        """【出题意图】在文件末尾，无后续内容 → 保留"""
+        input_text = "前面内容。\n\n【出题意图】最后的意图说明。"
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' in result
+
+    def test_real_world_case_from_raw(self):
+        """真实 raw.md 片段：意图+解题步骤+模板 → 题目"""
+        input_text = (
+            "解题步骤\n"
+            "步骤一：明确答题角度\n"
+            "在拿到题目后，先准确审题。\n"
+            "步骤二：三步作答\n"
+            "（1）翻译/提炼诗句意思\n"
+            "抓住主要意象，结合全诗。\n"
+            "答题模板\n"
+            "（1）这首诗描绘出一幅……的画面或景象。\n\n"
+            "【出题意图】先给**选择题**让学生进行判断。从江水、北斗星和高城等意象来看，空间上组成的是辽阔高远的意境。\n"
+            "**小试牛刀4**（2024・新课标Ⅱ）\n"
+            "阅读下面的诗歌，完成后面的题目。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**小试牛刀4**' in result
+        assert '解题步骤' in result
+        assert '答题模板' in result
+        assert '阅读下面的诗歌' in result
+
+    def test_intent_with_blank_lines_before_marker(self):
+        """【出题意图】和题目编号之间有空行 → 正确清理"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】说明文字。\n"
+            "\n"
+            "**例5**（2018·天津卷）\n"
+            "题目内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**例5**' in result
+        assert '题目内容' in result
+
+    # ---- 灵活匹配（标签可在同行、后可跟来源信息） ----
+
+    def test_intent_same_line_as_label(self):
+        """【出题意图】和标签在同一行 → 清理到标签前"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】意图说明。**小试牛刀1**\n"
+            "题目内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result, f"残留: {result}"
+        assert '**小试牛刀1**' in result
+        assert '题目内容' in result
+
+    def test_label_with_source_info(self):
+        """标签后有来源信息（如 '（2026·山东青岛模拟）'）→ 正常匹配"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】说明。\n"
+            "**例1**（2026·山东青岛模拟）\n"
+            "题目内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**例1**（2026·山东青岛模拟）' in result
+        assert '题目内容' in result
+
+    def test_label_with_source_info_same_line(self):
+        """同行标签 + 来源信息 → 正常匹配"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】说明。**教师版**（2026秋·通用版）\n"
+            "内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**教师版**（2026秋·通用版）' in result
+
+    def test_intent_between_multiple_labels(self):
+        """意图在多标签之间，只删除到第一个匹配的标签"""
+        input_text = (
+            "**一本班1**\n"
+            "一本班内容。\n\n"
+            "【出题意图】意图说明。\n"
+            "**例1**内容。\n\n"
+            "**一本班2**\n"
+            "更多内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        # 第一个标签 **例1** 保留（作为停止点）
+        assert '**例1**' in result
+        # 前面的标签不受影响
+        assert '**一本班1**' in result
+        assert '**一本班2**' in result
+
+    # ---- 分层/班型标签标志 ----
+
+    def test_intent_with_yibenban_marker(self):
+        """【出题意图】→ **一本班1**"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】一本班说明。\n"
+            "**一本班1**\n"
+            "分层内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**一本班1**' in result
+
+    def test_intent_with_shuangyiliu_marker(self):
+        """【出题意图】→ **双一流班2**"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】双一流班说明。\n"
+            "**双一流班2**\n"
+            "分层内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**双一流班2**' in result
+
+    def test_intent_with_qingbeiban_marker(self):
+        """【出题意图】→ **清北班1**"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】清北班说明。\n"
+            "**清北班1**\n"
+            "分层内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**清北班1**' in result
+
+    def test_intent_with_jiaoshiban_marker(self):
+        """【出题意图】→ **教师版**（无数字后缀）"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】教师版说明。\n"
+            "**教师版**\n"
+            "内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**教师版**' in result
+
+    def test_intent_with_yibenban_jiaoshi_marker(self):
+        """【出题意图】→ **一本班教师版**"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】一本班教师版说明。\n"
+            "**一本班教师版**\n"
+            "内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**一本班教师版**' in result
+
+    def test_intent_with_qingbeiban_jiaoshi_marker(self):
+        """【出题意图】→ **清北班教师版**"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】清北班教师版说明。\n"
+            "**清北班教师版**\n"
+            "内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**清北班教师版**' in result
+
+    # ---- 自定义标志覆盖 ----
+
+    def test_custom_markers_override(self):
+        """通过参数传入自定义标志列表，绕过默认常量"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】说明。\n"
+            "**自定义题型A**\n"
+            "题目内容。"
+        )
+        # 用默认标志不应匹配
+        result_default = clean_intent_markers(input_text)
+        assert '【出题意图】' in result_default, "默认标志不应匹配自定义题型"
+
+        # 用自定义标志应匹配
+        result_custom = clean_intent_markers(input_text, problem_markers=[r'自定义题型[A-Z]'])
+        assert '【出题意图】' not in result_custom
+        assert '**自定义题型A**' in result_custom
+
+    # ---- 通用 + 学科覆盖合并 ----
+
+    def test_get_intent_problem_markers_default_only(self):
+        """无 config 时返回纯默认常量"""
+        result = get_intent_problem_markers(config=None)
+        assert result == DEFAULT_INTENT_PROBLEM_MARKERS
+
+    def test_get_intent_problem_markers_merges_config(self):
+        """config 中的独有标志（如 真题\\d+）追加到默认列表后面"""
+        config = {"lecture_wrapped_patterns": [r"真题\d+", r"例\d+"]}
+        result = get_intent_problem_markers(config=config)
+        # 真题\d+ 不在默认中，应由 config 追加
+        assert r"真题\d+" in result
+        # 去重验证：例\d+ 已在默认中，只出现一次
+        assert result.count(r"例\d+") == 1
+
+    def test_merge_then_clean_with_config_markers(self):
+        """合并后执行清理：config 独有的 真题\\d+ 标志应生效"""
+        config = {"lecture_wrapped_patterns": [r"真题\d+"]}
+        markers = get_intent_problem_markers(config=config)
+
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】真题说明。\n"
+            "**真题1**（2024・全国卷）\n"
+            "题目内容。"
+        )
+        result = clean_intent_markers(input_text, problem_markers=markers)
+        assert '【出题意图】' not in result
+        assert '**真题1**' in result
+
+    # ---- 通用层新增标志覆盖 ----
+
+    def test_intent_with_Aban_marker(self):
+        """【出题意图】→ **A班1**"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】A班说明。\n"
+            "**A班1**\n"
+            "分层内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**A班1**' in result
+
+    def test_intent_with_APlus_ban_marker(self):
+        """【出题意图】→ **A+班1**（含正则特殊字符 +）"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】A+班说明。\n"
+            "**A+班1**\n"
+            "分层内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**A+班1**' in result
+
+    def test_intent_with_Sban_marker(self):
+        """【出题意图】→ **S班1**"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】S班说明。\n"
+            "**S班1**\n"
+            "分层内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**S班1**' in result
+
+    def test_intent_with_yibenban_li_marker(self):
+        """【出题意图】→ **一本班例题**（无数字后缀）"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】一本班例题说明。\n"
+            "**一本班例题**\n"
+            "内容。"
+        )
+        result = clean_intent_markers(input_text)
+        assert '【出题意图】' not in result
+        assert '**一本班例题**' in result
+
+    def test_custom_markers_extend_default(self):
+        """通过参数扩展默认标志（额外添加学科特有标志）"""
+        input_text = (
+            "前面。\n\n"
+            "【出题意图】说明。\n"
+            "**【例题精讲1】**\n"
+            "题目内容。"
+        )
+        # 默认标志不包含【例题精讲】，应保留
+        result_default = clean_intent_markers(input_text)
+        assert '【出题意图】' in result_default
+
+        # 扩展标志后应匹配
+        extended = list(DEFAULT_INTENT_PROBLEM_MARKERS) + [r'【例题精讲\d+】']
+        result_extended = clean_intent_markers(input_text, problem_markers=extended)
+        assert '【出题意图】' not in result_extended
+        assert '**【例题精讲1】**' in result_extended
+

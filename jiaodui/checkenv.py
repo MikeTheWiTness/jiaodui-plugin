@@ -67,6 +67,25 @@ def _has_module(name: str) -> bool:
         return False
 
 
+def _module_state(name: str) -> tuple[bool, str]:
+    """返回 (是否真正可加载, 说明)。
+
+    find_spec 只证明「装了」；此处再做真实 import，暴露 dlopen 失败
+    （例如 pip 装的 C 扩展被 macOS 代码签名拒绝、Team ID 不一致）这类
+    「已安装但无法加载」。仅用于本地确定性依赖的自证。
+    """
+    try:
+        if importlib.util.find_spec(name) is None:
+            return False, "未安装"
+    except (ImportError, ValueError):
+        return False, "未安装"
+    try:
+        importlib.import_module(name)
+        return True, "已安装"
+    except Exception as exc:  # noqa: BLE001 - 任何加载失败都视为不可用
+        return False, f"已安装但无法加载（{type(exc).__name__}）"
+
+
 def check_env() -> EnvReport:
     report = EnvReport()
     v = sys.version_info
@@ -78,10 +97,10 @@ def check_env() -> EnvReport:
         ("docx", "python-docx（Word 批注）", True),
         ("PIL", "Pillow（图片）", True),
         ("lxml", "lxml（OpenXML）", True),
-        ("matplotlib", "matplotlib（公式 PNG 兜底，可选）", False),
+        ("matplotlib", "matplotlib（公式 PNG 渲染，可选）", False),
     ]:
-        ok = _has_module(mod)
-        report.items.append(CheckItem(label, ok, "已安装" if ok else "未安装", required=required))
+        ok, detail = _module_state(mod)
+        report.items.append(CheckItem(label, ok, detail, required=required))
 
     pandoc = _find_pandoc()
     report.items.append(CheckItem("pandoc（docx↔md、md→docx）", bool(pandoc),

@@ -170,6 +170,29 @@ def test_normalize_option_spacing(tmp_path):
     assert f.read_text(encoding="utf-8") == "A.  选项"
 
 
+def test_fix_floating_images_text_moves_image_before_option():
+    text = "A. ![test](m/1.png){width=\"1in\"} 选项文字"
+    fixed = convert.fix_floating_images_text(text)
+    assert fixed.startswith("![](m/1.png){width=\"1in\"}\nA.")
+    assert "选项文字" in fixed
+
+
+def test_fix_floating_images_text_keeps_image_when_other_options_have_images():
+    """B-D 也是图片选项时不挪动（避免破坏并排选项）。"""
+    text = "A. ![test](m/1.png) 甲\nB. ![test](m/2.png) 乙"
+    assert convert.fix_floating_images_text(text) == text
+
+
+def test_fix_floating_images_text_noop_returns_original():
+    text = "![](m/1.png)\nA. 甲"
+    assert convert.fix_floating_images_text(text) == text
+
+
+def test_normalize_option_spacing_text_contract():
+    assert convert.normalize_option_spacing_text("A.    选项") == "A.  选项"
+    assert convert.normalize_option_spacing_text("A.  选项") == "A.  选项"
+
+
 # ============================================================
 # docx 分支
 # ============================================================

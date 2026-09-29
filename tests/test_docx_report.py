@@ -1,5 +1,4 @@
 import base64
-import importlib.util
 import os
 import re
 import shutil
@@ -17,9 +16,12 @@ import pytest
 
 from jiaodui.docx_report import (DocxBuildResult, build_docx, find_pandoc,
                                  generate_combined_docx)
+from jiaodui.formula_render import matplotlib_available
 
 PANDOC = find_pandoc()
-HAS_MPL = importlib.util.find_spec("matplotlib") is not None
+# 真实 import 判定：find_spec 会把「装了但 dlopen 失败（macOS 代码签名）」
+# 误判为可用，导致公式图片断言失败。
+HAS_MPL = matplotlib_available()
 PANDOC_REQUIRED = pytest.mark.skipif(PANDOC is None, reason="pandoc 不可用")
 
 _1PX_PNG = base64.b64decode(

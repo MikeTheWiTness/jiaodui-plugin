@@ -3,13 +3,13 @@
 锁定 latex_to_png 的渲染成功/降级边界（CJK 拒绝、异常降级、空串），
 以及 matplotlib 缺失时的优雅降级（返回 False 且不残留文件）。
 """
-import importlib.util
-
 import pytest
 
-from jiaodui.formula_render import _CJK_FONT, latex_to_png
+from jiaodui.formula_render import _CJK_FONT, latex_to_png, matplotlib_available
 
-HAS_MPL = importlib.util.find_spec("matplotlib") is not None
+# 用真实 import 判定可用性，而非 find_spec：pip 装的 matplotlib 在本机可能被
+# macOS 代码签名拒绝（dlopen 报 Team ID 不一致），find_spec 会误判为可用。
+HAS_MPL = matplotlib_available()
 
 
 @pytest.mark.skipif(HAS_MPL, reason="matplotlib 可用时该退化用例不适用")

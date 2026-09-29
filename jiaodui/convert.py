@@ -31,6 +31,10 @@ __all__ = [
     "comprehensive_clean",
     "clean_md_text",
     "clean_md_file",
+    "DEFAULT_INTENT_PROBLEM_MARKERS",
+    "get_intent_problem_markers",
+    "clean_intent_markers",
+    "clean_intent_md_file",
     "fix_latex_escapes",
     "fix_latex_escapes_text",
     "normalize_caret_tilde",
@@ -38,7 +42,9 @@ __all__ = [
     "fix_pandoc_comment_anomaly",
     "post_process_md",
     "fix_floating_images",
+    "fix_floating_images_text",
     "normalize_option_spacing",
+    "normalize_option_spacing_text",
     "strip_decor_images",
     "strip_decor_images_from_file",
     "extract_idml_to_markdown",
@@ -349,6 +355,68 @@ def enhance_docx_conversion(docx_path, output_md) -> bool:
 # ============================================================
 
 
+# 题目识别标志（用于【出题意图】清理等场景）。后期只需增删此列表，
+# 所有引用处自动更新。格式说明：标志会在粗体包裹下匹配（即 **标志**），
+# 因此只需写标志内容的正则，无需包含 ** 包裹符。
+DEFAULT_INTENT_PROBLEM_MARKERS = [
+    # 题目编号
+    r'小试牛刀\d+',
+    r'例\d+',
+    r'练\d+',
+    r'变式\d+',
+    r'变式\d+_例\d+',
+    # 分层/班型标签（含数字后缀）
+    r'一本班\d+',
+    r'双一流班\d+',
+    r'清北班\d+',
+    r'A班\d+',
+    r'A\+班\d+',
+    r'S班\d+',
+    # 分层/班型标签（无数字后缀）
+    r'一本班',
+    r'一本班例题',
+    r'一本班备用',
+    r'双一流班',
+    r'双一流班例题',
+    r'双一流班备用',
+    r'清北班',
+    r'清北班例题',
+    r'清北班备用',
+    r'A班',
+    r'A\+班',
+    r'S班',
+    # 教师版
+    r'教师版',
+    r'一本班教师版',
+    r'双一流班教师版',
+    r'清北班教师版',
+]
+
+
+def get_intent_problem_markers(config=None):
+    """获取完整的题目识别标志列表：通用常量 + 学科 config 覆盖。
+
+    合并策略：以 :data:`DEFAULT_INTENT_PROBLEM_MARKERS` 为基础，追加 config 中
+    独有的标志（去重）。兼容新仓 `wrapped_patterns` 与旧仓
+    `lecture_wrapped_patterns` 两种键名。
+
+    Args:
+        config: 学科配置 dict（可选）
+
+    Returns:
+        list[str]: 去重后的正则模式列表
+    """
+    markers = list(DEFAULT_INTENT_PROBLEM_MARKERS)
+    if config:
+        wrapped = config.get("wrapped_patterns")
+        if wrapped is None:
+            wrapped = config.get("lecture_wrapped_patterns")
+        for pat in wrapped or []:
+            if pat not in markers:
+                markers.append(pat)
+    return markers
+
+
 def comprehensive_clean(md_content):
     """清理表格管道符与边框行，保护数学公式不被破坏。"""
     # Step 0: 保护数学公式中的 | 字符（绝对值、集合、mid 等），避免被表格清理误删
@@ -403,11 +471,12 @@ def clean_md_text(content: str) -> str:
     return comprehensive_clean(content)
 
 
-def fix_floating_images(md_file) -> bool:
-    """把浮到选项文字里的题图挪回独立图片行，返回是否修改。"""
-    with open(md_file, encoding="utf-8") as f:
-        content = f.read()
+def fix_floating_images_text(content: str) -> str:
+    """把浮到选项文字里的题图挪回独立图片行（文本级，逐字移植旧仓）。
 
+    旧仓实现直接读写文件；新仓的讲义导入清理在正文（字符串）上进行，故抽出
+    文本级核心。无命中时原样返回。
+    """
     lines = content.split("\n")
     fixed = False
 
@@ -442,18 +511,33 @@ def fix_floating_images(md_file) -> bool:
         i += 2
         fixed = True
 
-    if fixed:
+    if not fixed:
+        return content
+    return "\n".join(lines)
+
+
+def fix_floating_images(md_file) -> bool:
+    """把浮到选项文字里的题图挪回独立图片行，返回是否修改（文件包装）。"""
+    with open(md_file, encoding="utf-8") as f:
+        content = f.read()
+    new_content = fix_floating_images_text(content)
+    if new_content != content:
         with open(md_file, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+            f.write(new_content)
         return True
     return False
 
 
+def normalize_option_spacing_text(content: str) -> str:
+    """把 4 个以上连续空格压缩为 2 个（文本级，逐字移植旧仓）。"""
+    return re.sub(r" {4,}", "  ", content)
+
+
 def normalize_option_spacing(md_file) -> bool:
-    """把 4 个以上连续空格压缩为 2 个，返回是否修改。"""
+    """把 4 个以上连续空格压缩为 2 个，返回是否修改（文件包装）。"""
     with open(md_file, encoding="utf-8") as f:
         content = f.read()
-    new_content = re.sub(r" {4,}", "  ", content)
+    new_content = normalize_option_spacing_text(content)
     if new_content != content:
         with open(md_file, "w", encoding="utf-8") as f:
             f.write(new_content)
@@ -472,6 +556,49 @@ def clean_md_file(md_file) -> bool:
         return True
     except Exception as e:
         log(f"   清洗失败: {e}")
+        return False
+
+
+def clean_intent_markers(md_content, problem_markers=None):
+    """清理【出题意图】段落（逐字移植旧仓 clean_intent_markers）。
+
+    删除【出题意图】到下一个题目编号之间的内容，包括【出题意图】本身，
+    保留题目编号及其后的内容。
+
+    Args:
+        md_content: Markdown 文本
+        problem_markers: 题目编号正则列表（不含 ** 包裹符），
+                         默认使用 :data:`DEFAULT_INTENT_PROBLEM_MARKERS`。
+
+    Returns:
+        清理后的文本（会 strip 首尾空白）。
+    """
+    if problem_markers is None:
+        problem_markers = DEFAULT_INTENT_PROBLEM_MARKERS
+
+    # 构建题目编号正则：**标志1**|**标志2**|...
+    # 标签不要求前导 \n 或 ^，直接在 ** 处匹配即可；
+    # 标签后可跟任意内容（如来源信息 "（2026·山东青岛模拟）"），
+    # 对齐 lecture_wrapped_patterns 的 ^\*\*{pattern}\*\*.*$ 规则。
+    marker_union = '|'.join(problem_markers)
+    pattern = r'^【出题意图】.*?(?=\*\*(?:' + marker_union + r')\*\*)'
+    cleaned = re.sub(pattern, '', md_content, flags=re.DOTALL | re.MULTILINE)
+    # 清理可能产生的多余空行
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
+
+def clean_intent_md_file(md_file, problem_markers=None) -> bool:
+    """对 md 文件执行出题意图清理，返回是否成功（旧仓同名包装）。"""
+    try:
+        with open(md_file, encoding="utf-8") as f:
+            content = f.read()
+        cleaned = clean_intent_markers(content, problem_markers=problem_markers)
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write(cleaned)
+        return True
+    except Exception as e:
+        log(f"   出题意图清理失败: {e}")
         return False
 
 

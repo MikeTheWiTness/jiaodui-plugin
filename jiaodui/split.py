@@ -28,26 +28,42 @@ from .paths import IMAGES_DIR, SKIP_MARKER_FILE, find_source_md
 from .units import scan_unit_dirs
 
 
-def prepare_lecture_content(content: str) -> str:
+def prepare_lecture_content(content: str, problem_markers=None) -> str:
     """讲义导入清理（移植旧仓导入阶段，默认开启）。
 
-    旧仓讲义流程在拆分前固定执行三件事，新仓此前只移植了函数、从未调用，
-    导致 pandoc 渲染成网格表的讲义（``| **例1**（多选） |``）拆不开：
+    旧仓讲义流程在拆分前固定按以下顺序执行六步（导入阶段五步，见旧仓
+    ui/default_app.py::_conversion_thread_run；再在 default_split_lecture 开头清装饰图）。
+    新仓此前只移植了函数、从未调用，导致 pandoc 渲染成网格表的讲义
+    （``| **例1**（多选） |``）拆不开：
 
-    1. ``fix_latex_escapes_text``：修复 pandoc 过度转义（``\\$``→``$``、
-       ``\\\\``→``\\``、数学块内安全还原下标/上标），使 ``$...$`` 定界符可被识别；
+    1. ``fix_latex_escapes_text``：修复 pandoc 过度转义，使公式定界符可被识别；
     2. ``comprehensive_clean``：去表格竖线、丢表框线、保护公式、规整空行；
-    3. ``strip_decor_images``：清除板块标题行的小装饰图标。
+    3. ``clean_intent_markers``：删除【出题意图】段，保留其后题目编号；
+    4. ``fix_floating_images_text``：把浮进选项 A 的题图挪回独立图片行；
+    5. ``normalize_option_spacing_text``：把 4 个以上连续空格压成 2 个；
+    6. ``strip_decor_images``：清除板块标题行的小装饰图标。
 
-    最终顺序固定为
-    ``strip_decor_images(comprehensive_clean(fix_latex_escapes_text(content)))``。
-
+    顺序与旧仓一致：先还原转义与表格，再清意图/挪图/压空格，最后清装饰图。
     清理后 ``**例1**`` 等例题标题回到行首，``section_pattern`` 才能命中。
+
+    Args:
+        content: Markdown 正文。
+        problem_markers: 【出题意图】清理的题目编号正则列表；None 时用通用常量。
+            学科独有的标志由调用方经 ``convert.get_intent_problem_markers``
+            合并后传入。
+
     幂等：已清理过的正文再跑一次结果不变。
     """
-    from .convert import comprehensive_clean, fix_latex_escapes_text
+    from .convert import (clean_intent_markers, comprehensive_clean,
+                          fix_floating_images_text, fix_latex_escapes_text,
+                          normalize_option_spacing_text)
 
-    return strip_decor_images(comprehensive_clean(fix_latex_escapes_text(content)))
+    content = fix_latex_escapes_text(content)
+    content = comprehensive_clean(content)
+    content = clean_intent_markers(content, problem_markers=problem_markers)
+    content = fix_floating_images_text(content)
+    content = normalize_option_spacing_text(content)
+    return strip_decor_images(content)
 
 # ─── 统一的单元标记（ADR-0017 决策5） ──────────────────────────
 
@@ -588,7 +604,10 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
     config = _ensure_normalized(config)
     content, src_media = _load_raw(raw_md, base_name, raw_config)
     if clean:
-        content = prepare_lecture_content(content)
+        from .convert import get_intent_problem_markers
+
+        content = prepare_lecture_content(
+            content, problem_markers=get_intent_problem_markers(config))
     result = SplitResult()
     if not content.strip():
         result.warnings.append("源文为空，未识别到任何单元")
@@ -687,7 +706,8 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
     content, src_media = _load_raw(raw_md, base_name, {})
     if clean and str(mode).lower() == "lecture":
         # 讲义边界清单必须是在同一清理后的正文上定出的行号，
-        # 否则切片结果与规则拆分的单元正文不一致。
+        # 否则切片结果与规则拆分的单元正文不一致（切片入口没有学科配置，
+        # 【出题意图】清理只能用通用标志，学科独有标志由 split 路径覆盖）。
         content = prepare_lecture_content(content)
     lines = content.splitlines()
     result = SplitResult()
