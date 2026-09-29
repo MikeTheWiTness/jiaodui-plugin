@@ -31,18 +31,23 @@ from .units import scan_unit_dirs
 def prepare_lecture_content(content: str) -> str:
     """讲义导入清理（移植旧仓导入阶段，默认开启）。
 
-    旧仓讲义流程在拆分前固定执行两件事，新仓此前只移植了函数、从未调用，
+    旧仓讲义流程在拆分前固定执行三件事，新仓此前只移植了函数、从未调用，
     导致 pandoc 渲染成网格表的讲义（``| **例1**（多选） |``）拆不开：
 
-    1. ``comprehensive_clean``：去表格竖线、丢表框线、保护公式、规整空行；
-    2. ``strip_decor_images``：清除板块标题行的小装饰图标。
+    1. ``fix_latex_escapes_text``：修复 pandoc 过度转义（``\\$``→``$``、
+       ``\\\\``→``\\``、数学块内安全还原下标/上标），使 ``$...$`` 定界符可被识别；
+    2. ``comprehensive_clean``：去表格竖线、丢表框线、保护公式、规整空行；
+    3. ``strip_decor_images``：清除板块标题行的小装饰图标。
+
+    最终顺序固定为
+    ``strip_decor_images(comprehensive_clean(fix_latex_escapes_text(content)))``。
 
     清理后 ``**例1**`` 等例题标题回到行首，``section_pattern`` 才能命中。
     幂等：已清理过的正文再跑一次结果不变。
     """
-    from .convert import comprehensive_clean
+    from .convert import comprehensive_clean, fix_latex_escapes_text
 
-    return strip_decor_images(comprehensive_clean(content))
+    return strip_decor_images(comprehensive_clean(fix_latex_escapes_text(content)))
 
 # ─── 统一的单元标记（ADR-0017 决策5） ──────────────────────────
 

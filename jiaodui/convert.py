@@ -31,6 +31,8 @@ __all__ = [
     "comprehensive_clean",
     "clean_md_text",
     "clean_md_file",
+    "fix_latex_escapes",
+    "fix_latex_escapes_text",
     "normalize_caret_tilde",
     "convert_display_to_inline",
     "fix_pandoc_comment_anomaly",
@@ -470,6 +472,90 @@ def clean_md_file(md_file) -> bool:
         return True
     except Exception as e:
         log(f"   清洗失败: {e}")
+        return False
+
+
+def fix_latex_escapes_text(content: str) -> str:
+    """修复 pandoc 的过度转义（文本级，逐字移植旧仓 fix_latex_escapes 五阶段）。
+
+    分三阶段：
+    1. 全局反斜杠规约（pandoc 的 \\\\ → \\，必须全局生效）
+    2. 保护 $...$ / $$...$$ 数学块，避免内部 LaTeX 命令被破坏
+    3. 字面替换仅作用于非数学文本；数学内部仅做安全的还原（下标、上标、分组）
+    """
+    # ===== Phase 1: 全局反斜杠规约（lines 33-35，安全，数学内外均需） =====
+    special_chars = r'[\[\]\(\)\$_<>{}$]'
+    content = re.sub(r'\\{2,}(?=' + special_chars + r')', r'\\', content)
+    content = re.sub(r'\\{2,}([a-zA-Z]+)', r'\\\1', content)
+    content = re.sub(r'\\{2,}([^a-zA-Z0-9])', r'\\\1', content)
+
+    # ===== Phase 2a: 还原数学定界符 \$ → $（必须在保护数学块之前） =====
+    # pandoc 把 $...$ 输出为 \$...\$，先还原定界符才能正确识别数学块
+    content = content.replace(r'\$', r'$')
+
+    # ===== Phase 2b: 保护数学块（先 $...$ 再 $$...$$，与 comprehensive_clean 一致） =====
+    math_blocks = []
+
+    def _save_math(m):
+        math_blocks.append(m.group(0))
+        return f'\x01MATH{len(math_blocks) - 1}\x01'
+
+    # 先保护 $...$（单行），再保护 $$...$$（多行）
+    content = re.sub(r'\$[^$\n]+?\$', _save_math, content)
+    content = re.sub(r'\$\$.*?\$\$', _save_math, content, flags=re.DOTALL)
+
+    # ===== Phase 3: 字面替换（仅影响非数学文本） =====
+    content = content.replace(r'\_', '_')
+    content = content.replace(r'\<', '<')
+    content = content.replace(r'\>', '>')
+    content = content.replace(r'\{', '{')
+    content = content.replace(r'\}', '}')
+    content = content.replace(r'\left\(', r'\left(')
+    content = content.replace(r'\right\)', r'\right)')
+    content = content.replace(r'\left\[', r'\left[')
+    content = content.replace(r'\right\]', r'\right]')
+
+    def _fix_escaped_brackets(content):
+        def _repl(m):
+            inner = m.group(1)
+            if re.search(r'[\$\\\^_]', inner):
+                return m.group(0)
+            return '[' + inner + ']'
+        return re.sub(r'\\\[([^\]]*?)\\\]', _repl, content)
+    content = _fix_escaped_brackets(content)
+
+    for esc, orig in [(r'\^', '^'), (r'\#', '#'), (r'\~', '~'), (r'\&', '&'),
+                       (r'\%', '%'), (r'\*', '*'), (r'\+', '+'), (r'\-', '-'),
+                       (r'\=', '='), (r'\|', '|'), (r'\!', '!'), (r"\'", "'")]:
+        content = content.replace(esc, orig)
+
+    # ===== Phase 4: 数学块内部的安全还原 =====
+    # 只还原数学模式必需的命令（下标、上标、分组），其余 LaTeX 命令保持不动
+    for i, block in enumerate(math_blocks):
+        block = block.replace(r'\_', '_')   # 下标 a_1
+        block = block.replace(r'\^', '^')   # 上标 x^2
+        block = block.replace(r'\{', '{')   # 分组 {…}
+        block = block.replace(r'\}', '}')   # 分组 {…}
+        math_blocks[i] = block
+
+    # ===== Phase 5: 还原数学块 =====
+    for i, block in enumerate(math_blocks):
+        content = content.replace(f'\x01MATH{i}\x01', block)
+
+    return content
+
+
+def fix_latex_escapes(md_file) -> bool:
+    """读文件 → fix_latex_escapes_text → 写回，返回是否成功（与旧仓同名包装）。"""
+    try:
+        with open(md_file, encoding="utf-8") as f:
+            content = f.read()
+        fixed = fix_latex_escapes_text(content)
+        with open(md_file, "w", encoding="utf-8") as f:
+            f.write(fixed)
+        return True
+    except Exception as e:
+        log(f"   LaTeX 转义修复失败: {e}")
         return False
 
 
