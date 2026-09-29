@@ -5,529 +5,117 @@
   "old_repo_head": "1c452430aebe6068d25d1090ccb9c17ccf9fca50",
   "new_repo": "/Users/chouchou/开发/JiaoDuiAgentSkill",
   "hash_algorithm": "sha256",
-  "source_len_p90": 1268,
+  "source_len_p90": 1110,
   "count": 22,
-  "selection_rule": "从有同目录单元源文（{unit}.md）的真实旧产物中选取；逐一覆盖含图片、含公式标记、长单元（源文字符数 ≥ 源文样本 P90）、无问题单元、旧流程曾漏检候选（严重错误/严重度未声明/标记审计 unknown/空操作）。序在写脚本时冻结，不因新版结果更换。",
-  "note": "样本冻结：写 recompute_baseline.py 时固定，后续任何复算只能读该清单校验，不得据此重选。",
+  "selection_rule": "仅高中物理；从有同目录源文 {unit}.md 的真实旧产物中按类别贪心选取，覆盖图片/公式/长单元/无问题/严重错误/未声明/audit unknown/空操作。序在写脚本时冻结。",
+  "note": "M1/M2 只用高中物理流程；样本冻结后不重选，复算只校验哈希与覆盖。",
   "coverage": {
     "image": [
+      1,
       2,
       3,
+      4,
       5,
       6,
       7,
       8,
       9,
       10,
-      11,
       12,
       13,
       14,
-      15,
-      16,
+      17,
       18,
       19,
       20,
-      22
-    ],
-    "formula_marker": [
-      2,
-      3,
-      4,
-      5,
-      6,
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      16,
-      17,
-      18,
-      19
-    ],
-    "long_unit": [
-      5,
-      7,
-      8,
-      13,
-      15,
-      16,
-      20
-    ],
-    "no_problem": [
-      1,
-      7,
-      8,
-      21
-    ],
-    "with_marker": [
-      2,
-      3,
-      4,
-      5,
-      6,
-      9,
-      10,
-      11,
-      12,
-      13,
-      14,
-      16,
-      17,
-      18,
-      19,
-      20
-    ],
-    "without_marker": [
-      1,
-      7,
-      8,
-      15,
       21,
       22
     ],
-    "severe": [
+    "formula_marker": [
+      1,
       2,
-      17
+      3,
+      4,
+      5,
+      7,
+      8,
+      9,
+      11,
+      12,
+      13,
+      14,
+      17,
+      20,
+      21,
+      22
     ],
-    "unstated": [
+    "long_unit": [
+      1,
+      7,
+      8,
+      10,
+      14,
+      15,
+      18,
+      20
+    ],
+    "no_problem": [
+      6,
+      10,
       15,
       16,
       18,
-      19,
-      22
+      19
     ],
-    "audit_unknown": [
+    "with_marker": [
+      1,
       2,
+      3,
       4,
       5,
+      7,
+      8,
+      9,
+      11,
+      12,
+      13,
+      14,
+      17,
+      20,
+      21,
+      22
+    ],
+    "without_marker": [
       6,
       10,
-      12,
-      13
+      15,
+      16,
+      18,
+      19
+    ],
+    "severe": [
+      17
+    ],
+    "unstated": [],
+    "audit_unknown": [
+      1,
+      3,
+      4,
+      8,
+      9,
+      11,
+      13,
+      14,
+      17,
+      21
     ],
     "noop": [
-      14
+      5
     ]
   },
   "samples": [
     {
       "index": 1,
-      "doc": "高一上期中卷",
-      "unit": "第1题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题/第1题.md",
-      "source_sha256": "ff9d5b9fadc6de13e736912317ecc90babfda04dd0d18d0f91758ec67807c16e",
-      "source_chars": 288,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题/_校对报告.md",
-      "report_sha256": "30761c34d3c6cb242344e1c991e05d91fb8a2272ac862ea5ecdb3db9f5265a03",
-      "report_len_chars": 1499,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第1题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题/_校对报告.md"
-      ],
-      "has_image": false,
-      "image_count": 0,
-      "has_formula": false,
-      "formula_marker_count": 0,
-      "marker_count": 0,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "无问题",
-      "old_raw_severity": "无问题",
-      "old_audit_verdicts": {},
-      "selection_reasons": [
-        "无问题单元（旧报告走无问题快速通道）",
-        "无标记",
-        "源文无图片、无公式（最短基线样本）"
-      ]
-    },
-    {
-      "index": 2,
-      "doc": "高一上期中卷",
-      "unit": "第2题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题/第2题.md",
-      "source_sha256": "827a1e5fbd7460ffb43fe277c03106e841af85a2bdffacc716cd50f33a21882a",
-      "source_chars": 580,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题/_校对报告.md",
-      "report_sha256": "54b6943249759651dae6ac1437e3fe85c3f79a71b1d88b823b3b23ca6df1886c",
-      "report_len_chars": 2924,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第2题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 1,
-      "has_formula": true,
-      "formula_marker_count": 2,
-      "marker_count": 4,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "严重错误",
-      "old_raw_severity": "严重错误",
-      "old_audit_verdicts": {
-        "unknown": 4
-      },
-      "selection_reasons": [
-        "旧流程曾漏检候选：旧报告声明严重错误，4/4 标记 audit=unknown（原文字段对不上源文）",
-        "严重错误"
-      ]
-    },
-    {
-      "index": 3,
-      "doc": "高一上期中卷",
-      "unit": "第12题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题/第12题.md",
-      "source_sha256": "1e28d91ddf3d4f5ccc9ec95ec7a5a99ac995319cbe3555b0314ff86ceb5ad47e",
-      "source_chars": 826,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题/_校对报告.md",
-      "report_sha256": "5615860839a546f659cc1678451158d68960153ec01d80e83e46b747bedfdd1a",
-      "report_len_chars": 3119,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第12题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 2,
-      "has_formula": true,
-      "formula_marker_count": 9,
-      "marker_count": 11,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "轻微问题",
-      "old_raw_severity": "轻微问题",
-      "old_audit_verdicts": {
-        "ok": 11
-      },
-      "selection_reasons": [
-        "含公式标记（9/11 标记字段含 $）",
-        "多标记（11 条）",
-        "含图片"
-      ]
-    },
-    {
-      "index": 4,
-      "doc": "高一上期中卷",
-      "unit": "第11题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题/第11题.md",
-      "source_sha256": "61f59813839d701848b30303abef1f03a89eca92fb2b3f0fd2127de62397adf8",
-      "source_chars": 605,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题/_校对报告.md",
-      "report_sha256": "825e7afbb5cb6d126907dfa5ffe223be9b5a1e9488323fda265b1f95072315a6",
-      "report_len_chars": 7211,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第11题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题/_校对报告.md"
-      ],
-      "has_image": false,
-      "image_count": 0,
-      "has_formula": true,
-      "formula_marker_count": 5,
-      "marker_count": 5,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "轻微问题",
-      "old_raw_severity": "轻微问题",
-      "old_audit_verdicts": {
-        "unknown": 5
-      },
-      "selection_reasons": [
-        "标记审计 unknown（5/5 定位不到源文）",
-        "源文无图片"
-      ]
-    },
-    {
-      "index": 5,
-      "doc": "高一上月考卷1",
-      "unit": "第15题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题/第15题.md",
-      "source_sha256": "824649f37c8af3ac1bc849935216b2010ca149c36562faa3004f9ed77006df6c",
-      "source_chars": 1498,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题/_校对报告.md",
-      "report_sha256": "2c29216b2f4ca1c79a19b6b096a707c0bff8e975979a751f6862ebd82b90ee4e",
-      "report_len_chars": 4912,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上月考卷1/第15题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 3,
-      "has_formula": true,
-      "formula_marker_count": 9,
-      "marker_count": 9,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "轻微问题",
-      "old_raw_severity": "轻微问题",
-      "old_audit_verdicts": {
-        "ok": 4,
-        "unknown": 5
-      },
-      "selection_reasons": [
-        "长单元（1498 字符 ≥ P90）",
-        "含公式标记（9/9）",
-        "含图片（3 张）",
-        "审计 ok/unknown 混合"
-      ]
-    },
-    {
-      "index": 6,
-      "doc": "高一上月考卷1",
-      "unit": "第17题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题/第17题.md",
-      "source_sha256": "6d4e57a2a34f2e7ee7c6cd2369847640b1c5f9afd588d8e0dc94e277f078256b",
-      "source_chars": 791,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题/_校对报告.md",
-      "report_sha256": "9f3f2e53eb61eb2f298d8c0592fa04c2c1eba11f420a376cee406f08032710a1",
-      "report_len_chars": 4623,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上月考卷1/第17题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 1,
-      "has_formula": true,
-      "formula_marker_count": 8,
-      "marker_count": 9,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "轻微问题",
-      "old_raw_severity": "轻微问题",
-      "old_audit_verdicts": {
-        "ok": 6,
-        "unknown": 3
-      },
-      "selection_reasons": [
-        "含公式标记（8/9）",
-        "标记审计 unknown 3 条"
-      ]
-    },
-    {
-      "index": 7,
-      "doc": "高一上月考卷1",
-      "unit": "第9题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题/第9题.md",
-      "source_sha256": "b0d75fe4126fda5f8c825f578900a01907a475170df3cd2803a2244274c5ede6",
-      "source_chars": 1414,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题/_校对报告.md",
-      "report_sha256": "6d01fe7ed5edc7ce731d38d0ab28862e781e21ab8142eaa04679af10ffb8073c",
-      "report_len_chars": 10025,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上月考卷1/第9题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 1,
-      "has_formula": true,
-      "formula_marker_count": 0,
-      "marker_count": 0,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "无问题",
-      "old_raw_severity": "无问题",
-      "old_audit_verdicts": {},
-      "selection_reasons": [
-        "长单元（1414 字符）",
-        "无问题单元",
-        "含图片"
-      ]
-    },
-    {
-      "index": 8,
-      "doc": "高三年级-秋季-期末考试卷",
-      "unit": "第13题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题/第13题.md",
-      "source_sha256": "45ea01e5ca5349edbbf780bb508ebafc1d9d94cb416ead91a8b608d9f6fd5e44",
-      "source_chars": 1268,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题/_校对报告.md",
-      "report_sha256": "c37c246bdad73c3db6bb85602147a1ef8e0b4794d642d2f01017a72d9a4d0f9c",
-      "report_len_chars": 7690,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第13题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 1,
-      "has_formula": true,
-      "formula_marker_count": 0,
-      "marker_count": 0,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "无问题",
-      "old_raw_severity": "无问题",
-      "old_audit_verdicts": {},
-      "selection_reasons": [
-        "长单元（1268 字符 = P90）",
-        "无问题单元",
-        "含图片"
-      ]
-    },
-    {
-      "index": 9,
-      "doc": "高三年级-秋季-期末考试卷",
-      "unit": "第18题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题/第18题.md",
-      "source_sha256": "5ef732432be3581b457b3f9cc9d1842db6070a122012ce05d88e0b9f455483ca",
-      "source_chars": 1090,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题/_校对报告.md",
-      "report_sha256": "8a04e8f0102f6afb4b8f81493d9e5dea741e0eac10369423086b53d90874db92",
-      "report_len_chars": 9076,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第18题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 2,
-      "has_formula": true,
-      "formula_marker_count": 7,
-      "marker_count": 7,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "轻微问题",
-      "old_raw_severity": "轻微问题",
-      "old_audit_verdicts": {
-        "ok": 7
-      },
-      "selection_reasons": [
-        "含公式标记（7/7）",
-        "含图片（2 张）"
-      ]
-    },
-    {
-      "index": 10,
-      "doc": "高三年级-秋季-期末考试卷",
-      "unit": "第17题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题/第17题.md",
-      "source_sha256": "8d132050a8a0bbbd3e1bf7c57631dbebd80dfc659a4b5ecffda5b7a9ab89a795",
-      "source_chars": 692,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题/_校对报告.md",
-      "report_sha256": "13772c1310f770210748d6a5e0fd8dd5e7367ed01584a8f8b0083f5927f9d57d",
-      "report_len_chars": 7419,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第17题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 1,
-      "has_formula": true,
-      "formula_marker_count": 4,
-      "marker_count": 4,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "一般问题",
-      "old_raw_severity": "一般问题",
-      "old_audit_verdicts": {
-        "unknown": 3,
-        "ok": 1
-      },
-      "selection_reasons": [
-        "严重度=一般问题",
-        "含公式标记（4/4）",
-        "标记审计 unknown 3 条"
-      ]
-    },
-    {
-      "index": 11,
-      "doc": "2026年7月21日高中物理作业",
-      "unit": "第16题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题/第16题.md",
-      "source_sha256": "8e5090e9fdf9c97eb19998728deb2a2fc4a5cbb7c93b7623650b53ef89441139",
-      "source_chars": 834,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题/_校对报告.md",
-      "report_sha256": "1f37bcdc62c24e84291b46223f944727cc3a519d79e7540bd84583083c3730ce",
-      "report_len_chars": 7515,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/2026年7月21日高中物理作业/第16题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 1,
-      "has_formula": true,
-      "formula_marker_count": 9,
-      "marker_count": 19,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "轻微问题",
-      "old_raw_severity": "轻微问题",
-      "old_audit_verdicts": {
-        "ok": 19
-      },
-      "selection_reasons": [
-        "标记数最多（19 条）",
-        "含公式标记（9 条）",
-        "含图片"
-      ]
-    },
-    {
-      "index": 12,
-      "doc": "2026年7月21日高中物理作业",
-      "unit": "第18题",
-      "subject": "物理",
-      "source_mode": "试卷",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题/第18题.md",
-      "source_sha256": "706257207e89c20cbc2e89ea33a52160242c39b6202b27d0a2c1be8c76c90fc7",
-      "source_chars": 1036,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题/_校对报告.md",
-      "report_sha256": "6e823a1b428bbfbef8f4e6fbe6a077ef014446a541647b5114172db4de8abf37",
-      "report_len_chars": 9197,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/2026年7月21日高中物理作业/第18题/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 1,
-      "has_formula": true,
-      "formula_marker_count": 8,
-      "marker_count": 8,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "轻微问题",
-      "old_raw_severity": "轻微问题",
-      "old_audit_verdicts": {
-        "unknown": 8
-      },
-      "selection_reasons": [
-        "含公式标记（8/8）",
-        "标记审计 unknown（8/8 全部定位不到）"
-      ]
-    },
-    {
-      "index": 13,
       "doc": "2026年7月21日高中物理作业",
       "unit": "第15题",
       "subject": "物理",
@@ -557,13 +145,118 @@
         "unknown": 1
       },
       "selection_reasons": [
-        "长单元（1380 字符）",
-        "含图片",
-        "含公式标记"
+        "含图片题（1 张）",
+        "含公式标记（3）",
+        "长单元（源文 1380 ≥ P90）",
+        "标记审计 unknown"
       ]
     },
     {
-      "index": 14,
+      "index": 2,
+      "doc": "2026年7月21日高中物理作业",
+      "unit": "第16题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题/第16题.md",
+      "source_sha256": "8e5090e9fdf9c97eb19998728deb2a2fc4a5cbb7c93b7623650b53ef89441139",
+      "source_chars": 834,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题/_校对报告.md",
+      "report_sha256": "1f37bcdc62c24e84291b46223f944727cc3a519d79e7540bd84583083c3730ce",
+      "report_len_chars": 7515,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/2026年7月21日高中物理作业/第16题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第16题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 9,
+      "marker_count": 19,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "ok": 19
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（9）"
+      ]
+    },
+    {
+      "index": 3,
+      "doc": "2026年7月21日高中物理作业",
+      "unit": "第17题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第17题/第17题.md",
+      "source_sha256": "ed2e623298672c2182f29bd8bb33c31c38a60695eae15a9af5bd6cdeff0bbf38",
+      "source_chars": 1065,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第17题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第17题/_校对报告.md",
+      "report_sha256": "1f24a3fd8901178118d3bc04704bae46f23f8d67b7d4f760c2ac290fa3750c90",
+      "report_len_chars": 10018,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/2026年7月21日高中物理作业/第17题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第17题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 3,
+      "marker_count": 3,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "unknown": 3
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（3）",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 4,
+      "doc": "2026年7月21日高中物理作业",
+      "unit": "第18题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题/第18题.md",
+      "source_sha256": "706257207e89c20cbc2e89ea33a52160242c39b6202b27d0a2c1be8c76c90fc7",
+      "source_chars": 1036,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题/_校对报告.md",
+      "report_sha256": "6e823a1b428bbfbef8f4e6fbe6a077ef014446a541647b5114172db4de8abf37",
+      "report_len_chars": 9197,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/2026年7月21日高中物理作业/第18题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第18题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 8,
+      "marker_count": 8,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "unknown": 8
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（8）",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 5,
       "doc": "2026年7月21日高中物理作业",
       "unit": "第5题",
       "subject": "物理",
@@ -593,27 +286,168 @@
         "noop": 1
       },
       "selection_reasons": [
-        "含空操作标记（原文==改为，旧产物不合格样本）",
-        "含公式标记",
-        "含图片"
+        "含图片题（1 张）",
+        "含公式标记（1）",
+        "含空操作标记"
       ]
     },
     {
-      "index": 15,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元53",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元53/单元53.md",
-      "source_sha256": "34acd5d07a96dea9c5716287bc2b3c4d3ea1a7f403a44b1a850bd7d60082ab95",
-      "source_chars": 1772,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元53",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元53/_校对报告.md",
-      "report_sha256": "0ba415c595e52f5acfa1ce33fed703300d57ff3dc239f7d73bd804520c5e305e",
-      "report_len_chars": 2459,
+      "index": 6,
+      "doc": "2026年7月21日高中物理作业",
+      "unit": "第8题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第8题/第8题.md",
+      "source_sha256": "bc16c55edb702357b67171f154cce71d1aa827737343746802ebf89a71b55681",
+      "source_chars": 978,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第8题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第8题/_校对报告.md",
+      "report_sha256": "3e554909b4c37cbd9d1c34777e913c0d237fbee32abfda54321c5c18ec454671",
+      "report_len_chars": 2392,
       "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元53/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元53/_校对报告.md"
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/2026年7月21日高中物理作业/第8题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/2026年7月21日高中物理作业/第8题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 3,
+      "has_formula": true,
+      "formula_marker_count": 0,
+      "marker_count": 0,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "无问题",
+      "old_raw_severity": "无问题",
+      "old_audit_verdicts": {},
+      "selection_reasons": [
+        "含图片题（3 张）",
+        "无问题单元",
+        "无标记"
+      ]
+    },
+    {
+      "index": 7,
+      "doc": "高一上月考卷1",
+      "unit": "第10题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第10题/第10题.md",
+      "source_sha256": "1c99e5bfaea80f34d1520f4c8f7bf0af7212e24abee808e1d5fdc8469dbf22d9",
+      "source_chars": 1280,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第10题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第10题/_校对报告.md",
+      "report_sha256": "31af3e0eb1f2eebeb600309a326bd05a4842efd0d552ae8b9d84390f2632a57b",
+      "report_len_chars": 5460,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上月考卷1/第10题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第10题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 9,
+      "marker_count": 9,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "ok": 9
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（9）",
+        "长单元（源文 1280 ≥ P90）"
+      ]
+    },
+    {
+      "index": 8,
+      "doc": "高一上月考卷1",
+      "unit": "第15题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题/第15题.md",
+      "source_sha256": "824649f37c8af3ac1bc849935216b2010ca149c36562faa3004f9ed77006df6c",
+      "source_chars": 1498,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题/_校对报告.md",
+      "report_sha256": "2c29216b2f4ca1c79a19b6b096a707c0bff8e975979a751f6862ebd82b90ee4e",
+      "report_len_chars": 4912,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上月考卷1/第15题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第15题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 3,
+      "has_formula": true,
+      "formula_marker_count": 9,
+      "marker_count": 9,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "ok": 4,
+        "unknown": 5
+      },
+      "selection_reasons": [
+        "含图片题（3 张）",
+        "含公式标记（9）",
+        "长单元（源文 1498 ≥ P90）",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 9,
+      "doc": "高一上月考卷1",
+      "unit": "第17题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题/第17题.md",
+      "source_sha256": "6d4e57a2a34f2e7ee7c6cd2369847640b1c5f9afd588d8e0dc94e277f078256b",
+      "source_chars": 791,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题/_校对报告.md",
+      "report_sha256": "9f3f2e53eb61eb2f298d8c0592fa04c2c1eba11f420a376cee406f08032710a1",
+      "report_len_chars": 4623,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上月考卷1/第17题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第17题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 8,
+      "marker_count": 9,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "ok": 6,
+        "unknown": 3
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（8）",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 10,
+      "doc": "高一上月考卷1",
+      "unit": "第9题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题/第9题.md",
+      "source_sha256": "b0d75fe4126fda5f8c825f578900a01907a475170df3cd2803a2244274c5ede6",
+      "source_chars": 1414,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题/_校对报告.md",
+      "report_sha256": "6d01fe7ed5edc7ce731d38d0ab28862e781e21ab8142eaa04679af10ffb8073c",
+      "report_len_chars": 10025,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上月考卷1/第9题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上月考卷1/第9题/_校对报告.md"
       ],
       "has_image": true,
       "image_count": 1,
@@ -622,206 +456,172 @@
       "marker_count": 0,
       "empty_orig_count": 0,
       "noop_count": 0,
-      "old_severity": "<unparseable>",
-      "old_raw_severity": "未声明",
+      "old_severity": "无问题",
+      "old_raw_severity": "无问题",
       "old_audit_verdicts": {},
       "selection_reasons": [
-        "最长单元（1772 字符）",
-        "旧报告严重度未声明（parse 返回 None）",
+        "含图片题（1 张）",
+        "长单元（源文 1414 ≥ P90）",
+        "无问题单元",
         "无标记"
       ]
     },
     {
-      "index": 16,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元31",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元31/单元31.md",
-      "source_sha256": "0d138521d92edc86a6e35b3bd12d1c2437cca666177eaf0ee65db20497cf1839",
-      "source_chars": 1651,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元31",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元31/_校对报告.md",
-      "report_sha256": "c03c4cd111b97c01543023c08fba3f24b5e4f5a277eef7259922b2560c9c93bd",
-      "report_len_chars": 7544,
+      "index": 11,
+      "doc": "高一上期中卷",
+      "unit": "第11题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题/第11题.md",
+      "source_sha256": "61f59813839d701848b30303abef1f03a89eca92fb2b3f0fd2127de62397adf8",
+      "source_chars": 605,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题/_校对报告.md",
+      "report_sha256": "825e7afbb5cb6d126907dfa5ffe223be9b5a1e9488323fda265b1f95072315a6",
+      "report_len_chars": 7211,
       "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元31/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元31/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 5,
-      "has_formula": true,
-      "formula_marker_count": 2,
-      "marker_count": 5,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "未声明",
-      "old_raw_severity": "未声明",
-      "old_audit_verdicts": {
-        "ok": 5
-      },
-      "selection_reasons": [
-        "长单元（1651 字符）",
-        "旧报告严重度未声明（总结行缺失）",
-        "含图片（5 张）",
-        "含公式标记"
-      ]
-    },
-    {
-      "index": 17,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元14",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元14/单元14.md",
-      "source_sha256": "5590fdc2c786f6bc13735ef761e792c41c9bb65c8829b53458924c396b0e4420",
-      "source_chars": 1167,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元14",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元14/_校对报告.md",
-      "report_sha256": "8b161485899622405bbf0b5529822cbeb26a6dfba250e22042439b49dbca0c1a",
-      "report_len_chars": 6382,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元14/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元14/_校对报告.md"
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第11题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第11题/_校对报告.md"
       ],
       "has_image": false,
       "image_count": 0,
       "has_formula": true,
-      "formula_marker_count": 3,
-      "marker_count": 3,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "严重错误",
-      "old_raw_severity": "严重错误",
-      "old_audit_verdicts": {
-        "ok": 3
-      },
-      "selection_reasons": [
-        "旧流程曾漏检候选：旧报告声明严重错误",
-        "严重错误"
-      ]
-    },
-    {
-      "index": 18,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元19",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元19/单元19.md",
-      "source_sha256": "b8d9f740e898ee065ecc58cd6cd6ad5ae25ddc621a9635af0544074c551a5d46",
-      "source_chars": 1187,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元19",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元19/_校对报告.md",
-      "report_sha256": "62b5a9e22e0cbd50f6c23ce1626c717756cd5e2642818bdf1b01e06e64f09000",
-      "report_len_chars": 5251,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元19/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元19/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 3,
-      "has_formula": true,
-      "formula_marker_count": 1,
-      "marker_count": 7,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "未声明",
-      "old_raw_severity": "未声明",
-      "old_audit_verdicts": {
-        "ok": 7
-      },
-      "selection_reasons": [
-        "旧报告严重度未声明",
-        "多标记（7 条）",
-        "含图片"
-      ]
-    },
-    {
-      "index": 19,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元42",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元42/单元42.md",
-      "source_sha256": "1be5bf960ddc82bd7b0000ea2ac2af5a3f388cdb182b4f1183052a71d59e3c3e",
-      "source_chars": 1151,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元42",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元42/_校对报告.md",
-      "report_sha256": "f36361e4ace4012378d434a5e767938d14adc733d6351f05bf9e65f14746d587",
-      "report_len_chars": 3110,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元42/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元42/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 4,
-      "has_formula": true,
       "formula_marker_count": 5,
-      "marker_count": 6,
-      "empty_orig_count": 0,
-      "noop_count": 0,
-      "old_severity": "未声明",
-      "old_raw_severity": "未声明",
-      "old_audit_verdicts": {
-        "ok": 6
-      },
-      "selection_reasons": [
-        "旧报告严重度未声明",
-        "含公式标记",
-        "含图片（4 张）"
-      ]
-    },
-    {
-      "index": 20,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元3",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元3/单元3.md",
-      "source_sha256": "68da71f37cb975dcadc049b06bf335d673d6ae80d8c91cfd40258ee2474c23a5",
-      "source_chars": 1541,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元3",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元3/_校对报告.md",
-      "report_sha256": "3d9be01635835d4a1bcd27061d1d213df4add9a20fa198bf4204ea7619871762",
-      "report_len_chars": 7387,
-      "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元3/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元3/_校对报告.md"
-      ],
-      "has_image": true,
-      "image_count": 5,
-      "has_formula": true,
-      "formula_marker_count": 0,
       "marker_count": 5,
       "empty_orig_count": 0,
       "noop_count": 0,
       "old_severity": "轻微问题",
       "old_raw_severity": "轻微问题",
       "old_audit_verdicts": {
-        "ok": 5
+        "unknown": 5
       },
       "selection_reasons": [
-        "含图片（5 张）",
-        "有标记",
-        "长单元（1541 字符）"
+        "含公式标记（5）",
+        "标记审计 unknown"
       ]
     },
     {
-      "index": 21,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元29",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元29/单元29.md",
-      "source_sha256": "5f1ba205471aacdde3cde13c2fb8adad80500e8cd09593e6c9f8f8e07cea84c8",
-      "source_chars": 1240,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元29",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元29/_校对报告.md",
-      "report_sha256": "d3e8a8f115cd352df0d36e8f055162efdcc3f8cfb14ff8720a52ac7d6e00c30d",
-      "report_len_chars": 3390,
+      "index": 12,
+      "doc": "高一上期中卷",
+      "unit": "第12题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题/第12题.md",
+      "source_sha256": "1e28d91ddf3d4f5ccc9ec95ec7a5a99ac995319cbe3555b0314ff86ceb5ad47e",
+      "source_chars": 826,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题/_校对报告.md",
+      "report_sha256": "5615860839a546f659cc1678451158d68960153ec01d80e83e46b747bedfdd1a",
+      "report_len_chars": 3119,
       "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元29/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元29/_校对报告.md"
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第12题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第12题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 2,
+      "has_formula": true,
+      "formula_marker_count": 9,
+      "marker_count": 11,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "ok": 11
+      },
+      "selection_reasons": [
+        "含图片题（2 张）",
+        "含公式标记（9）"
+      ]
+    },
+    {
+      "index": 13,
+      "doc": "高一上期中卷",
+      "unit": "第13题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第13题/第13题.md",
+      "source_sha256": "01faf42dccea20a2d93808058cc2cc0eefcd477c1976584bf9d4c03cc04ddf19",
+      "source_chars": 947,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第13题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第13题/_校对报告.md",
+      "report_sha256": "f7b6d3255c4798e342f59e80e3242dfe70080d62a0aba85db32831b689a05d72",
+      "report_len_chars": 8350,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第13题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第13题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 1,
+      "marker_count": 1,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "unknown": 1
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（1）",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 14,
+      "doc": "高一上期中卷",
+      "unit": "第15题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第15题/第15题.md",
+      "source_sha256": "705732b305a8a557418ce39e925dc66c4776e2669ec40c500c792b643be4ee38",
+      "source_chars": 1110,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第15题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第15题/_校对报告.md",
+      "report_sha256": "118a06ba25ddd32a375aa9e4f359ebaa22288f83984cde84ff36f30d5467ee10",
+      "report_len_chars": 4037,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第15题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第15题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 2,
+      "marker_count": 4,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "一般问题",
+      "old_raw_severity": "一般问题",
+      "old_audit_verdicts": {
+        "unknown": 3,
+        "ok": 1
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（2）",
+        "长单元（源文 1110 ≥ P90）",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 15,
+      "doc": "高一上期中卷",
+      "unit": "第18题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第18题/第18题.md",
+      "source_sha256": "2eee394a7ac0585f1e136a8f7ac0787db127ab5947d2c616366bddd5e5408c38",
+      "source_chars": 1368,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第18题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第18题/_校对报告.md",
+      "report_sha256": "9395e18715b40386c0d801bd36acfd2c0963066fa560a3164d5317cb6b8d03c7",
+      "report_len_chars": 9920,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第18题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第18题/_校对报告.md"
       ],
       "has_image": false,
       "image_count": 0,
@@ -834,27 +634,95 @@
       "old_raw_severity": "无问题",
       "old_audit_verdicts": {},
       "selection_reasons": [
+        "长单元（源文 1368 ≥ P90）",
         "无问题单元",
-        "长单元（1240 字符）",
         "无标记"
       ]
     },
     {
-      "index": 22,
-      "doc": "第 1 讲初识原电池",
-      "unit": "单元9",
-      "subject": "化学",
-      "source_mode": "讲义",
-      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元9/单元9.md",
-      "source_sha256": "e28e6e1e11bba178de2a5a219d177e48cec232da1f03e277113bcb4e466c7a5c",
-      "source_chars": 1248,
-      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元9",
-      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元9/_校对报告.md",
-      "report_sha256": "834f2a62e5844a860f897ad8b9a289a835e2dd7106d486f538a0e6b78d329c4d",
-      "report_len_chars": 4386,
+      "index": 16,
+      "doc": "高一上期中卷",
+      "unit": "第1题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题/第1题.md",
+      "source_sha256": "ff9d5b9fadc6de13e736912317ecc90babfda04dd0d18d0f91758ec67807c16e",
+      "source_chars": 288,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题/_校对报告.md",
+      "report_sha256": "30761c34d3c6cb242344e1c991e05d91fb8a2272ac862ea5ecdb3db9f5265a03",
+      "report_len_chars": 1499,
       "report_mirrors": [
-        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/第 1 讲初识原电池/单元9/_校对报告.md",
-        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/第 1 讲初识原电池/单元9/_校对报告.md"
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第1题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第1题/_校对报告.md"
+      ],
+      "has_image": false,
+      "image_count": 0,
+      "has_formula": false,
+      "formula_marker_count": 0,
+      "marker_count": 0,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "无问题",
+      "old_raw_severity": "无问题",
+      "old_audit_verdicts": {},
+      "selection_reasons": [
+        "无问题单元",
+        "无标记"
+      ]
+    },
+    {
+      "index": 17,
+      "doc": "高一上期中卷",
+      "unit": "第2题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题/第2题.md",
+      "source_sha256": "827a1e5fbd7460ffb43fe277c03106e841af85a2bdffacc716cd50f33a21882a",
+      "source_chars": 580,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题/_校对报告.md",
+      "report_sha256": "54b6943249759651dae6ac1437e3fe85c3f79a71b1d88b823b3b23ca6df1886c",
+      "report_len_chars": 2924,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高一上期中卷/第2题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高一上期中卷/第2题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 2,
+      "marker_count": 4,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "严重错误",
+      "old_raw_severity": "严重错误",
+      "old_audit_verdicts": {
+        "unknown": 4
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（2）",
+        "旧报告严重错误",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 18,
+      "doc": "高三年级-秋季-期末考试卷",
+      "unit": "第13题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题/第13题.md",
+      "source_sha256": "45ea01e5ca5349edbbf780bb508ebafc1d9d94cb416ead91a8b608d9f6fd5e44",
+      "source_chars": 1268,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题/_校对报告.md",
+      "report_sha256": "c37c246bdad73c3db6bb85602147a1ef8e0b4794d642d2f01017a72d9a4d0f9c",
+      "report_len_chars": 7690,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第13题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第13题/_校对报告.md"
       ],
       "has_image": true,
       "image_count": 1,
@@ -863,13 +731,152 @@
       "marker_count": 0,
       "empty_orig_count": 0,
       "noop_count": 0,
-      "old_severity": "<unparseable>",
-      "old_raw_severity": "未声明",
+      "old_severity": "无问题",
+      "old_raw_severity": "无问题",
       "old_audit_verdicts": {},
       "selection_reasons": [
-        "旧报告严重度未声明（parse 返回 None）",
-        "含图片",
+        "含图片题（1 张）",
+        "长单元（源文 1268 ≥ P90）",
+        "无问题单元",
         "无标记"
+      ]
+    },
+    {
+      "index": 19,
+      "doc": "高三年级-秋季-期末考试卷",
+      "unit": "第14题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第14题/第14题.md",
+      "source_sha256": "5e4e0976052197a9a68f97338aa93b869980cbe9ef48e42a7885a98a4a695a84",
+      "source_chars": 1074,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第14题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第14题/_校对报告.md",
+      "report_sha256": "022a76769d2edef07b107948d958d59d3872b20205eb766778bd66b8e4c23c37",
+      "report_len_chars": 7067,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第14题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第14题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 0,
+      "marker_count": 0,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "无问题",
+      "old_raw_severity": "无问题",
+      "old_audit_verdicts": {},
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "无问题单元",
+        "无标记"
+      ]
+    },
+    {
+      "index": 20,
+      "doc": "高三年级-秋季-期末考试卷",
+      "unit": "第15题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第15题/第15题.md",
+      "source_sha256": "2effeb4f25ef0606b98cf80e25f8d1c9770809ecef39a7bc70daebdb80902204",
+      "source_chars": 1333,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第15题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第15题/_校对报告.md",
+      "report_sha256": "b6e5d85a68ac6db2ad7771ca3a3bc1ab5f8b634fbd9bcb9352f00df8251403f8",
+      "report_len_chars": 2323,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第15题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第15题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 4,
+      "has_formula": true,
+      "formula_marker_count": 2,
+      "marker_count": 9,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "ok": 9
+      },
+      "selection_reasons": [
+        "含图片题（4 张）",
+        "含公式标记（2）",
+        "长单元（源文 1333 ≥ P90）"
+      ]
+    },
+    {
+      "index": 21,
+      "doc": "高三年级-秋季-期末考试卷",
+      "unit": "第17题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题/第17题.md",
+      "source_sha256": "8d132050a8a0bbbd3e1bf7c57631dbebd80dfc659a4b5ecffda5b7a9ab89a795",
+      "source_chars": 692,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题/_校对报告.md",
+      "report_sha256": "13772c1310f770210748d6a5e0fd8dd5e7367ed01584a8f8b0083f5927f9d57d",
+      "report_len_chars": 7419,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第17题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第17题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 1,
+      "has_formula": true,
+      "formula_marker_count": 4,
+      "marker_count": 4,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "一般问题",
+      "old_raw_severity": "一般问题",
+      "old_audit_verdicts": {
+        "unknown": 3,
+        "ok": 1
+      },
+      "selection_reasons": [
+        "含图片题（1 张）",
+        "含公式标记（4）",
+        "标记审计 unknown"
+      ]
+    },
+    {
+      "index": 22,
+      "doc": "高三年级-秋季-期末考试卷",
+      "unit": "第18题",
+      "subject": "物理",
+      "source_mode": "试卷",
+      "source_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题/第18题.md",
+      "source_sha256": "5ef732432be3581b457b3f9cc9d1842db6070a122012ce05d88e0b9f455483ca",
+      "source_chars": 1090,
+      "unit_dir": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题",
+      "report_path": "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题/_校对报告.md",
+      "report_sha256": "8a04e8f0102f6afb4b8f81493d9e5dea741e0eac10369423086b53d90874db92",
+      "report_len_chars": 9076,
+      "report_mirrors": [
+        "/Users/chouchou/开发/JiaoDuiAgent/output/中间产物/高三年级-秋季-期末考试卷/第18题/_校对报告.md",
+        "/Users/chouchou/开发/JiaoDuiAgent/output/拆题结果/高三年级-秋季-期末考试卷/第18题/_校对报告.md"
+      ],
+      "has_image": true,
+      "image_count": 2,
+      "has_formula": true,
+      "formula_marker_count": 7,
+      "marker_count": 7,
+      "empty_orig_count": 0,
+      "noop_count": 0,
+      "old_severity": "轻微问题",
+      "old_raw_severity": "轻微问题",
+      "old_audit_verdicts": {
+        "ok": 7
+      },
+      "selection_reasons": [
+        "含图片题（2 张）",
+        "含公式标记（7）"
       ]
     }
   ]
