@@ -80,8 +80,9 @@ def _creation_flags() -> dict:
 def find_pandoc() -> str | None:
     """定位 pandoc 可执行文件。
 
-    优先环境变量 JIAODUI_PANDOC（可为命令名或绝对路径），否则用
-    shutil.which("pandoc")。已去掉旧仓的 PyInstaller 打包分支。
+    优先环境变量 JIAODUI_PANDOC（可为命令名或绝对路径），其次 PATH，最后
+    常见安装位置（GUI/agent 宿主进程的 PATH 常常不含 /usr/local/bin）。
+    已去掉旧仓的 PyInstaller 打包分支。
     """
     override = os.environ.get("JIAODUI_PANDOC")
     if override:
@@ -92,7 +93,13 @@ def find_pandoc() -> str | None:
             return override
         log(f"❌ JIAODUI_PANDOC 指向的 pandoc 不存在: {override}")
         return None
-    return shutil.which("pandoc")
+    found = shutil.which("pandoc")
+    if found:
+        return found
+    for cand in ("/usr/local/bin/pandoc", "/opt/homebrew/bin/pandoc", "/usr/bin/pandoc"):
+        if os.path.isfile(cand):
+            return cand
+    return None
 
 
 def check_pandoc() -> bool:

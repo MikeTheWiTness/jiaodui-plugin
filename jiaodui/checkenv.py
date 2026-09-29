@@ -45,17 +45,19 @@ class EnvReport:
 
 
 def _find_pandoc() -> str | None:
-    """定位 pandoc：环境变量覆盖 → PATH → 常见安装位置。"""
-    env = os.environ.get("JIAODUI_PANDOC")
-    if env:
-        return env if Path(env).is_file() else None
-    found = shutil.which("pandoc")
-    if found:
-        return found
-    for cand in ("/usr/local/bin/pandoc", "/opt/homebrew/bin/pandoc", "/usr/bin/pandoc"):
-        if Path(cand).is_file():
-            return cand
-    return None
+    """定位 pandoc（单一源：与 convert.find_pandoc 同一实现）。"""
+    try:
+        from .convert import find_pandoc
+
+        return find_pandoc()
+    except Exception:  # pragma: no cover - 仅当 convert 不可用时兜底
+        found = shutil.which("pandoc")
+        if found:
+            return found
+        for cand in ("/usr/local/bin/pandoc", "/opt/homebrew/bin/pandoc", "/usr/bin/pandoc"):
+            if Path(cand).is_file():
+                return cand
+        return None
 
 
 def _has_module(name: str) -> bool:

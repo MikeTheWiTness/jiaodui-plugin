@@ -236,7 +236,7 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
             result.warnings.append(f"复核读取 document.xml 失败: {e}")
 
     sections = _split_unit_sections(doc_xml)
-    actual, kept_ids, audit_warnings = _audit_generated_docx(out_path, included, sections)
+    actual, comment_ids, audit_warnings = _audit_generated_docx(out_path, included, sections)
     result.warnings.extend(audit_warnings)
 
     for qid, _ in questions:
@@ -262,8 +262,18 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
     result.missing_count = (result.marker_count - result.anchor_count
                             - result.formula_fallback_count)
 
-    if kept_ids and not (result.marker_count or result.heading_comment_count):
-        result.warnings.append(f"docx 含 {len(kept_ids)} 条批注锚点，但报告未解析出任何标记")
+    # 全局硬门槛交叉复核：正文三段锚点数量、comments.xml 批注数必须相等，
+    # 且等于「marker 锚点 + 无问题标题批注」。
+    expected_ids = result.anchor_count + result.heading_comment_count
+    n_start = len(re.findall(r'<w:commentRangeStart w:id="\d+"', doc_xml))
+    n_end = len(re.findall(r'<w:commentRangeEnd w:id="\d+"', doc_xml))
+    n_ref = len(re.findall(r'<w:commentReference w:id="\d+"', doc_xml))
+    if out_path and not (n_start == n_end == n_ref == len(comment_ids) == expected_ids):
+        result.warnings.append(
+            f"锚点三段/批注数不一致：start={n_start} end={n_end} ref={n_ref} "
+            f"comments={len(comment_ids)} 期望={expected_ids}")
+    if comment_ids and not (result.marker_count or result.heading_comment_count):
+        result.warnings.append(f"docx 含 {len(comment_ids)} 条批注锚点，但报告未解析出任何标记")
     log(f"🔎 Word 报告复核：标记 {result.marker_count} = 锚点 {result.anchor_count} + "
         f"公式兜底 {result.formula_fallback_count}，缺失 {result.missing_count}，"
         f"无问题标题批注 {result.heading_comment_count}")
