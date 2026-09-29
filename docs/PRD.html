@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JiaoDuiAgentSkill PRD · agent 驱动的校对流程重构</title>
+<style>
+  :root{
+    --bg:#fbfaf7; --fg:#1f1d1a; --muted:#6b6660; --line:#e3ded6; --card:#fff;
+    --accent:#b4542c; --accent-soft:#fdf3ee; --ok:#2f6f4f; --warn:#8a5a00; --bad:#a3312b;
+    --mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.75 -apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 28px 120px}
+  header.top{padding:56px 0 28px;border-bottom:2px solid var(--line);margin-bottom:8px}
+  header.top h1{margin:0 0 10px;font-size:30px;letter-spacing:-.3px}
+  header.top .sub{color:var(--muted);font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+  .meta span{background:var(--card);border:1px solid var(--line);border-radius:999px;
+    padding:3px 12px;font-size:12.5px;color:var(--muted)}
+  .meta span b{color:var(--fg);font-weight:600}
+  h2{margin:52px 0 14px;font-size:23px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{margin:30px 0 10px;font-size:18px}
+  h4{margin:22px 0 8px;font-size:15.5px;color:#3a352f}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0 10px 22px;padding:0}
+  li{margin:5px 0}
+  code{font-family:var(--mono);font-size:13px;background:#f2eee8;border-radius:4px;padding:1px 5px}
+  a{color:var(--accent)}
+  nav.toc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:26px 0 0}
+  nav.toc h3{margin:0 0 10px;font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  nav.toc ol{columns:2;column-gap:34px;margin:0 0 0 20px}
+  nav.toc a{text-decoration:none;color:var(--fg)}
+  nav.toc a:hover{color:var(--accent)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:16px 0}
+  .principle{background:var(--accent-soft);border:1px solid #f0d9cd;border-left:4px solid var(--accent)}
+  .note{background:#f6f4ef;border:1px solid var(--line);border-left:4px solid #b9b1a5}
+  .danger{background:#fdf1f0;border:1px solid #f0d3d1;border-left:4px solid var(--bad)}
+  .okbox{background:#f1f8f3;border:1px solid #cfe6d8;border-left:4px solid var(--ok)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;background:var(--card);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:14px}
+  th,td{border-bottom:1px solid var(--line);padding:9px 12px;vertical-align:top;text-align:left}
+  th{background:#f4f1ec;font-weight:600;font-size:13.5px;color:#413b34}
+  tr:last-child td{border-bottom:none}
+  td.num{white-space:nowrap;font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600}
+  td.k{white-space:nowrap;font-weight:600}
+  .tag{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
+    background:#f6f4ef;color:var(--muted);margin-left:6px}
+  .tag.v1{background:#eef6f1;border-color:#cfe6d8;color:var(--ok)}
+  .tag.later{background:#f7f5f1;color:var(--muted)}
+  .tag.frozen{background:#fdf1f0;border-color:#f0d3d1;color:var(--bad)}
+  figure.diagram{margin:22px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  figure.diagram figcaption{font-size:13.5px;color:var(--muted);margin-bottom:12px}
+  figure.diagram figcaption b{color:var(--fg)}
+  .mermaid{overflow-x:auto;text-align:center;margin:6px 0 10px}
+  figure.diagram details{border-top:1px dashed var(--line);padding-top:10px;margin-top:6px}
+  figure.diagram summary{cursor:pointer;font-size:12.5px;color:var(--muted)}
+  pre.src{font-family:var(--mono);font-size:12px;line-height:1.6;background:#f7f5f1;border:1px solid var(--line);
+    border-radius:8px;padding:12px;overflow-x:auto;white-space:pre;color:#3b3630;margin:10px 0 0}
+  #mermaid-status{font-size:12.5px;color:var(--muted);margin:14px 0 0}
+  .kbd{font-family:var(--mono);font-size:12.5px;background:#f2eee8;border:1px solid var(--line);
+    border-bottom-width:2px;border-radius:5px;padding:1px 6px}
+  hr{border:none;border-top:1px solid var(--line);margin:34px 0}
+  @media print{
+    body{background:#fff}
+    nav.toc{break-inside:avoid}
+    figure.diagram{break-inside:avoid}
+    details{display:none}
+    h2{break-after:avoid}
+  }
+</style>
+<script type="module">
+  const status = document.getElementById('mermaid-status');
+  const CDN = [
+    'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs',
+    'https://unpkg.com/mermaid@11/dist/mermaid.esm.min.mjs'
+  ];
+  async function loadMermaid(){
+    let last = null;
+    for (const url of CDN){
+      try{
+        const mod = await import(url);
+        if (mod && mod.default && typeof mod.default.run === 'function') return mod.default;
+      }catch(e){ last = e; }
+    }
+    throw last || new Error('两个 CDN 都没取到 mermaid');
+  }
+  const figs = [...document.querySelectorAll('figure.diagram')];
+  figs.forEach(fig=>{
+    const pre = fig.querySelector('pre.src'); const det = fig.querySelector('details');
+    if(!pre) return;
+    const div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = pre.textContent;
+    fig.insertBefore(div, det);
+  });
+  try{
+    const mermaid = await loadMermaid();
+    mermaid.initialize({ startOnLoad:false, theme:'neutral', securityLevel:'loose',
+      flowchart:{ htmlLabels:true, curve:'basis' }, themeVariables:{ fontSize:'14px' } });
+    let ok = 0; const bad = [];
+    for (const div of document.querySelectorAll('div.mermaid')){
+      try{ await mermaid.run({ nodes:[div] }); ok++; }
+      catch(e){
+        bad.push(String((e && e.message) || e).split('\n')[0]);
+        div.classList.add('failed');
+        div.textContent = '⚠️ 本图渲染失败，请读下方源码：' + String((e && e.message) || e).split('\n')[0];
+      }
+    }
+    if (ok === figs.length){
+      figs.forEach(f=>{ const d = f.querySelector('details'); if(d) d.open = false; });
+      status.textContent = '✅ ' + ok + ' 张图已由 Mermaid 渲染（脚本取自 CDN）。折叠块内是同一份 Mermaid 源码，供离线阅读与 agent 解析。';
+    } else {
+      status.textContent = '⚠️ ' + ok + '/' + figs.length + ' 张图渲染成功，失败 ' + bad.length +
+        ' 张（源码已在下方完整给出，内容与渲染图等价）。首条错误：' + bad[0];
+    }
+  }catch(e){
+    status.textContent = '⚠️ 未能加载 Mermaid（可能离线）：' + String((e && e.message) || e) +
+      '。全部 ' + figs.length + ' 张图已在各节中以源码形式完整给出，内容与渲染图等价；连网后刷新即可看到渲染图。';
+  }
+</script>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>JiaoDuiAgentSkill · 产品需求文档（PRD）</h1>
+  <div class="sub">把 K-12 校对流程从「自研 agent 循环 + GUI」重构为「agent 驱动 + 可分发 skill + 确定性工具核心」</div>
+  <div class="meta">
+    <span>状态 <b>草案 · 待执行</b></span>
+    <span>基座 <b>新仓 JiaoDuiAgentSkill</b></span>
+    <span>旧仓 <b>JiaoDuiAgent 完全冻结</b></span>
+    <span>决策 <b>30 条</b></span>
+    <span>图表 <b>11 张 Mermaid</b></span>
+    <span>第一切片 <b>高中物理</b></span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h3>目录</h3>
+  <ol>
+    <li><a href="#s0">这份文档怎么用</a></li>
+    <li><a href="#s1">目标与最高原则</a></li>
+    <li><a href="#s2">背景与实测基线</a></li>
+    <li><a href="#s3">架构总览</a></li>
+    <li><a href="#s4">决策清单（30 条）</a></li>
+    <li><a href="#s5">契约：产物 / 校验 / 状态 / 命令</a></li>
+    <li><a href="#s6">流程：调度 / 校对 / 失败 / 收尾</a></li>
+    <li><a href="#s7">学科差异的载体</a></li>
+    <li><a href="#s8">质量评估方案</a></li>
+    <li><a href="#s9">测试策略</a></li>
+    <li><a href="#s10">路线图：skill → MCP → 插件 → 推广</a></li>
+    <li><a href="#s11">待验证前提</a></li>
+    <li><a href="#s12">风险</a></li>
+    <li><a href="#s13">明确不做的事</a></li>
+    <li><a href="#sa">附录 A：数据来源与测量方法</a></li>
+    <li><a href="#sb">附录 B：术语表</a></li>
+  </ol>
+</nav>
+<p id="mermaid-status">图表渲染中……</p>
+
+<h2 id="s0">0. 这份文档怎么用</h2>
+
+<div class="card note">
+  <p><b>给未来的执行者（尤其是新开窗口的 agent）：</b></p>
+  <ul>
+    <li><b>先读图，再读决策表。</b>本文档的 11 张图是 Mermaid 源码，既可渲染也可纯文本阅读；文字段落是对图的注解，不是唯一信息载体。</li>
+    <li><b>决策有编号（D1–D30）。</b>每条决策都写了「理由」与「被否方案」。执行时若想改某条决策，请先看它的被否方案为什么被否 —— 多数看似更省事的做法已经试过或算过账。</li>
+    <li><b>「待验证前提」（PV1–PV5）不是结论。</b>它们是把决策建立在假设上的地方，执行到对应环节时必须实测复核；若前提被推翻，对应决策要翻转（文档里标了翻转哪条）。</li>
+    <li><b>契约章（§5）是硬约束</b>：产物格式、状态定义、命令接口。流程章（§6）可以按实测调整，契约章不行 —— 因为下游的 docx 生成、整卷报告、旧产物兼容都挂在它上面。</li>
+    <li><b>数字来自旧仓真实语料</b>（<code>output/</code> 的报告与对话记录）；严重度统计已有口径冲突，须按附录 A 复核后才能用于验收。</li>
+  </ul>
+</div>
+
+<h2 id="s1">1. 目标与最高原则</h2>
+
+<div class="card principle">
+  <p><b>最高原则 Q1：校对质量最高优先。</b>任何与质量冲突的成本、速度、简洁性取舍，一律让位。不设 token 上限，不为省钱少验算、少读规范。</p>
+</div>
+
+<h3>1.1 要达成的目标</h3>
+<ol>
+  <li><b>判断交给 agent，确定性交给 Python。</b>删除自研 agent 循环（<code>core/api_client.py</code> 约 1900 行），五个 LLM 环节（智能拆分 / 语文古籍前置检索 / 主校对 / 批注评审 / 格式修正）全部由宿主 agent 完成。</li>
+  <li><b>跨 agent 可分发。</b>同一个 skill 应能在 DSH、codex、kimi code 等不同 agent 里跑；Python 侧零凭证（不持有任何 API key）。</li>
+  <li><b>单元之间零污染。</b>一个校对单元 = 一个独立子 agent 上下文；不再让 20 轮混杂历史影响判断。</li>
+  <li><b>沿用产物文件名，收紧新报告契约。</b><code>_校对报告.md</code>、<code>_校对数据.json</code> 等旧产物仍可读取和转换；新产生的报告须通过更严格的完整性校验才能进入交付。</li>
+</ol>
+
+<h3>1.2 为什么值得做（不是为省钱）</h3>
+<p>实测输出侧只占全部 token 的 <b>11.4%</b>，消耗全在输入的重复发送上；而 prompt 缓存已把输入成本吃掉 <b>81.5%</b>。所以这次重构买的是：</p>
+<ul>
+  <li><b>可维护性</b>：056/057/058 三个 issue 全是在补自研循环的窟窿（压缩是全丢、截断不可见、工具返回不投影）。不重构，这个补丁节奏不会停。</li>
+  <li><b>可分发性</b>：现在只有 GUI 一个入口，别人要用只能复制整个仓库 + 配 key。</li>
+  <li><b>判断质量</b>：长循环里模型的注意力被噪声稀释 —— 单元 6 的「幽灵标记」就是在 20 轮混杂上下文里产生的。</li>
+</ul>
+
+<h2 id="s2">2. 背景与实测基线</h2>
+
+<h3>2.1 现状的三个结构性问题</h3>
+<table>
+  <thead><tr><th style="width:22%">问题</th><th>具体表现</th></tr></thead>
+  <tbody>
+    <tr><td class="k">自研 agent 循环</td><td>工具循环、历史压缩、断点续传、重试熔断、stop_reason、token 统计全在自家代码里重写一遍。压缩是「全丢」而非摘要，触发条件与 token 用量脱钩；<code>finish_reason=length</code> 长期无语义（057 才补）。</td></tr>
+    <tr><td class="k">输入侧无预算、无埋点</td><td>全库搜不到任何「上下文窗口」概念；单次请求的真实 prompt token 从未记录；超窗口只能等 provider 报 400 后靠一句提示文案。</td></tr>
+    <tr><td class="k">编排写死在提示词里</td><td>校对顺序、何时调哪个工具、何时收尾都由模型即兴决定，程序无法干预 —— 这既是幽灵标记的土壤，也让「阶段性收敛工具集」这类优化做不了。</td></tr>
+  </tbody>
+</table>
+
+<h3>2.2 实测基线（真实语料）</h3>
+<table>
+  <thead><tr><th style="width:34%">指标</th><th>数值</th><th style="width:26%">口径</th></tr></thead>
+  <tbody>
+    <tr><td>工具返回里 <code>code</code> 回显占比</td><td><b>71.0%</b>（2,709,155 / 3,816,976 字符）</td><td>403 份对话记录、2,813 次工具返回</td></tr>
+    <tr><td>累计 prompt 构成</td><td>固定前缀 <b>51.0%</b>、工具返回 <b>28.0%</b>（其中 code 21.9%）、assistant 历史 21.0%</td><td>330 单元、Σprompt 35,336,714 token，α=1.73 字符/token 反解</td></tr>
+    <tr><td>输出侧占比</td><td><b>11.4%</b>（Σcompletion 4.65M / Σprompt 36.1M）</td><td>362 份报告</td></tr>
+    <tr><td>单单元累计 prompt</td><td>中位 70,862 / P90 225,233 / 最大 445,209</td><td>344 份去重报告</td></tr>
+    <tr><td>单单元累计 completion</td><td>中位 9,472 / P90 24,560 / 最大 99,742</td><td>同上</td></tr>
+    <tr><td>每轮固定前缀</td><td><b>14,538 字符</b> = 系统提示词 5,177 + 用户文本 1,065 + 工具 schema 8,296（物理 11 个工具）</td><td>实测序列化</td></tr>
+    <tr><td>工具循环轮数</td><td>平均 6.6 轮、最长 23 轮；332 单元中 319 个是多轮</td><td>对话记录</td></tr>
+    <tr><td>prompt 缓存命中率</td><td><b>81.5%</b>（命中 4,816,896 / 未命中 1,094,978）</td><td>118 份带缓存字段的报告</td></tr>
+    <tr><td>旧产物基线</td><td>有标记 248/364（<b>68%</b>）；严重度合规的旧统计为 194/248（<b>待复核</b>）；含空原文 9 份（3.6%）；含空操作 8 份（3.2%）</td><td>364 份旧报告</td></tr>
+    <tr><td>严重度取值分布</td><td><b>待复核</b>：原统计记为轻微问题 143 / 无问题 78 / 一般问题 19 / 裸「无」1；合计 241，与上行 194/248 的口径不一致</td><td>复算脚本与去重清单入仓前不作为验收基线</td></tr>
+    <tr><td>标记审计判定分布</td><td>ok 233 / unknown 82 / noop 1（86 份可定位源文）</td><td><code>unknown</code> 不能当失败，见 §5.2</td></tr>
+    <tr><td>整卷报告体量</td><td>中位 17,130 字符（≈9,902 token）；最大 207,170 字符（≈119,751 token，50 单元）</td><td>10 份整卷报告</td></tr>
+    <tr><td>现状并发度</td><td>GUI 默认并行 <b>10</b>（ThreadPoolExecutor）</td><td><code>ui/default_app.py</code></td></tr>
+  </tbody>
+</table>
+
+<h3>2.3 宿主环境基线（决定「子 agent 门槛」的数字）</h3>
+<table>
+  <thead><tr><th style="width:34%">项</th><th>值</th><th style="width:26%">来源</th></tr></thead>
+  <tbody>
+    <tr><td>主 agent 模型</td><td>deepseek-v4.1-flash，<b>contextWindow 1,000,000</b>，maxTokens 384,000，输入支持 text + image</td><td>profile 的 <code>cordis.patch.yml</code></td></tr>
+    <tr><td>子 agent 预算</td><td><b>100,000</b> token（本项目自行约定）</td><td>本 PRD</td></tr>
+    <tr><td>DSH 子代理池上限</td><td><code>maxActiveSubagents</code> 默认 <b>8</b>；<code>maxDepth</code> 默认 <b>1</b></td><td><code>dsh-subagent</code> 文档</td></tr>
+    <tr><td>最重单元末轮上下文</td><td>≈6 万 token 量级（估算）；若按 058 式工具返回投影可降到 ≈4 万</td><td>第 17 题逐轮还原</td></tr>
+  </tbody>
+</table>
+<p class="card danger"><b>由此推出的一条硬门槛：</b>子 agent 的模型必须支持读图。现状把每张图以 base64 送入模型，而「图片内容」是通用检查的强制项（错词错字、标点格式、学科符号、<b>图片内容</b>、合规性）。若子 agent 无视觉能力，这一类检查会<b>静默消失</b>，必须拒绝执行而不是降级（见 D14）。</p>
+
+<h2 id="s3">3. 架构总览</h2>
+
+<figure class="diagram" id="fig1">
+  <figcaption><b>图 1</b> · 三层架构：核心逻辑只有一份，上面挂三个壳，DSH 另加一层薄适配</figcaption>
+  <details open><summary>Mermaid 源码（离线可读；渲染成功后自动折叠）</summary><pre class="src">graph LR
+  CORE["核心逻辑（Python，唯一一份）<br/>sympy 沙箱 · 标记审计 · 格式校验 · 进度扫描 · docx 生成 · 古籍检索"]
+  CORE --> CLI["壳 1：CLI<br/>jiaodui 命令族"]
+  CORE --> MCP["壳 2：MCP server<br/>stdio"]
+  CORE --> SKILL["壳 3：skill 文档<br/>SKILL.md + references"]
+  DSH["DSH agent"] --> PLG["DSH 插件包（薄适配）"]
+  PLG --> MCP
+  PLG --> SKILL
+  PLG --> NATIVE["原生工具注册<br/>ctx.tools.register"]
+  NATIVE --> CORE
+  OTHER["codex / kimi code / 其他支持 MCP 或 skill 的 agent"] --> MCP
+  OTHER --> SKILL
+  HUMAN["人（手工排查 / 退路）"] --> CLI
+  CLI --> CORE</pre></details>
+</figure>
+
+<p>三层的分工与纪律：</p>
+<ul>
+  <li><b>核心逻辑只有一份</b>，三个壳都不含逻辑（只做参数解析、格式化输出、协议转换）。这是「不重写」的保证：换壳不改核心。</li>
+  <li><b>CLI 是退路</b>：任何 agent 只要有 bash 就能干活；插件坏了、MCP 挂了，命令行仍然可用。</li>
+  <li><b>MCP 是通用件</b>：DSH 挂上后工具自动注册为原生类型化工具，codex / kimi / claude 也都认这个协议。</li>
+  <li><b>DSH 插件包是薄适配</b>：注册原生工具、挂载 skill 目录、定义一个 <code>jiaodui</code> agent preset，可选加客户端面板。</li>
+</ul>
+
+<figure class="diagram" id="fig2">
+  <figcaption><b>图 2</b> · 子 agent 拓扑：一层扁平，主 agent 统调，禁止嵌套</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">graph TB
+  MAIN["主 agent（1M 上下文）<br/>纯调度 · 只读一行摘要"]
+  MAIN -->|"滑动窗口补位（并发 ≤ 宿主上限）"| U1["单元校对子 agent（100k）"]
+  MAIN --> U2["单元校对子 agent"]
+  MAIN --> U3["单元校对子 agent"]
+  MAIN -.->|"仅当拆分预检失败且用户同意"| SP["拆分子 agent<br/>产出边界清单"]
+  MAIN -.->|"仅当交付不合格 / 摘要异常"| AU["审计子 agent<br/>独立复核指定单元"]
+  U1 --> R1["输入：源文 md + images 的路径"]
+  U1 --> R2["验算：jiaodui calc ..."]
+  U1 --> R3["交付：写 _校对报告.md 后跑 verify-report"]
+  R3 --> SUM["回一行摘要：单元号 / 问题数 / 校验结果 / 产物路径 / 失败原因"]
+  SUM --> MAIN
+  BAN["禁止：子 agent 不得再派子 agent（不依赖两级嵌套）<br/>独立解题已冻结（D12）"]
+  U1 -.-> BAN</pre></details>
+</figure>
+
+<p>拓扑的三条纪律：</p>
+<ol>
+  <li><b>禁止嵌套。</b>只依赖「支持子 agent」这一个门槛，不依赖「支持嵌套子 agent」；同时让「独立解题」之类需要干净上下文的角色永远由主 agent 发起，可审计。</li>
+  <li><b>子 agent 只拿路径，不拿内容。</b>主 agent 不把源文读进自己上下文（否则就违反「纯调度」）。</li>
+  <li><b>子 agent 不决定自己做完没有。</b>是否完成由确定性的 <code>verify-report</code> 判定（见 §5.2）。</li>
+</ol>
+
+<h2 id="s4">4. 决策清单（30 条）</h2>
+<p>每条决策都写「理由」与「被否方案」。<b>被否方案是这份文档里最值钱的部分</b> —— 它记录了哪些看似更省事的路已经试过或算过账，执行时想改决策前请先读它。</p>
+
+<h3>4.1 形态与边界（D1–D6）</h3>
+<table>
+  <thead><tr><th style="width:6%">编号</th><th style="width:30%">决策</th><th style="width:33%">理由</th><th>被否方案</th></tr></thead>
+  <tbody>
+    <tr><td class="num">D1</td><td>交付形态 = <b>agent 驱动</b>，产出一个通用 skill，目标在 DSH / codex / kimi code 等不同 agent 里都能跑</td><td>判断必须由 agent 做才能跨 agent；Python 只留确定性计算</td><td>把编排包成一个 CLI 命令（8 月那版）—— 失败原因就是「只是包了一层命令，agent 没真干活」</td></tr>
+    <tr><td class="num">D2</td><td>基座 = <b>新仓重写</b>；<code>JiaoDuiSkill</code>（8 月版）归档为失败样本</td><td>8 月版缺失 054–058 全部质量修复（<code>audit_markers</code>、<code>MARKER_AUDIT_WINDOW</code>、<code>LENGTH</code>、<code>shrink_tool_result</code> 一个都没有），且方向被判为「形态不对」</td><td>以 <code>JiaoDuiSkill</code> 为基座、把 054–058 反向移植过去</td></tr>
+    <tr><td class="num">D3</td><td>旧仓 <code>JiaoDuiAgent</code> <b>完全冻结</b>，定位为只读参考；任何旧 GUI 问题都不在旧仓修</td><td>复制代码必然分叉。上一版整份复制后 7 周，一边有 054–058、一边一个都没有。只要「冻结」不彻底就会长出第二个真源</td><td>有限维护只修致命 bug（会重新分叉）；新项目反哺旧仓（两套编排长期双轨）</td></tr>
+    <tr><td class="num">D4</td><td><b>五个</b> LLM 环节全交 agent：智能拆分 / 语文古籍前置检索 / 主校对 / 批注评审 / 格式修正</td><td>只要留一个环节由 Python 调模型，<code>api_client</code> 就得留着，自研循环、提示词双源、补丁节奏都还在</td><td>只交主校对，其余保留 Python 调模型</td></tr>
+    <tr><td class="num">D5</td><td><b>强制子 agent</b>：一个校对单元 = 一个干净上下文；不支持子 agent 的 agent 就不支持</td><td>单元间零污染是本次质量收益的核心；把手段写死换取一致性</td><td>把「单元 = 上下文边界」只当约束、由宿主自选手段（可分发范围更大，但一致性依赖宿主）</td></tr>
+    <tr><td class="num">D6</td><td><b>一层扁平</b>：主 agent 统调单元校对 / 审计 / 拆分升级三类；<b>禁止嵌套</b></td><td>只依赖「支持子 agent」一个门槛，不依赖「支持嵌套」；需要干净上下文的角色（独立解题类）永远由主 agent 发起，输入可审计</td><td>允许嵌套（单元子 agent 自己开解题子 agent）—— 依赖两级嵌套，且独立解题的输入不可审计</td></tr>
+  </tbody>
+</table>
+
+<h3>4.2 职责与调度（D7–D12）</h3>
+<table>
+  <thead><tr><th style="width:6%">编号</th><th style="width:30%">决策</th><th style="width:33%">理由</th><th>被否方案</th></tr></thead>
+  <tbody>
+    <tr><td class="num">D7</td><td>主 agent <b>纯调度</b>，每个单元只读一行摘要（单元号 / 问题数 / 校验结果 / 产物路径 / 失败原因）</td><td>主上下文恒定，批量规模只受并发与时间限制，不受上下文限制</td><td>主 agent 读各单元报告做汇总（主上下文随单元数线性增长，344 份规模必爆）</td></tr>
+    <tr><td class="num">D8</td><td>整卷报告由 Python <b>确定性拼接</b>；主 agent 在全部结束后<b>通读全文</b></td><td>现状整卷报告本来就是机械拼装（<code>ui/default_app.py</code> 里按 <code>## 第N题</code> 串联，无 LLM）；主 agent 1M 上下文读 50 单元大讲义（≈12 万 token）只占 12%</td><td>大讲义只读「交叉信号」不读全文（在 1M 口径下没有必要）；主 agent 用摘要拼整卷（丢失整体把关）</td></tr>
+    <tr><td class="num">D9</td><td>容量口径：主 agent <b>1M</b>，子 agent <b>100k</b></td><td>与宿主配置一致（profile 里 deepseek-v4.1-flash contextWindow 1,000,000）；100k 对单单元校对「紧但够」：实测最重单元末轮 ≈6 万 token，工具返回投影后 ≈4 万</td><td>给子 agent 也放开到 1M（失去单元级预算约束的意义）</td></tr>
+    <tr><td class="num">D10</td><td>派发 = <b>滑动窗口补位</b>，并发取宿主上限（DSH 8，可调到 10 与现状对齐）</td><td>墙钟 ∝ N/并发；单元目录彼此隔离、写入无竞争；主 agent 同时在飞的返回值 ≤ 并发数</td><td>一次性全派（池会排队，主 agent 看不到进度，返回值可能成批涌回）；严格串行（白丢 8 倍墙钟，质量不升）</td></tr>
+    <tr><td class="num">D11</td><td>失败<b>分级</b>：verify 不过 → 自修 ≤3 轮；仍不过 → 标失败、留产物与原因、<b>不阻塞批次</b>；技术性崩溃/超时/限流 → 自动重派 1 次</td><td>52 个单元里坏 2 个不该让另外 50 个白跑；失败必须留痕可见（057 的教训：截断/失败不能静默）</td><td>失败即停下询问（一个坏单元拖住整批）；无限重试直到通过（烧钱且掩盖真实质量问题）</td></tr>
+    <tr><td class="num">D12</td><td><b>独立解题冻结</b>，不进 v1；按一次校对的准确性再决定是否启用</td><td>模型智力比半年前显著提升；先用真实质量数据判断是否还需要这个杠杆</td><td>所有带答案/详解的题都做一次独立解题并比对（成本约 ×2.5，收益未验证）；维持「难题才做」（自己判定跳过 = 给自己开后门，最不可靠）</td></tr>
+  </tbody>
+</table>
+
+<h3>4.3 工具与契约（D13–D21）</h3>
+<table>
+  <thead><tr><th style="width:6%">编号</th><th style="width:30%">决策</th><th style="width:33%">理由</th><th>被否方案</th></tr></thead>
+  <tbody>
+    <tr><td class="num">D13</td><td>工具面只留两族：<code>calc</code>（符号计算 11 个合并，保留符号白名单与浮点容差修正）+ <code>classics</code>（古籍检索 + 确定性 diff）；通用工具（read / write / grep / web / plan / 文本导航）全交 agent 自带</td><td>通用工具与 agent 自带能力重复；而符号白名单修的是一类<b>真实误判</b>（<code>I</code> 被当虚数单位、<code>S</code> 被当 sympy 注册器、<code>alpha/beta</code> 被当常数），古籍检索是文言文校对的权威性来源</td><td>通用工具也保留为命令（重复且每步多一次往返）；连古籍检索也交给 agent 自带联网（文言文参考权威性下降）</td></tr>
+    <tr><td class="num">D14</td><td><b>视觉能力是硬前提</b>：主 agent 在任何校对派发前验证子 agent 能读取本地图片；无法确认时拒绝本次执行</td><td>「图片内容」是通用检查的强制项；Python 的 <code>check-env</code> 只能检查本地依赖，不能证明宿主子 agent 的视觉能力</td><td>给路径但允许无视觉时降级（跳过图片检查并在产物里标注）—— 少一类强制检查</td></tr>
+    <tr><td class="num">D15</td><td>产物<b>文件名沿用</b> + <b>新报告交付即校验</b>：子 agent 写完 <code>_校对报告.md</code> 后调 <code>verify-report</code>，不通过不算完成；格式修正并入交付回环</td><td>保留旧产物的读取能力与下游路径约定；新报告补上源文完整性等检查，不能把历史格式缺陷当作新契约。写文件的行为在各宿主仍需实测</td><td>子 agent 返回结构化标记数组由主 agent 落盘（依赖返回值可靠性、历史产物不再可比）；纯事后校验（错误发现晚，要回头重派子 agent）</td></tr>
+    <tr><td class="num">D16</td><td>状态<b>归磁盘产物</b>，提供 <code>status</code> 命令；<b>完成 = 报告存在且按新契约校验通过</b>，失败记录不能覆盖已修复的完成状态</td><td>会话不是状态载体：会话丢了也能从磁盘恢复全量进度；现状「文件存在即跳过」会把半成品当成完成</td><td>状态归主 agent 会话（多一份状态源，会话中断要重扫）；保留轮级续传快照（新架构里子 agent 的会话由宿主管，快照没地方挂）</td></tr>
+    <tr><td class="num">D17</td><td>子 agent 输入包 = <b>路径</b>（源文 md / images / 学科 references）+ 交付要求 + 禁止项（不改源文、不自由命名产物、不嵌套派子 agent）</td><td>内容内联会要求主 agent 先把每个单元的原文读进自己上下文，直接违反 D7</td><td>把源文与图片内联进 prompt</td></tr>
+    <tr><td class="num">D18</td><td>审计触发 = <b>交付不符合要求时</b>（verify 不过 / 摘要异常）；由审计子 agent 独立复核<b>指定单元</b>，产出裁定（可修 / 需人工 / 建议弃用）</td><td>审计的价值在抽查与矛盾发现；全文复读的成本与收益不成比例；格式与标记真实性问题已由 <code>verify-report</code> 兜住，审计应专注判断类漏检</td><td>每单元必审（成本翻倍且与闸门职责重复）；不设审计角色（失败单元无人复核）</td></tr>
+    <tr><td class="num">D19</td><td><b>Python 侧零凭证</b>：新项目不含 <code>.env</code>、不含 key 管理、不含 <code>env_config</code></td><td>判断全在 agent 侧后，Python 只做确定性计算，没有任何理由持有 key；零凭证消除了分发时最容易配错也最容易泄密的环节</td><td>保留 <code>.env</code> 与凭证管理（多一套配置与文档负担）；只从环境变量读（多一条隐式输入路径）</td></tr>
+    <tr><td class="num">D20</td><td>三个壳的顺序：<b>CLI → MCP → DSH 插件</b></td><td>核心尚未验证前不引入新依赖（Python MCP SDK）；而 CLI 天然是 MCP 与插件的退路 —— 插件坏了、MCP 挂了，bash 一条命令还能干活</td><td>MCP 先行（协议调试会拖后「拿到关键数字」这件事）；插件先行（绑定 DSH，跨 agent 与核心逻辑的验证都推到后面）</td></tr>
+    <tr><td class="num">D21</td><td>命令 = <code>jiaodui</code> + 命令族子命令：<code>calc</code> / <code>classics</code> 带子命令，其余动作扁平；共 14 个命令，v1 必需 11 个，含规则拆分 <code>split</code></td><td><code>calc</code> / <code>classics</code> 内部共享沙箱与 schema；显式 <code>split</code> 是从转换结果进入单元目录的必经步骤</td><td>全部扁平（<code>calc-evaluate</code> 等十几个顶层命令，名字空间持续膨胀）；单入口 + 动作参数（可读性差、参数更易写错）</td></tr>
+  </tbody>
+</table>
+
+<h3>4.4 skill 与学科（D22–D25）</h3>
+<table>
+  <thead><tr><th style="width:6%">编号</th><th style="width:30%">决策</th><th style="width:33%">理由</th><th>被否方案</th></tr></thead>
+  <tbody>
+    <tr><td class="num">D22</td><td><b>一个总入口 skill + references 渐进披露</b>：<code>SKILL.md</code> 只放总流程与硬约束；学科清单、差异矩阵、产物约定、失败模式进 <code>references/</code>。随包 <code>SKILL.md</code> 必须 <b>&lt; 8192 字符</b></td><td>避免同一套流程被复制 7 份；8192 是 DSH 标准 preset 的工具结果修剪阈值，超了会被裁剪</td><td>每学科一个 skill（7 份重复源，改流程要动七处 —— 上一版 8 个 skill 的结构性问题之一）；按阶段拆 skill（阶段间约定在多个 skill 里重复）</td></tr>
+    <tr><td class="num">D23</td><td>学科差异载体：<code>references/subjects/&lt;学科&gt;.md</code>（人读规范）+ <code>references/subject-matrix.md</code>（索引）+ <code>config/subjects/&lt;学科&gt;.json</code>（机器读：工具集 / 拆分参数 / 扩展名）；共性写一次在总 <code>SKILL.md</code></td><td><code>agent_prompt.json</code> 本质是人读长文（4–15KB/学科），而工具集、输入格式、拆分参数是机器读配置；混成一张表会导致「改一个工具名要动一段长文」</td><td>全部进一张大矩阵（字段异质，表格别扭）；每学科一个自包含目录（学科间的共性会重复多份）</td></tr>
+    <tr><td class="num">D24</td><td>拆分：<b>默认规则拆分</b> + 主 agent 抽查（<code>precheck-split</code> 出确定性预检）+ 失败才询问用户是否升级<b>智能拆分</b>（派拆分子 agent 产出边界清单，Python 按清单切片）</td><td>智能拆分不常用，默认规则在多数场景够用；抽查依据是确定性摘要（单元数、各单元首行与字符数分布、空与超长单元）</td><td>默认就上智能拆分（每次多一个子 agent 的成本）；主 agent 自己读原文定边界（主上下文被原文占用）</td></tr>
+    <tr><td class="num">D25</td><td>v1 只做<b>试卷 + 讲义</b>主链路；批注评审与自由校对后置</td><td>批注评审是另一条独立产物链路（自己的提示词与输出格式 <code>## 批注评审结果</code>），且没有基线对照；主链路有 344 份真实产物可对照</td><td>v1 做全四种输入模式（把第一条竖切摊薄）；只做试卷（白白浪费讲义对照数据）</td></tr>
+  </tbody>
+</table>
+
+<h3>4.5 工程与验收（D26–D30）</h3>
+<table>
+  <thead><tr><th style="width:6%">编号</th><th style="width:30%">决策</th><th style="width:33%">理由</th><th>被否方案</th></tr></thead>
+  <tbody>
+    <tr><td class="num">D26</td><td><b>复制一次</b>旧仓确定性模块，砍掉与 <code>api_client</code> 的耦合，旧仓测试一并移植作行为契约</td><td>这批模块是踩坑换来的行为资产（054 的 LaTeX 标记掩码、056 的标记审计、浮点容差、批注锚点注入），且已有测试锁定</td><td>新仓依赖旧仓库 / submodule（上一版已证伪：专门提交了「cli.py 去 JiaoDuiAgent 依赖」与「业务代码迁入工区，抛弃运行时依赖」）；全部重写（丢掉行为修正）</td></tr>
+    <tr><td class="num">D27</td><td>第一切片 = <b>骨架 + 高中物理端到端</b>（拆题 → 单元校对子 agent → 交付校验 → 整卷报告 → docx 批注版），再逐科加 references 行</td><td>物理真实产物最多（344 份报告、43 份带标记的审计样本）可当回归下限对照；流程问题要在只有一份提示词时暴露才改得动</td><td>一次搭全 7 学科（骨架未验证前搬 7 份提示词，流程一改动七处）；只搭 CLI 不搭 skill（把最不确定的「agent 能否按规范产出」留到最后才验证）</td></tr>
+    <tr><td class="num">D28</td><td>验收 = 旧流程作<b>下限对照</b> + 四条硬门槛：① 端到端跑通且<b>每条错误标记都有可见修改建议、零静默丢失</b>；② <code>verify-report</code> 首次通过率 <b>≥90%</b>；③ <b>不合格报告不进入汇总或最终交付</b>；④ 模型用量可观测（价格不可得时明确记缺失）</td><td>旧产物不是金标准；旧 Word 实现会跳过公式内批注，并为无问题单元额外加批注，故不能用原始锚点数直接等同标记数</td><td>只定功能性判据（「不劣化」无法判定，重构风险不可控）；拿旧产物当金标准定标记 F1 ≥ 0.9（方向错误）</td></tr>
+    <tr><td class="num">D29</td><td>质量评估 = <b>同一批 22 单元跑两遍</b> + 四个指标（首次通过率两遍对比 / 锚点数 / 22 单元<b>全量</b>人工抽检 / 与旧产物逐单元对照「旧有新版无」）</td><td>跑两遍看的是<b>稳定性</b>：两遍差异大（95% vs 60%）比单遍低通过率更危险，说明遵守率不可靠、references 要回炉；漏检集中在特定题型，抽 5 个没有意义</td><td>只跑一遍 + 抽检 5 个（拿不到稳定性信号）；重跑旧流程做 A/B（旧产物已在桌面，纯浪费）</td></tr>
+    <tr><td class="num">D30</td><td>测试策略 = 确定性 CLI <b>红→绿</b>（移植旧测试）+ <b>真实语料双向契约测试</b> + 编排状态机模拟测试 + 宿主真实冒烟测试；校对判断质量按 §8 人评</td><td>单向测试挡不住「把闸门写到 100% 拒绝」；编排的派发与恢复可模拟，宿主读图与落盘须实测，而判断准确性不能靠模拟替代</td><td>只做 CLI 单测 + 构造样本（覆盖不到 LaTeX 装饰差异那类真实陷阱）；拿旧产物当金标准做端到端回归</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s5">5. 契约：产物 / 校验 / 状态 / 命令</h2>
+<p class="card danger"><b>本章是硬约束。</b>§6 的流程可以按实测调整，本章不行 —— docx 生成、整卷报告、旧产物兼容、以及「完成」的判定全挂在它上面。</p>
+
+<h3>5.1 产物契约</h3>
+<table>
+  <thead><tr><th style="width:26%">路径 / 文件</th><th>内容与约束</th><th style="width:14%">由谁产生</th></tr></thead>
+  <tbody>
+    <tr><td class="k">单元目录</td><td>输入：<code>第N题.md</code>（试卷）或 <code>单元N.md</code>（讲义）+ <code>images/</code></td><td>convert / 切片命令</td></tr>
+    <tr><td class="k"><code>_校对报告.md</code></td><td>头部严重度总结行（合法值：<code>无问题</code> / <code>轻微问题</code> / <code>一般问题</code> / <code>严重错误</code>，与旧解析器一致）+ <code>### 标记原文</code>（完整抄写题目原文，错误处用 <code>【编号|原文|改为】</code>）+ <code>### 修改原因</code>（<code>编号. 原因</code>，编号与标记一一对应）；无问题时两节仍须存在，修改原因写「无」</td><td>单元校对子 agent</td></tr>
+    <tr><td class="k"><code>_校对数据.json</code></td><td><code>corrections</code> / <code>summary</code> / <code>marked_text</code>；<code>tool_calls</code> 有可记录的工具调用时填写，无调用时允许缺省以兼容旧结构</td><td><code>parse-report</code>（确定性）</td></tr>
+    <tr><td class="k"><code>_校对失败.md</code> <span class="tag">新增</span></td><td>失败原因 + 最后一次 <code>verify-report</code> 的完整输出 + 最后一次产物摘要。<b>未通过的报告保留为排查材料</b>，但不进入下游；修复后该记录仅作历史，不再决定当前状态</td><td>单元校对子 agent 或主 agent</td></tr>
+    <tr><td class="k"><code>校对Word/*.docx</code></td><td>Word 批注版；每条错误标记必须有对应的 Word 批注锚点，或在公式内以可见高亮与修改意见呈现。输出逐项计数：错误标记、锚点、公式兜底、缺失；<b>缺失数必须为 0</b>。无问题单元的标题批注单独计数</td><td><code>build-docx</code>（确定性）</td></tr>
+    <tr><td class="k"><code>校对报告/*.md</code></td><td>整卷报告 = 按单元顺序串联通过校验的报告；失败单元用明确占位与原因列出，不得拼入未校验正文；无 LLM 参与</td><td><code>build-report</code>（确定性）</td></tr>
+  </tbody>
+</table>
+<p><b>命名纪律</b>：只允许上表中的约定名；禁止自由命名的副本 / attempt 文件（沿用旧仓 AGENTS.md 的命名约束）。多轮中间结果写在同一文件内分节，不分散成多文件。</p>
+
+<figure class="diagram" id="fig5">
+  <figcaption><b>图 3</b> · 数据流与命令：每个箭头上是一个 <code>jiaodui</code> 命令，判断只在框内</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">flowchart LR
+  DOCX["原始 docx / idml / md"] -->|convert| RAW["_raw.md"]
+  RAW -->|"split（默认规则）"| UNITS["单元目录<br/>源文 md + images"]
+  RAW -.->|"slice --boundaries（用户同意后）"| UNITS
+  UNITS -->|"子 agent 校对（判断）"| REP["_校对报告.md"]
+  REP -->|verify-report| GATE{"校验通过?"}
+  GATE -- 是 --> PARSE["_校对数据.json<br/>（parse-report）"]
+  GATE -- 是 --> BR["整卷报告<br/>（build-report）"]
+  GATE -- 是 --> BD["docx 批注版<br/>（build-docx）"]
+  GATE -- 否 --> SELF["自修 ≤3 轮"]
+  SELF --> GATE
+  SELF --> FAIL["_校对失败.md"]
+  FAIL --> AUD["审计子 agent 复核"]
+  AUD --> DEC["裁定：可修 / 需人工 / 建议弃用"]
+  GATE -- 是 --> ST["status：已完成"]
+  FAIL --> ST2["status：失败"]
+  PARSE --> ST
+  CORE["calc / classics<br/>（校验与验算工具）"] -.->|"子 agent 随时调用"| UNITS</pre></details>
+</figure>
+
+<h3>5.2 交付即校验（格式修正在此塌缩）</h3>
+<p><code>verify-report</code> 是模型产出与下游产物之间唯一的闸门。它检查：</p>
+<table>
+  <thead><tr><th style="width:30%">检查项</th><th>判定</th></tr></thead>
+  <tbody>
+    <tr><td class="k">标记语法</td><td>必须匹配 <code>【编号|原文|改为】</code>；字段缺失、括号不配对 → 拒绝。公式等源文自身跨行时允许跨行字段，解析与 Word 生成须共用同一标记语法</td></tr>
+    <tr><td class="k">修改原因对应</td><td>编号必须与 <code>### 标记原文</code> 中的标记一一对应（多、少、错位 → 拒绝）</td></tr>
+    <tr><td class="k">严重度总结行</td><td>必须是四个合法值之一：无问题 / 轻微问题 / 一般问题 / 严重错误；缺失或写成裸「无」等 → 拒绝；「无问题」不得同时含错误标记</td></tr>
+    <tr><td class="k">原文完整性</td><td>去掉报告中的标记语法、还原各标记原文字段后，与单元源文逐段比对；缺段、重段、改变未标记正文 → 拒绝。只允许预先列明的换行、空白与转换器装饰差异；仅落在 LaTeX 标记字段里的无法判定差异保留 <code>unknown</code> 警告。不能靠每条标记的局部定位代替全文比对</td></tr>
+    <tr><td class="k">空原文字段</td><td>拒绝（旧产物里实测 9 份 / 3.6%）</td></tr>
+    <tr><td class="k">空操作（原文 == 改为）</td><td>拒绝（旧产物里实测 8 份 / 3.2%）</td></tr>
+    <tr><td class="k">原文字段能否在源文定位</td><td><code>unknown</code> <b>不算失败，只记录</b>；理由是实测 86 份可定位产物里有 82 条 <code>unknown</code>，若当失败则历史产物 100% 不合格 —— LaTeX 装饰差异会让合法标记也定位不到</td></tr>
+    <tr><td class="k">改为与原文字段无法区分</td><td>标记为「需人工确认」，不拒绝（文本上无法与合法标记区分，宁可多保留一条批注也不静默丢真实发现）</td></tr>
+  </tbody>
+</table>
+<p class="card note"><b>新旧契约边界：</b>新产生的报告必须通过上述严格校验才能视为完成。历史报告仍可读取和转换，但不得仅凭文件存在或旧解析成功冒充新流程的“已完成”；旧样本用于兼容测试时应单独标注其已知格式缺陷。<code>verify-report</code> 对未知定位给出警告，对可确定的源文缺漏给出失败，两者不能混为一类。</p>
+
+<figure class="diagram" id="fig3">
+  <figcaption><b>图 4</b> · 交付即校验回环：格式修正不再是独立阶段，而是这个环</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">stateDiagram-v2
+  [*] --> Drafting
+  Drafting: 校对中（读源文 / 验算）
+  Writing: 写出 _校对报告.md
+  Checking: verify-report 校验
+  Fixing: 自修（含格式修正）
+  Done: 已完成（回一行摘要）
+  Failed: 失败（写 _校对失败.md）
+
+  Drafting --> Writing
+  Writing --> Checking
+  Checking --> Done: 通过
+  Checking --> Fixing: 不通过（带结构化原因与位置）
+  Fixing --> Checking: 修改后重试
+  Fixing --> Failed: 超过 3 轮
+  Done --> [*]
+  Failed --> [*]</pre></details>
+</figure>
+
+<h3>5.3 状态与断点</h3>
+<p>状态<b>只由磁盘产物推导</b>，不依赖任何会话内存。主 agent 通过 <code>status</code> 读取，会话丢失后重新扫一遍即可恢复全量进度。</p>
+
+<figure class="diagram" id="fig4">
+  <figcaption><b>图 5</b> · 单元生命周期状态机（<code>status</code> 的判定依据）</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">stateDiagram-v2
+  [*] --> NotStarted
+  NotStarted: 未开始（源文在，无产物）
+  DeliveredUnverified: 已交付未过校验（产物在，verify 不过）
+  Completed: 已完成（产物在且 verify 通过）
+  Failed: 失败（校验未通过且有 _校对失败.md）
+
+  NotStarted --> DeliveredUnverified: 子 agent 写出报告但未过校验
+  NotStarted --> Completed: 产物在且新契约校验通过
+  DeliveredUnverified --> Completed: 自修后通过
+  DeliveredUnverified --> Failed: 自修 3 轮仍不过
+  Failed --> DeliveredUnverified: 重派/人工修好后重新校验
+  Completed --> [*]
+  Failed --> [*]</pre></details>
+</figure>
+<p><b>状态优先级：</b>先校验现有报告；通过则为“已完成”，即使保留旧的 <code>_校对失败.md</code> 也不回退。未通过且有失败记录才为“失败”；未通过且无失败记录为“已交付未过校验”。<code>build-report</code>、<code>parse-report</code>、<code>build-docx</code> 必须复核当前状态，拒绝消费未通过的报告。</p>
+
+<h3>5.4 命令清单</h3>
+<table>
+  <thead><tr><th style="width:30%">命令</th><th>作用</th><th style="width:12%">v1</th></tr></thead>
+  <tbody>
+    <tr><td class="k"><code>jiaodui check-env</code></td><td>环境预检：Python 版本、依赖、pandoc；<b>无凭证项</b>（D19）。列出宿主侧必须另行验证的子 agent 与本地读图能力，但不声称 CLI 能证明这些能力</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui convert &lt;file&gt;</code></td><td>docx / idml / md → <code>_raw.md</code>（pandoc 链 + 后处理）</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui split &lt;raw_md&gt; --subject &lt;学科&gt; --mode exam|lecture</code></td><td>按学科配置执行默认规则拆分，产出单元目录与源文、图片；返回单元清单与拆分告警。与 <code>slice --boundaries</code> 共用写盘逻辑，禁止覆盖已有校对报告</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui precheck-split &lt;dir&gt;</code></td><td>拆分预检：单元数、各单元首行与字符数分布、空单元、超长单元 → 供主 agent 抽查</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui slice --boundaries &lt;f&gt;</code></td><td>按边界清单确定性切片（智能拆分用）</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui status &lt;paper_dir&gt;</code></td><td>扫描单元状态：未开始 / 已交付未过校验 / 已完成 / 失败（含失败原因）</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui verify-report --unit &lt;dir&gt;</code></td><td><b>交付即校验</b>：§5.2 全部检查项，失败返回结构化原因与位置</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui parse-report --unit &lt;dir&gt;</code></td><td>报告 → <code>_校对数据.json</code></td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui calc &lt;op&gt;</code></td><td>符号计算沙箱：<code>evaluate</code> / <code>solve</code> / <code>formula</code> / <code>dimension</code> / <code>vector</code> / <code>circle</code> / <code>equality</code>；保留符号白名单与容差；<b>只输出结果，不回显生成代码</b></td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui build-docx &lt;paper_dir&gt;</code></td><td>Word 批注版（openxml 批注锚点 + pandoc）；完成后从 docx 内实际批注和锚点复核计数，公式兜底单列，缺失时失败且不交付</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui build-report &lt;paper_dir&gt;</code></td><td>整卷报告拼接；仅拼入通过校验的正文，对失败单元写明显占位与原因</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui classics &lt;op&gt;</code></td><td>古籍权威原文检索 + 确定性 diff（Playwright / 识典古籍为可选依赖，缺失时回退通用检索）</td><td><span class="tag later">后置</span></td></tr>
+    <tr><td class="k"><code>jiaodui new-subject &lt;name&gt;</code></td><td>从模板建学科：<code>references/subjects/&lt;名&gt;.md</code> + <code>config/subjects/&lt;名&gt;.json</code></td><td><span class="tag later">后置</span></td></tr>
+    <tr><td class="k"><code>jiaodui subjects</code></td><td>学科矩阵查询（列出各学科的工具集 / 输入格式 / 拆分规则）</td><td><span class="tag later">后置</span></td></tr>
+  </tbody>
+</table>
+<p class="card note"><b>为什么 <code>verify-report</code> / <code>parse-report</code> / <code>build-report</code> 不合并成一个命令：</b>闸门要快、要能拒绝；产物生成要幂等可重复。混在一起会让闸门变慢，也会让「拒绝」与「生成」两种语义纠缠（失败时到底生成没生成？）。</p>
+
+
+
+<h2 id="s6">6. 流程</h2>
+<p>本章描述「一次完整校对实际怎么跑」。所有判断环节都在 agent 侧，所有验证与产物生成都在 CLI 侧。</p>
+
+<h3>6.1 单元校对（单元子 agent 视角）</h3>
+<figure class="diagram" id="fig6">
+  <figcaption><b>图 6</b> · 单个校对单元的执行流程：子 agent 只拿路径，不拿内容</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">flowchart TD
+  START["收到派发：单元目录路径 + 学科 references 路径 + 交付要求 + 禁止项"] --> CHECKENV{"环境预检通过?"}
+  CHECKENV -- 否 --> RET0["回报失败：环境不满足（不产出产物）"]
+  CHECKENV -- 是 --> READ["读源文 md + images/ 内图片"]
+  READ --> REF["读 references/subjects/学科.md 与产物约定"]
+  REF --> BRANCH{"该单元是否语文古籍?"}
+  BRANCH -- 是 --> CLASSICS["classics 检索权威原文（可选步骤）"]
+  BRANCH -- 否 --> C1
+  CLASSICS --> C1["内容正确性：题干 / 答案 / 详解是否自洽"]
+  C1 --> C2["错别字、错词、标点"]
+  C2 --> C3["图片内容（必须读图；读不到图即环境不合格）"]
+  C3 --> C4["公式与计算：需要时调 calc 验算"]
+  C4 --> C5["格式一致性（题干编号 / 选项 / 单位）"]
+  C5 --> WRITE["写 _校对报告.md"]
+  WRITE --> VERIFY{"verify-report 通过?"}
+  VERIFY -- 否 --> FIX["自修（格式修正也在这里，不再有独立阶段）"]
+  FIX --> VERIFY
+  VERIFY -- "自修超过 3 轮" --> FAILDOC["写 _校对失败.md（保留产物，不删）"]
+  VERIFY -- 是 --> SUM["回报一行摘要"]
+  FAILDOC --> SUM
+  RET0 --> SUM
+  SUM --> END["结束（子 agent 上下文丢弃）"]</pre></details>
+</figure>
+<p class="card note"><b>关键点：</b>子 agent 的输入包里<b>没有源文内容</b>，只有路径。这保证主 agent 不需要先把原文读进自己的上下文（D7 / D17）。同时子 agent 被明确禁止：改源文、自由命名产物、嵌套派子 agent。</p>
+
+<h3>6.2 批量调度（主 agent 视角）</h3>
+<figure class="diagram" id="fig7">
+  <figcaption><b>图 7</b> · 批量调度时序：主 agent 全程只收一行摘要，滑动窗口补位</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">sequenceDiagram
+  participant U as 用户
+  participant M as 主 agent（1M 上下文）
+  participant A as 单元子 agent A（100k）
+  participant B as 单元子 agent B（100k）
+  participant P as jiaodui CLI（确定性）
+  participant AU as 审计子 agent
+
+  U->>M: 给出源文件或已拆分目录 + 学科
+  M->>P: check-env
+  P-->>M: 本地依赖 OK（无凭证项）
+  M->>M: 实测宿主子 agent 可读本地图片
+  opt 输入为源文件
+    M->>P: convert → split（规则）
+    P-->>M: 单元目录清单
+  end
+  M->>P: status
+  P-->>M: N 行状态（未开始 / 未过校验 / 已完成 / 失败）
+  M->>P: precheck-split
+  P-->>M: 单元数 / 首行 / 字符数分布 / 空与超长单元
+  M->>M: 抽查拆分结果，异常才考虑拆分升级
+  loop 滑动窗口补位（并发取宿主上限，DSH 为 8，可调 10）
+    M->>A: 派发单元（路径 + 交付要求 + 禁止项）
+    M->>B: 派发单元
+    A->>P: verify-report
+    P-->>A: 通过 / 结构化原因与位置
+    A-->>M: 一行摘要（单元号 / 问题数 / 校验结果 / 产物路径）
+    M->>B: 空位立即补派下一个单元
+  end
+  M->>P: build-report
+  P-->>M: 整卷报告（按 ## 第N题 串联）
+  M->>P: build-docx
+  P-->>M: docx 批注版（每条错误标记均有可见建议）
+  M->>M: 通读整卷报告全文（整体把关）
+  M->>AU: 审计失败 / 异常单元
+  AU-->>M: 裁定：可修 / 需人工 / 建议弃用
+  M-->>U: 总摘要 + 失败清单（不自动改源文）</pre></details>
+</figure>
+<p class="card danger"><b>读图是前置硬门槛。</b><code>check-env</code> 只能提示，不能代替主 agent 验证宿主能力。主 agent 须在任何校对派发前用实际本地图片验证子 agent 可读取；验证失败就拒绝本次执行，不能静默跳过图片检查（D14）。</p>
+
+<h3>6.3 失败路径</h3>
+<figure class="diagram" id="fig8">
+  <figcaption><b>图 8</b> · 失败分级处理：一个坏单元不阻塞整批，但必须留痕</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">flowchart TD
+  FAIL["单元失败"] --> KIND{"失败类型?"}
+  KIND -- "产物不合规（verify 不过）" --> SELF["子 agent 自修（≤3 轮）"]
+  SELF --> SELFOK{"通过?"}
+  SELFOK -- 是 --> DONE["完成"]
+  SELFOK -- 否 --> MARK["写 _校对失败.md<br/>标记失败，不阻塞批次"]
+  KIND -- "技术性崩溃 / 超时 / 限流" --> RETRY{"已重派过?"}
+  RETRY -- 否 --> REPEAT["自动重派 1 次"]
+  REPEAT --> OK2{"成功?"}
+  OK2 -- 是 --> DONE
+  OK2 -- 否 --> MARK
+  RETRY -- 是 --> MARK
+  MARK --> BATCHEND["批次结束"]
+  BATCHEND --> AUDIT["审计子 agent 独立复核该单元"]
+  AUDIT --> VERDICT["裁定：可修 / 需人工 / 建议弃用"]
+  VERDICT --> HUMAN["交人裁定（agent 不自动改源文）"]</pre></details>
+</figure>
+<table>
+  <thead><tr><th style="width:24%">情形</th><th style="width:22%">处理</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr><td class="k">verify 不通过</td><td>自修 ≤3 轮</td><td>多数失败是格式与编号问题，子 agent 手上有结构化原因与位置，自修成本远低于重派</td></tr>
+    <tr><td class="k">自修 3 轮仍不过</td><td>标失败 + 留产物 + <b>不阻塞批次</b></td><td>52 个单元里坏 2 个不该让另外 50 个白跑</td></tr>
+    <tr><td class="k">技术性崩溃 / 超时 / 限流</td><td>自动重派 1 次（仅一次）</td><td>这类失败与产物质量无关，重派一次便宜且有效；不设无限重试以免掩盖真实问题</td></tr>
+    <tr><td class="k">失败单元的处理</td><td>批次结束后交审计子 agent 复核 → 人裁定</td><td>失败清单必须可见；且「自修到通过」不能变成「用改产物去迎合闸门」（057 的教训）</td></tr>
+  </tbody>
+</table>
+
+<h3>6.4 收尾</h3>
+<figure class="diagram" id="fig9">
+  <figcaption><b>图 9</b> · 收尾流程：整卷报告由 Python 拼、主 agent 通读；docx 中错误标记没有静默丢失才交付</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">flowchart LR
+  ALL["全部单元结束（含失败）"] --> ST["status 复核：完成数 / 失败数"]
+  ST --> REPORT["build-report：整卷报告"]
+  REPORT --> READ["主 agent 通读全文"]
+  READ --> CROSS{"发现跨单元矛盾或系统性问题?"}
+  CROSS -- "个别单元漏检" --> REDO["重派该单元"]
+  CROSS -- "系统性问题（规则不适用于该题型）" --> STOP["停手，回报规则问题给用户"]
+  CROSS -- 否 --> DOCX["build-docx：批注版"]
+  REDO --> REPORT
+  DOCX --> ANCHOR{"错误标记均有锚点或公式可见兜底?<br/>实际 docx 无缺失?"}
+  ANCHOR -- 否 --> BUG["当确定性代码 bug 处理，不交付 docx"]
+  ANCHOR -- 是 --> DELIVER["交付：整卷报告 + docx + 失败清单"]</pre></details>
+</figure>
+<p class="card okbox"><b>验收硬门槛之一就在这一步：</b>错误标记数 = 错误标记批注锚点数 + 公式可见兜底数，且缺失数为 0；无问题单元的标题批注单列。必须检查生成后的 docx，而非只看生成前计划注入的数量；不满足时不交付 docx。</p>
+
+<h2 id="s7">7. 学科差异的载体</h2>
+<p>学科之间真正不同的只有三样：<b>检查重点</b>（人读）、<b>工具集与输入格式</b>（机器读）、<b>拆分参数</b>（机器读）。共性流程只写一次，放在总 <code>SKILL.md</code>。</p>
+<figure class="diagram" id="fig10">
+  <figcaption><b>图 10</b> · 仓库结构：人读规范、机器读配置、确定性代码三层分离</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">flowchart TD
+  ROOT["JiaoDuiAgentSkill/"] --> SK["skills/jiaodui/SKILL.md<br/>总流程 + 硬约束 + 禁止项（8192 字符以内）"]
+  ROOT --> REF["skills/jiaodui/references/"]
+  ROOT --> CFG["config/"]
+  ROOT --> SRC["jiaodui/  Python 包"]
+  ROOT --> TST["tests/"]
+
+  REF --> R1["subjects/高中物理.md<br/>人读：检查重点与常见错误"]
+  REF --> R2["subject-matrix.md<br/>索引：学科 → 工具集 / 输入格式 / 拆分规则"]
+  REF --> R3["report-contract.md<br/>产物格式与校验项"]
+  REF --> R4["failure-modes.md<br/>失败模式与自修指引"]
+
+  CFG --> C1["subjects/高中物理.json<br/>机器读：工具集 / 扩展名 / 拆分参数"]
+
+  SRC --> S1["cli.py 命令入口（14 个命令）"]
+  SRC --> S2["确定性模块：解析 / 校验 / 切片 / 批注注入 / 报告拼接"]
+  SRC --> S3["calc 符号计算沙箱（白名单 + 容差）"]
+  SRC --> S4["classics 古籍检索（后置）"]
+
+  TST --> T1["旧仓移植的行为契约测试"]
+  TST --> T2["真实语料双向契约测试"]</pre></details>
+</figure>
+<table>
+  <thead><tr><th style="width:26%">载体</th><th style="width:22%">读者</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td class="k"><code>SKILL.md</code></td><td>agent（每次必读）</td><td>总流程、调度规则、硬约束、禁止项、产物约定入口。<b>必须很短</b>，学科细节一律不放这里</td></tr>
+    <tr><td class="k"><code>references/subjects/学科.md</code></td><td>agent（按需读）</td><td>该学科的检查重点、常见错误类型、验算习惯、易错题型。人读长文（承接旧仓 <code>agent_prompt.json</code> 的 4–15KB 学科说明）</td></tr>
+    <tr><td class="k"><code>references/subject-matrix.md</code></td><td>人 + agent</td><td>7 学科一览：输入格式、工具集、拆分规则、特殊钩子（如高中语文的文言文前置检索）</td></tr>
+    <tr><td class="k"><code>config/subjects/学科.json</code></td><td>Python（确定性）</td><td>工具集白名单、支持扩展名、拆分参数。<b>改工具名不需要动长文</b></td></tr>
+  </tbody>
+</table>
+<p class="card note"><b>为什么不用「每学科一个 skill」：</b>上一版就有 8 个 skill，改一次流程要动七处，最终各学科提示词漂移成了七八个近似而不同的版本。学科差异必须收敛成<b>表里的行</b>，而不是<b>目录树里的分叉</b>。</p>
+
+<h2 id="s8">8. 质量评估方案</h2>
+<p>在 M2 开始前冻结一份 22 单元样本清单：逐项记录源文件路径与哈希、学科/来源模式、是否含图片与公式、旧报告路径，以及选入理由。覆盖有标记/无标记、公式内标记、图片题、长单元与旧流程曾漏检的题型；不能在看到新版结果后换样本。两遍使用同一源文，但分别在全新输出目录与子 agent 会话运行，并记录宿主、模型版本、运行时间及可取得的 prompt/completion token；价格字段不可得时标为“未提供”，不得估算成 0。</p>
+<div class="card principle">
+  <p><b>核心设计：同一批 22 个单元跑两遍，看的是稳定性，不只通过率。</b></p>
+  <p>跑两遍的意义在于暴露<b>遵守率是否可靠</b>：如果一遍 95% 通过、另一遍 60% 通过，说明产出的稳定性依赖运气，此时该做的是把 <code>references</code> 的规则写得更死、更可执行，而不是去调流程。单遍低通过率只能说明「要改」，两遍差异大才说明「改的方向在哪」。</p>
+</div>
+<table>
+  <thead><tr><th style="width:6%">序号</th><th style="width:26%">指标</th><th>口径与判定</th></tr></thead>
+  <tbody>
+    <tr><td class="num">1</td><td>首次 <code>verify-report</code> 通过率（两遍对比）</td><td>子 agent <b>第一次</b>写完报告就通过的单元数 / 22。每遍至少 20/22（≥90%）；两遍通过数相差 4 个及以上（&gt;15 个百分点）即触发 references 回炉</td></tr>
+    <tr><td class="num">2</td><td>错误标记到 Word 的覆盖</td><td>逐单元记录错误标记数、实际批注锚点数、公式可见兜底数、缺失数与无问题标题批注数；必须 <b>错误标记数 = 锚点数 + 公式兜底数</b> 且缺失数为 0。抽查兜底文字中的修改建议可读</td></tr>
+    <tr><td class="num">3</td><td>22 单元<b>全量</b>人工抽检</td><td>不抽样。逐单元核对：有没有漏检（该标的没标）、有没有误标（标了但不该标）、严重度判定是否合理</td></tr>
+    <tr><td class="num">4</td><td>与旧产物逐单元对照「旧有新版无」</td><td>只查<b>单向丢失</b>：旧流程发现过而新流程没发现的问题。反向（新版多发现）通常是好事，但也要抽看是否有误标</td></tr>
+  </tbody>
+</table>
+<p><b>为什么用「下限对照」而不是「F1 对齐」：</b>旧产物本身不是金标准 —— 364 份报告里只有 68% 带标记、78% 有合规的严重度行、还有 3.6% 空原文与 3.2% 空操作这类不合格产物。把它当绝对基准，等于把旧流程的漏检和错误当成目标。合理口径是：<b>新流程的漏检不得多于旧流程</b>，超过的部分必须逐个解释。</p>
+<p><b>人工裁定口径：</b>两遍结果逐条记录“旧有新版无”“新版有旧版无”及其证据，区分漏检、误标和旧报告本身错误；有争议的样本由第二名复核者裁定，保留裁定记录。任一遍出现尚未处理的严重内容错误漏检，不通过 M2；其余差异须有逐项解释和处理结论，不能用总通过率抵消。</p>
+
+<h2 id="s9">9. 测试策略</h2>
+<table>
+  <thead><tr><th style="width:24%">层次</th><th style="width:34%">方法</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td class="k">确定性层（红→绿）</td><td>移植旧仓测试作行为契约，新功能先写失败测试</td><td>解析、校验、切片、批注锚点注入、报告拼接 —— 这些有稳定接缝，适合红→绿→重构。接缝越少越好</td></tr>
+    <tr><td class="k">闸门双向契约</td><td>真实语料双向测试：不合格必被拒 + 合格必被接受</td><td>用旧报告做兼容语料，但先逐份标注预期结果与原因：空原文、空操作、漏段等应拒；人工确认满足新契约的样本应接受；<code>unknown</code> 定位只告警。不能把“其余旧产物”未经核对全标为合格</td></tr>
+    <tr><td class="k">agent 编排</td><td>宿主适配冒烟测试 + §8 人评</td><td>CI 用模拟派发/返回覆盖窗口补位、失败重派、断点扫描和防重复派发；在每个宣称支持的宿主上，用真实子 agent 验证路径读取、读图、落盘与摘要回传。判断质量仍按 §8 人评</td></tr>
+  </tbody>
+</table>
+<p class="card note"><b>为什么强调双向：</b>056 的标记审计就是栽在只测「合格样本」上 —— LaTeX 装饰差异会让合法标记定位不到，如果当时把「定位失败」直接当不合格，会被误判为 100% 不合格；而如果为了通过率把闸门放宽到什么都不拒，闸门就失去了意义。两个方向都要有真实语料钉住。</p>
+
+<h2 id="s10">10. 路线图：skill → MCP → 插件 → 推广</h2>
+<figure class="diagram" id="fig11">
+  <figcaption><b>图 11</b> · 路线图：先拿到质量数字，再扩学科，最后换壳</figcaption>
+  <details open><summary>Mermaid 源码</summary><pre class="src">flowchart LR
+  M0["M0 骨架<br/>11 个 v1 命令 + 移植测试全绿"] --> M1["M1 高中物理端到端<br/>拆题 → 单元子 agent 校对 → 校验 → 整卷报告 → docx"]
+  M1 --> M2["M2 质量评估<br/>22 单元跑两遍 + 四个指标"]
+  M2 --> M3{"四条硬门槛达标?"}
+  M3 -- 否 --> M4["回炉：改 references / 修契约<br/>不扩学科"]
+  M4 --> M2
+  M3 -- 是 --> M5["M5 扩学科<br/>逐科加 references 行 + config 行"]
+  M5 --> M6["M6 后置能力<br/>classics / 批注评审 / 自由校对"]
+  M6 --> M7["M7 换壳：MCP → DSH 插件"]
+  M7 --> M8["M8 独立解题解冻评估<br/>按 M2 的准确性数据决定"]</pre></details>
+</figure>
+<table>
+  <thead><tr><th style="width:10%">里程碑</th><th style="width:34%">产出</th><th>通过条件</th></tr></thead>
+  <tbody>
+    <tr><td class="k">M0 骨架</td><td>CLI 11 个 v1 命令（含规则拆分）+ 移植测试</td><td>旧仓确定性测试按新契约调整后全绿；确定性模块已与 <code>api_client</code> 解耦；试卷与讲义均能从源文拆出单元</td></tr>
+    <tr><td class="k">M1 端到端</td><td>高中物理一条竖切：拆题 → 单元子 agent → 交付校验 → 整卷报告 → docx</td><td>每条错误标记在 docx 有锚点或公式可见兜底，缺失数为 0；不合格报告不进入汇总或交付</td></tr>
+    <tr><td class="k">M2 质量数字</td><td>冻结样本清单后运行 22 单元 × 2 遍 + 四个指标</td><td>两遍首次通过数均 ≥20/22，差异 ≤3 个单元；旧有新版无逐条解释，人工抽检没有未处理的严重漏检</td></tr>
+    <tr><td class="k">M5 扩学科</td><td>其余 6 学科各加一行 references + 一行 config</td><td>每科抽查单元通过门槛；共性流程零改动</td></tr>
+    <tr><td class="k">M6 后置能力</td><td><code>classics</code>、批注评审、自由校对</td><td>文言文校对的权威原文引用可核（diff 可复现）</td></tr>
+    <tr><td class="k">M7 换壳</td><td>MCP server → DSH 插件</td><td>换壳前后行为一致；CLI 仍可用（保底）</td></tr>
+    <tr><td class="k">M8 解冻评估</td><td>独立解题是否启用</td><td>有 M2 的准确性数据支撑，否则不解冻</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s11">11. 待验证前提（PV）</h2>
+<p>这些<b>不是结论</b>。它们是把某个决策建立在假设上的地方；执行到对应环节必须实测复核，前提被推翻则该决策翻转。</p>
+<table>
+  <thead><tr><th style="width:6%">编号</th><th style="width:34%">前提</th><th style="width:22%">若被推翻</th><th>怎么验</th></tr></thead>
+  <tbody>
+    <tr><td class="num">PV1</td><td>默认规则拆分在多数场景够用（拆分升级是小概率路径）</td><td>D24 翻转：默认走智能拆分子 agent</td><td>用真实讲义与试卷各若干，统计 <code>precheck-split</code> 报出的异常单元比例与人工复核结论</td></tr>
+    <tr><td class="num">PV2</td><td>历史 / 语文的拆分逻辑可配置化（不写学科代码）</td><td>需保留少量学科特定切片代码</td><td>把旧仓高中历史与高中语文的拆分逻辑按 <code>config/subjects/*.json</code> 参数化表达，看是否有剩余分支无处安放</td></tr>
+    <tr><td class="num">PV3</td><td>独立解题冻结不影响准确性（即模型自身判断够用）</td><td>解冻独立解题，成本上升</td><td>§8 指标 3 的人工抽检即闸门：若抽检发现「答案本身写错而校对没发现」达到不可接受比例，则解冻</td></tr>
+    <tr><td class="num">PV4</td><td>首次通过率可达 ≥90%（agent 能按文档稳定产出）</td><td>references 回炉重写（更死、更可执行）</td><td>M2 的指标 1，两遍都测</td></tr>
+    <tr><td class="num">PV5</td><td>agent 按 <code>references</code> 的规范产出标记的遵守率可达</td><td>把关键约束从 references 提到 <code>SKILL.md</code>（牺牲长度）</td><td>统计第一遍失败的原因分布：若是「没写标记」「编号错位」这类规范型失败占多数，说明文档不够硬</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s12">12. 风险</h2>
+<table>
+  <thead><tr><th style="width:6%">编号</th><th style="width:26%">风险</th><th style="width:30%">后果</th><th>缓解</th></tr></thead>
+  <tbody>
+    <tr><td class="num">R1</td><td>复制代码导致分叉（新仓修了，旧仓没修）</td><td>两个真源，以后修 bug 要修两处</td><td>前提是<b>旧仓真冻结</b>（D3）。复制只做一次，之后旧仓只读；旧仓任何 bug 都不回修，除非数据损坏级</td></tr>
+    <tr><td class="num">R2</td><td>可分发范围缩小：依赖子 agent + 读图，MCP 壳在后</td><td>在不支持子 agent 或无法读取本地图片的宿主里不能执行校对</td><td>这是 D5/D14 的取舍；<code>check-env</code> 检查本地依赖，主 agent 通过实际派发验证宿主能力，失败时明确拒绝本次执行</td></tr>
+    <tr><td class="num">R3</td><td>子 agent 100k 预算对最重单元偏紧</td><td>读到一半被截断，判断质量下降</td><td>沿用 058 的工具返回投影（实测可省 77.9%）；必要时把单单元源文再切细（拆分参数即可调）</td></tr>
+    <tr><td class="num">R4</td><td>跨宿主编排行为不一致</td><td>滑动窗口、重派、读图或落盘在不同宿主上偏离预期</td><td>状态机用模拟测试锁定；每个宣称支持的宿主跑读图、落盘、恢复的真实冒烟测试，质量判断仍经人评</td></tr>
+    <tr><td class="num">R5</td><td>各家 agent 对 skill 的支持度未权威核实</td><td>可能写出一份只有 DSH 能读的 skill</td><td>M0–M2 期间只用最朴素的形态（一个 <code>SKILL.md</code> + references + bash 调 CLI），不依赖任何厂商专有字段</td></tr>
+    <tr><td class="num">R6</td><td>独立解题冻结后，「答案本身写错」缺少专门防线</td><td>答案错误可能被放过（旧流程靠独立解题对答案）</td><td>由 §8 指标 3 的<b>全量人工抽检</b>当闸门；PV3 明确写了解冻条件</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s13">13. 明确不做的事</h2>
+<table>
+  <thead><tr><th style="width:28%">不做</th><th>原因 / 去向</th></tr></thead>
+  <tbody>
+    <tr><td class="k">GUI 与 Windows 打包</td><td>交付形态改为 agent 驱动（D1），不再有桌面 GUI 与 exe</td></tr>
+    <tr><td class="k">LaTeX / PDF 生成</td><td>旧仓 ADR-0030 已退役，新项目不恢复</td></tr>
+    <tr><td class="k">轮级续传快照（<code>_校对续传.json</code>）</td><td>状态归磁盘产物（D16）；子 agent 会话由宿主管，快照无处安放</td></tr>
+    <tr><td class="k">通用工具（read / write / grep / web / plan）</td><td>与 agent 自带能力重复（D13）；<code>plan_update</code> / <code>independent_solve</code> 作废</td></tr>
+    <tr><td class="k">批注评审与自由校对</td><td>v1 之后（D25 / M6）；先拿主链路的质量数字</td></tr>
+    <tr><td class="k">独立解题</td><td>冻结（D12），M8 按准确性数据再评估</td></tr>
+    <tr><td class="k">修改旧仓 <code>JiaoDuiAgent</code></td><td>完全冻结（D3），只读参考</td></tr>
+    <tr><td class="k">MCP / DSH 插件壳</td><td>v1 之前不做（D20 / M7）；CLI 先行并作为永久退路</td></tr>
+    <tr><td class="k">Python 侧凭证管理</td><td>零凭证（D19）：无 <code>.env</code>、无 key、无 <code>env_config</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="sa">附录 A：数据来源与测量方法</h2>
+<h3>A.1 数据来源</h3>
+<table>
+  <thead><tr><th style="width:26%">来源</th><th>内容</th></tr></thead>
+  <tbody>
+    <tr><td class="k">旧仓 <code>JiaoDuiAgent</code>（HEAD <code>1c45243</code>）</td><td>确定性模块源码、<code>docs/issues/054–058</code>、<code>CONTEXT.md</code>、981 条测试（含 054–058 全部质量修复）</td></tr>
+    <tr><td class="k">旧仓真实产物</td><td>364 份 <code>_校对报告.md</code>：用于统计标记率、严重度行合规率、空原文 / 空操作比例、标记审计结论分布、整卷报告长度分布</td></tr>
+    <tr><td class="k">旧仓 API 对话记录</td><td>403 份 <code>_API对话记录*.md</code>：用于统计单单元轮数分布与工具返回体积（评估 058 投影收益的前提）</td></tr>
+    <tr><td class="k">旧仓学科提示词</td><td><code>agent_prompt.json</code>：7 学科提示词长度 4,047–15,445 字节，用于判断「学科差异载体」的设计</td></tr>
+    <tr><td class="k">宿主机配置</td><td>DSH profile（<code>~/.dsh/profiles/desktop/</code>）：模型上下文 1,000,000 / 最大输出 384,000；子 agent 并发上限 8；skill 工具结果修剪阈值 8,192 字符</td></tr>
+  </tbody>
+</table>
+
+<h3>A.2 关键测量口径</h3>
+<table>
+  <thead><tr><th style="width:30%">数字</th><th>口径</th></tr></thead>
+  <tbody>
+    <tr><td class="k">有标记 248/364（68%）</td><td><code>_校对报告.md</code> 中 <code>### 标记原文</code> 节内匹配 <code>【编号|原文|改为】</code> 的报告数占比</td></tr>
+    <tr><td class="k">严重度行合规 194/248（78%）</td><td>旧统计值暂存，<b>未核准</b>。所列分布 143 + 78 + 19 + 1 = 241，无法与 194/248 同时成立；需固定同一份去重文件清单，使用旧解析器的合法值（含 <code>严重错误</code>）重算，再作为验收基线</td></tr>
+    <tr><td class="k">空原文 9 份（3.6%）/ 空操作 8 份（3.2%）</td><td>标记的「原文」字段为空；或「原文」与「改为」文本相同</td></tr>
+    <tr><td class="k">标记审计 <code>unknown</code> 82 条</td><td>在 86 份可定位源文的产物中，<code>audit_markers</code> 的结论分布：可定位 ok 233 条、<code>unknown</code> 82 条、<code>noop</code> 1 条。<b>因此 <code>unknown</code> 不能当失败</b>（否则历史产物 100% 不合格）</td></tr>
+    <tr><td class="k">工具返回投影收益 −77.9%</td><td>对 403 份对话记录中的工具返回体做 058 投影前后的字符数对比：3,631,686 → 803,946。其中 <code>code</code> 字段回显单独占原体积 71.0%（3,816,976 → 2,709,155）。累计重发减少 −81.9%</td></tr>
+    <tr><td class="k">上下文占用 −24.3%</td><td>投影后末轮上下文 token 相对投影前的变化（均值；中位 −21.9%，最大 −67.3%）</td></tr>
+    <tr><td class="k">阶段拆分模拟</td><td>332 单元、平均 6.6 轮、最多 23 轮。拆 2 阶段 −20.9%、拆 3 阶段 −26.9%；但<b>每阶段多一次准备轮</b>后，2 阶段 +9.5%、3 阶段 +10.3%（净亏）。结论：拆流程省上下文不成立，单元级隔离才是省上下文的正道</td></tr>
+    <tr><td class="k">整卷报告长度</td><td>中位 17,130 字符（≈9,902 token），最大 207,170 字符（≈119,751 token，50 单元）。用于确认主 agent 1M 上下文通读可行（占比约 12%）</td></tr>
+  </tbody>
+</table>
+<p class="card note"><b>基线复现要求：</b>上表统计脚本尚未入仓，且严重度数据已发现口径冲突。进入 M2 前应在新仓保存只读样本清单、筛选/去重规则和复算脚本，记录旧仓 commit 与文件哈希；无法复现的数字只能作为探索性观察，不作为硬门槛依据。</p>
+
+<h2 id="sb">附录 B：术语表</h2>
+<table>
+  <thead><tr><th style="width:26%">术语</th><th>含义</th></tr></thead>
+  <tbody>
+    <tr><td class="k">校对单元</td><td>一次独立校对任务的最小单位（试卷的第 N 题、讲义的一个单元），对应一个磁盘目录与一个子 agent 上下文</td></tr>
+    <tr><td class="k">主 agent</td><td>流程调度者：拆题、派发单元、收一行摘要、读整卷报告、发起审计。不读单元原文</td></tr>
+    <tr><td class="k">单元子 agent</td><td>校对单个单元的独立上下文；只拿路径与要求，产出 <code>_校对报告.md</code></td></tr>
+    <tr><td class="k">审计子 agent</td><td>对失败 / 异常单元做独立复核并给裁定的角色，只在需要时发起</td></tr>
+    <tr><td class="k">标记</td><td>报告里的 <code>【编号|原文|改为】</code> 结构，表示「这里错了，应改成什么」</td></tr>
+    <tr><td class="k">标记审计</td><td><code>audit_markers</code>：判断标记的「原文」字段能否在源文中定位，产出 <code>MARKER_OK</code> / <code>NOOP</code> / <code>EMPTY_ORIG</code> / <code>RESTORE_NEW</code> / <code>UNKNOWN</code></td></tr>
+    <tr><td class="k">交付即校验</td><td>子 agent 写完报告后必须调用 <code>verify-report</code> 并使其通过，否则不算完成；格式修正在这个回环里完成</td></tr>
+    <tr><td class="k">整卷报告</td><td>按 <code>## 第N题</code> 串联各单元报告的汇总文件，由 Python 确定性拼接，无 LLM 参与</td></tr>
+    <tr><td class="k">工具返回投影</td><td>058 引入的机制：写入模型上下文前的工具返回只保留对判断有用的部分（如去掉代码回显、折叠 traceback），原始内容仍完整落盘</td></tr>
+    <tr><td class="k">references 渐进披露</td><td>把学科细节放进 <code>references/</code> 由 agent 按需读取，保持 <code>SKILL.md</code> 短小（D22）</td></tr>
+    <tr><td class="k">拆分升级</td><td>默认规则拆分不可靠时，派子 agent 产出边界清单，再由 Python 按清单切片（D24）</td></tr>
+    <tr><td class="k">硬门槛</td><td>M1 / M2 必须达到的验收指标（错误标记无静默丢失、每遍首次通过 ≥20/22、不合格报告不进入交付、模型用量可观测）</td></tr>
+    <tr><td class="k">下限对照</td><td>把旧流程的产出当作「不能更差」的下限，而不是当作正确答案的标准答案</td></tr>
+  </tbody>
+</table>
+
+<hr/>
+<p style="color:var(--muted);font-size:13px;text-align:center">
+  PRD v0.2 · 状态：草案 · 待执行 · 第一切片：高中物理<br/>
+  决策 30 条（D1–D30）· 图表 11 张 · 待验证前提 5 条（PV1–PV5）· 风险 6 条（R1–R6）
+</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,60 @@
+[project]
+name = "jiaodui"
+version = "0.1.0"
+description = "K-12 多学科校对流程：agent 驱动 + 确定性工具核心"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "MikeTheWiTness" }]
+dependencies = [
+  "sympy>=1.12",
+  "python-docx>=1.0",
+  "Pillow>=10.0",
+  "lxml>=5.0",
+]
+
+[project.optional-dependencies]
+classics = ["playwright>=1.40"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+jiaodui = "jiaodui.cli:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["jiaodui", "jiaodui.calc"]
+
+[tool.setuptools.package-data]
+jiaodui = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["-q", "--tb=short", "-m", "not e2e and not network and not slow"]
+markers = [
+  "slow: 慢测试",
+  "network: 需要网络",
+  "e2e: 端到端",
+  "classics: 需要 Playwright / 识典古籍",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore::PendingDeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E402", "E501", "E701", "E702", "E741"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
