@@ -28,7 +28,9 @@ build-backend = "setuptools.build_meta"
 packages = ["jiaodui", "jiaodui.calc"]
 
 [tool.setuptools.package-data]
-jiaodui = ["py.typed"]
+# 默认学科配置随包分发：仓库外安装后 split --subject 仍可用；
+# 仍保留 cwd/config 与 JIAODUI_CONFIG_DIR 覆盖入口。
+jiaodui = ["py.typed", "data/subjects/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

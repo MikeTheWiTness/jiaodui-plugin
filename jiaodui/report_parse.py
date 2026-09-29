@@ -114,23 +114,29 @@ def strip_reference_preamble(marked_section: str) -> str:
     return _strip_reference_preamble(marked_section)
 
 
-def parse_reasons(reasons_section: str | None) -> dict[int, str]:
-    """解析修改原因段为 {编号: 原因}，支持 1-2 / ①-③ 区间写法。"""
+def _trim_reasons_section(reasons_section: str) -> str:
+    trimmed = re.split(r"\n---\n|\n##\s*📋", reasons_section)[0]
+    return re.split(r"\n###\s", trimmed)[0].rstrip()
+
+
+def parse_reason_entries(reasons_section: str | None) -> list[tuple[int, str]]:
+    """解析修改原因段为 [(编号, 原因)]，保留重复与区间展开，供一一对应检查。
+
+    区间（1-2 / ①-③）按每个编号各产生一条；重复编号不会被合并，调用方据此判重。
+    """
     if not reasons_section:
-        return {}
-    reasons_section = re.split(r"\n---\n|\n##\s*📋", reasons_section)[0]
-    reasons_section = re.split(r"\n###\s", reasons_section)[0].rstrip()
-    reasons: dict[int, str] = {}
+        return []
+    reasons_section = _trim_reasons_section(reasons_section)
+    entries: list[tuple[int, str]] = []
     if re.search(r"(?:^|\n)[ \t]*[①-⑳]", reasons_section):
         for rm in _REASON_CIRCLED_RE.finditer(reasons_section):
             sn = _circle_to_int(rm.group(1)[0])
             en = _circle_to_int(rm.group(2)) if rm.group(2) else sn
             rt = rm.group(3).strip()
-            if sn is None:
+            if sn is None or not rt:
                 continue
             lo, hi = sorted((sn, en if en is not None else sn))
-            for n in range(lo, hi + 1):
-                reasons[n] = rt
+            entries.extend((n, rt) for n in range(lo, hi + 1))
     else:
         for rm in _REASON_ASCII_RE.finditer(reasons_section):
             sn = int(rm.group(1))
@@ -139,8 +145,15 @@ def parse_reasons(reasons_section: str | None) -> dict[int, str]:
             if not rt:
                 continue
             lo, hi = sorted((sn, en))
-            for n in range(lo, hi + 1):
-                reasons[n] = rt
+            entries.extend((n, rt) for n in range(lo, hi + 1))
+    return entries
+
+
+def parse_reasons(reasons_section: str | None) -> dict[int, str]:
+    """解析修改原因段为 {编号: 原因}，支持 1-2 / ①-③ 区间写法（重复取最后一条）。"""
+    reasons: dict[int, str] = {}
+    for n, rt in parse_reason_entries(reasons_section):
+        reasons[n] = rt
     return reasons
 
 

@@ -107,12 +107,18 @@ class DocxBuildResult:
     heading_comment_count: int = 0
     units: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    excluded_units: list[dict] = field(default_factory=list)
+    """未通过 verify-report、被排除出 Word 交付的单元（{unit, reason}）。"""
+    anchor_structure_ok: bool = False
+    """生成后复核：commentRangeStart/End/Reference 与 comments.xml 数量是否一致。"""
 
     @property
     def ok(self) -> bool:
-        """缺失为 0 且产物真实存在才算通过。"""
+        """缺失为 0、产物存在、锚点结构完整、且没有单元被排除，才算通过。"""
         return (self.missing_count == 0 and bool(self.out_path)
-                and os.path.exists(self.out_path))
+                and os.path.exists(self.out_path)
+                and self.anchor_structure_ok
+                and not self.excluded_units)
 
 
 def _report_marker_counts(questions) -> dict:
@@ -204,7 +210,20 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
         result.warnings.append(f"目录不存在: {paper_dir}")
         return result
 
-    questions = _collect_reports(paper_path)
+    from .verify import verify_unit  # 局部导入，避免潜在循环依赖
+
+    questions_all = _collect_reports(paper_path)
+    # 硬约束：下游不得消费未通过 verify-report 的报告。先校验，再排除不合格正文。
+    questions = []
+    for qid, part in questions_all:
+        verdict = verify_unit(paper_path / qid)
+        if verdict.ok:
+            questions.append((qid, part))
+            continue
+        reason = "；".join(i.message for i in verdict.errors[:2]) or "verify-report 未通过"
+        result.excluded_units.append({"unit": qid, "reason": reason})
+        result.warnings.append(f"{qid}: 未通过 verify-report，已排除出 Word 交付（{reason}）")
+        log(f"⛔ {qid}: 未通过 verify-report，排除出 Word 交付")
     markers_by_unit = _report_marker_counts(questions)
     included = [qid for qid, part in questions if _is_included_unit(part)]
 
@@ -221,7 +240,8 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
         result.missing_count = result.marker_count
         return result
 
-    out_path = generate_combined_docx(paper_dir, out_dir)
+    out_path = generate_combined_docx(paper_dir, out_dir,
+                                      only_units={qid for qid, _ in questions})
     result.out_path = out_path
     if out_path is None:
         result.warnings.append("docx 生成失败：无可处理单元或 pandoc 转换失败")
@@ -268,10 +288,12 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
     n_start = len(re.findall(r'<w:commentRangeStart w:id="\d+"', doc_xml))
     n_end = len(re.findall(r'<w:commentRangeEnd w:id="\d+"', doc_xml))
     n_ref = len(re.findall(r'<w:commentReference w:id="\d+"', doc_xml))
-    if out_path and not (n_start == n_end == n_ref == len(comment_ids) == expected_ids):
+    result.anchor_structure_ok = bool(out_path) and (
+        n_start == n_end == n_ref == len(comment_ids) == expected_ids)
+    if out_path and not result.anchor_structure_ok:
         result.warnings.append(
             f"锚点三段/批注数不一致：start={n_start} end={n_end} ref={n_ref} "
-            f"comments={len(comment_ids)} 期望={expected_ids}")
+            f"comments={len(comment_ids)} 期望={expected_ids}（不交付）")
     if comment_ids and not (result.marker_count or result.heading_comment_count):
         result.warnings.append(f"docx 含 {len(comment_ids)} 条批注锚点，但报告未解析出任何标记")
     log(f"🔎 Word 报告复核：标记 {result.marker_count} = 锚点 {result.anchor_count} + "
@@ -280,7 +302,8 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
     return result
 
 
-def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | None:
+def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
+                           only_units: set[str] | None = None) -> str | None:
     """扫描试卷/讲义目录，生成一份带批注的合并 Word 报告。
 
     Args:
@@ -300,8 +323,10 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None) -> str | 
         return None
 
     questions = _collect_reports(paper_path)
+    if only_units is not None:
+        questions = [(qid, part) for qid, part in questions if qid in only_units]
     if not questions:
-        log(f"⚠️ Word 报告：{paper_dir} 下未找到任何 _校对报告.md")
+        log(f"⚠️ Word 报告：{paper_dir} 下未找到任何可交付的 _校对报告.md")
         return None
 
     out_root = Path(out_dir) if out_dir else paper_path.parent / "校对Word"

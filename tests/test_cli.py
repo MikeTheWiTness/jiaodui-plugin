@@ -151,3 +151,34 @@ def test_parse_report_legacy_allows(tmp_path):
     payload = json.loads(r.stdout)
     assert payload["ok"] is True and payload["legacy"] is True
 
+
+
+def test_verify_failure_emits_stderr_json(tmp_path):
+    unit = tmp_path / "第1题"
+    unit.mkdir()
+    (unit / "第1题.md").write_text("设a为$O$点。", encoding="utf-8")
+    (unit / "_校对报告.md").write_text("不合规内容。", encoding="utf-8")
+    r = run("verify-report", "--unit", str(unit), "--json")
+    assert r.returncode == 4
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["ok"] is False and err["error"]["code"] == "verify_failed"
+    assert json.loads(r.stdout)["ok"] is False
+
+
+def test_missing_required_args_structured():
+    r = run("split")
+    assert r.returncode == 2
+    err = json.loads(r.stderr.strip().splitlines()[-1])
+    assert err["error"]["code"] == "usage"
+
+
+def test_verify_rejects_report_without_source(tmp_path):
+    unit = tmp_path / "第1题"
+    unit.mkdir()
+    (unit / "_校对报告.md").write_text(
+        "一般问题\n### 标记原文\n设a为$O$点。\n### 修改原因\n1. 原因。\n", encoding="utf-8")
+    r = run("verify-report", "--unit", str(unit), "--json")
+    assert r.returncode == 4
+    payload = json.loads(r.stdout)
+    assert any(e["code"] == "integrity.no-source" for e in payload["errors"])
+

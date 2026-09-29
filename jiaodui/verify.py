@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
@@ -24,7 +25,8 @@ from pathlib import Path
 
 from . import markers as M
 from .report_parse import (SEVERITY_KEYWORDS, _extract_summary, marker_numbers,
-                           parse_reasons, split_sections, strip_reference_preamble)
+                           parse_reason_entries, parse_reasons, split_sections,
+                           strip_reference_preamble)
 
 ERROR = "error"
 WARNING = "warning"
@@ -171,7 +173,14 @@ def _check_severity(text: str, summary_declared: str, marked_section: str | None
 
 def _check_reasons(marked_section: str | None, reasons_section: str | None,
                    issues: list[VerifyIssue]) -> dict[int, str]:
+    entries = parse_reason_entries(reasons_section)
     reasons = parse_reasons(reasons_section)
+    # 编号必须一一对应：重复编号（含区间重叠）会让前一条原因被静默覆盖
+    entry_counts = Counter(n for n, _ in entries)
+    for n, c in sorted(entry_counts.items()):
+        if c > 1:
+            issues.append(VerifyIssue(
+                "reason.duplicate", f"修改原因编号 {n} 出现 {c} 次（重复或区间重叠），无法一一对应"))
     if marked_section is None:
         return reasons
     marker_nums = set(marker_numbers(marked_section))
@@ -227,30 +236,63 @@ def _check_marker_fields(marked_section: str | None, source_text: str | None,
     return stats
 
 
+_UNKNOWN_TOKEN = "\ue000U{}\ue000"
+_UNKNOWN_TOKEN_RE = re.compile(r"\ue000U\d+\ue000")
+"""unknown 标记字段的占位符：只让「落在该字段内」的差异被豁免。"""
+
+
+def _reconstruct_with_unknown_tokens(marked_section: str, unknown_nums: set[int]) -> str:
+    """重建正文：unknown 标记替换为占位符，其余标记还原为原文字段。"""
+    def _repl(m: re.Match) -> str:
+        num = int(m.group(1))
+        if num in unknown_nums:
+            return _UNKNOWN_TOKEN.format(num)
+        return m.group(2)
+
+    return M.INLINE_MARKER_CAPTURE_RE.sub(_repl, marked_section)
+
+
+def _wildcard_pattern(compressed_para: str) -> str | None:
+    """含 unknown 占位符的段落 → 正则（占位符处匹配任意内容）；否则 None。"""
+    if not _UNKNOWN_TOKEN_RE.search(compressed_para):
+        return None
+    parts = _UNKNOWN_TOKEN_RE.split(compressed_para)
+    pattern = ""
+    for i, part in enumerate(parts):
+        pattern += re.escape(part)
+        if i < len(parts) - 1:
+            pattern += ".*"
+    return pattern
+
+
 def _check_integrity(text: str, marked_section: str | None, source_text: str | None,
                      issues: list[VerifyIssue]) -> dict:
-    """全文逐段比对：缺段 / 重段 / 改变未标记正文 → 拒绝。"""
+    """全文逐段比对：缺段 / 重段 / 改变未标记正文 → 拒绝。
+
+    空「标记原文」不再直接放行：源文有内容即判缺段。源文缺失/为空视为无法完成
+    全文比对 → 拒绝（历史兼容留给显式 legacy 路径）。
+    unknown 标记只豁免「落在其字段内」的差异：段落其余文字仍须与源文逐字一致，
+    否则判为未标记正文被改动。
+    """
     stats = {"source_paragraphs": 0, "report_paragraphs": 0,
              "missing_paragraphs": 0, "extra_paragraphs": 0, "duplicate_paragraphs": 0}
-    if not marked_section:
-        return stats
+    body = marked_section if marked_section is not None else ""
     if source_text is None or not source_text.strip():
         issues.append(VerifyIssue(
             "integrity.no-source",
-            "找不到单元源文，无法做原文完整性比对（仅格式与标记检查生效）",
-            severity=WARNING))
+            "找不到单元源文，无法完成原文全文比对 → 拒绝（历史兼容请显式走 legacy）",
+            severity=ERROR))
         return stats
 
-    reconstructed = M.split_marked_body(marked_section)
+    audits = M.audit_markers(body, source_text) if body else []
+    unknown_nums = {a.num for a in audits if a.verdict == M.MARKER_UNKNOWN}
+    reconstructed = _reconstruct_with_unknown_tokens(body, unknown_nums)
     src_paras = [p for p in _paragraphs(source_text) if p.strip()]
     rep_paras = [p for p in _paragraphs(reconstructed) if p.strip()]
     stats["source_paragraphs"] = len(src_paras)
     stats["report_paragraphs"] = len(rep_paras)
     src_c = [_compress(p) for p in src_paras]
     rep_c = [_compress(p) for p in rep_paras]
-
-    audits = M.audit_markers(marked_section, source_text)
-    unknown_nums = {a.num for a in audits if a.verdict == M.MARKER_UNKNOWN}
 
     sm = SequenceMatcher(None, src_c, rep_c, autojunk=False)
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
@@ -271,17 +313,22 @@ def _check_integrity(text: str, marked_section: str | None, source_text: str | N
                     f"报告多出源文没有的段落（改变未标记正文或重段）：{rep_paras[k][:40]}…",
                     location=f"报告段 {k + 1}"))
         else:
-            # replace：若涉及无法定位的标记字段，降级为 warning
-            nums_in_range = set(marker_numbers(marked_section))  # 全文兜底
-            del nums_in_range
-            if unknown_nums:
+            # replace：只把「差异完全落在 unknown 标记字段内」的段落降级为警告，
+            # 其余报告段落一律判为篡改（不再因为全文存在 unknown 就整体放行）。
+            confined, unconfined = [], []
+            for k in range(j1, j2):
+                pattern = _wildcard_pattern(rep_c[k])
+                matched = bool(pattern) and any(
+                    re.fullmatch(pattern, sp, re.DOTALL) for sp in src_c[i1:i2])
+                (confined if matched else unconfined).append(k)
+            for k in confined:
                 issues.append(VerifyIssue(
                     "integrity.unknown-diff",
-                    "源文与重建正文存在差异，但涉及无法定位的标记字段，保留 unknown 警告",
+                    f"报告段 {k + 1} 与源文的差异仅落在无法定位的标记字段内，保留 unknown 警告",
                     severity=WARNING))
-            else:
+            if unconfined:
                 stats["missing_paragraphs"] += (i2 - i1)
-                stats["extra_paragraphs"] += (j2 - j1)
+                stats["extra_paragraphs"] += len(unconfined)
                 issues.append(VerifyIssue(
                     "integrity.changed",
                     f"正文与源文不一致（源文段 {i1 + 1}-{i2} ↔ 报告段 {j1 + 1}-{j2}）："

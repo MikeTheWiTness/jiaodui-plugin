@@ -1,6 +1,7 @@
 """verify-report 双向契约测试（PRD §5.2 / §9）。
 
-不合格必被拒 + 合格必被接受；unknown 定位只告警；无法区分只记需人工确认。
+不合格必被拒 + 合格必被接受；unknown 只豁免落在其字段内的差异；
+无法区分只记需人工确认；无法完成全文比对（空正文 / 源文缺失）必须拒绝。
 """
 from __future__ import annotations
 
@@ -19,11 +20,26 @@ VALID = """一般问题
 1. 参数写错。
 """
 
-NO_ISSUE = """无问题
+# 无问题报告：两节仍须存在，且「标记原文」必须完整抄写源文（无问题时无标记）
+NO_ISSUE = f"""无问题
 ### 标记原文
-
+{SOURCE}
 ### 修改原因
 无
+"""
+
+SOURCE3 = "第一段含 a 与 b。\n\n第二段不变。\n\n第三段原文。"
+
+# 第一段含无法定位的 unknown 标记，第三段是未标记正文篡改
+UNKNOWN_PLUS_TAMPER = """一般问题
+### 标记原文
+第一段含【1|x|y】与 b。
+
+第二段不变。
+
+第三段被篡改。
+### 修改原因
+1. 测试。
 """
 
 
@@ -44,11 +60,19 @@ def test_valid_report_accepted():
     assert r.warnings == []
 
 
-def test_no_issue_with_both_sections_accepted():
+def test_no_issue_with_full_source_body_accepted():
     r = verify_report_text(NO_ISSUE, SOURCE)
     assert r.ok, [i.message for i in r.errors]
     assert r.summary == "无问题"
     assert r.marker_count == 0
+
+
+def test_empty_marked_body_rejected_when_source_nonempty():
+    """空「标记原文」不得绕过全文比对；源文有内容即判缺段。"""
+    text = "无问题\n### 标记原文\n\n### 修改原因\n无\n"
+    r = verify_report_text(text, SOURCE)
+    assert not r.ok
+    assert _codes(r) & {"integrity.missing-paragraph", "integrity.no-source"}
 
 
 def test_severity_missing_rejected():
@@ -107,6 +131,20 @@ def test_reason_missing_and_orphan_rejected():
     assert "reason.missing" in codes and "reason.orphan" in codes
 
 
+def test_reason_duplicate_number_rejected():
+    text = VALID.replace("1. 参数写错。", "1. 第一条。\n1. 第二条。")
+    r = verify_report_text(text, SOURCE)
+    assert not r.ok
+    assert "reason.duplicate" in _codes(r)
+
+
+def test_reason_range_overlap_rejected():
+    text = VALID.replace("1. 参数写错。", "1-2. 重叠范围。\n2. 显式重复。")
+    r = verify_report_text(text, SOURCE)
+    assert not r.ok
+    assert "reason.duplicate" in _codes(r)
+
+
 def test_malformed_marker_rejected():
     text = VALID.replace("【1|a|b】", "【1a|b】")
     r = verify_report_text(text, SOURCE)
@@ -115,7 +153,6 @@ def test_malformed_marker_rejected():
 
 
 def test_missing_field_marker_rejected():
-    # 只有两段（缺「改为」）→ 字段数错误
     text = VALID.replace("【1|a|b】", "【1|a】")
     r = verify_report_text(text, SOURCE)
     assert not r.ok
@@ -123,14 +160,12 @@ def test_missing_field_marker_rejected():
 
 
 def test_escaped_pipe_does_not_split_field():
-    # \| 是 LaTeX 转义竖线，整体属于字段内容，不算分隔符
     text = VALID.replace("【1|a|b】", "【1|a\\|b|c】")
     r = verify_report_text(text, SOURCE)
     assert "syntax.field-count" not in _codes(r)
 
 
 def test_unknown_localization_is_warning_not_error():
-    # 原文字段与改为都无法在源文定位 → unknown，仅告警
     text = VALID.replace("【1|a|b】", "【1|x|y】")
     r = verify_report_text(text, SOURCE)
     assert "locate.unknown" in _codes(r, WARNING)
@@ -138,8 +173,16 @@ def test_unknown_localization_is_warning_not_error():
     assert any(i.code in {"locate.unknown", "integrity.unknown-diff"} for i in r.warnings)
 
 
+def test_unknown_does_not_excuse_other_paragraph_tampering():
+    """unknown 只豁免其所在字段的差异；其他段落的未标记篡改仍须拒绝。"""
+    r = verify_report_text(UNKNOWN_PLUS_TAMPER, SOURCE3)
+    assert not r.ok, [i.code for i in r.warnings]
+    assert "integrity.changed" in _codes(r, ERROR) or \
+        "integrity.extra-paragraph" in _codes(r, ERROR)
+    assert any(i.code == "integrity.unknown-diff" for i in r.warnings)
+
+
 def test_manual_review_when_correction_indistinguishable():
-    # 归一化后 原文 == 改为（大小写/全角差异）→ 需人工确认，不拒绝
     text = VALID.replace("【1|a|b】", "【1|a|A】")
     r = verify_report_text(text, SOURCE)
     assert r.ok
@@ -160,7 +203,8 @@ def test_empty_report_rejected():
     assert "report.empty" in _codes(r)
 
 
-def test_source_missing_only_warns():
+def test_source_missing_rejected():
+    """新契约：无法完成全文比对即拒绝；历史兼容走显式 legacy 路径。"""
     r = verify_report_text(VALID, None)
-    assert r.ok
-    assert "integrity.no-source" in _codes(r, WARNING)
+    assert not r.ok
+    assert "integrity.no-source" in _codes(r, ERROR)

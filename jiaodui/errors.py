@@ -73,6 +73,13 @@ class UnsupportedError(JiaoduiError):
     exit_code = ExitCode.UNSUPPORTED
 
 
+class VerifyFailedError(JiaoduiError):
+    """verify-report 判定的业务失败（退出码 4）。"""
+
+    code = "verify_failed"
+    exit_code = ExitCode.VERIFY_FAILED
+
+
 def emit_error(exc: BaseException) -> int:
     """把异常输出为一行 JSON 到 stderr，返回退出码。"""
     if isinstance(exc, JiaoduiError):

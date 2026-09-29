@@ -85,6 +85,14 @@ def status_of_unit(unit_dir: str | Path) -> UnitStatus:
                           source=str(src) if src else None)
 
     if not report.is_file():
+        # 有失败记录但报告未生成（技术崩溃/超时后恢复）：保留失败事实，不回到「未开始」
+        if fail.is_file():
+            try:
+                reason = _first_line(fail.read_text(encoding="utf-8")) or "有失败记录，报告未生成"
+            except OSError:
+                reason = "有失败记录，报告未生成"
+            return UnitStatus(name, str(unit_dir), FAILED, source=str(src) if src else None,
+                              reason=reason)
         if src is not None:
             return UnitStatus(name, str(unit_dir), NOT_STARTED, source=str(src))
         return UnitStatus(name, str(unit_dir), NOT_STARTED, reason="源文缺失")

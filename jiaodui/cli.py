@@ -14,7 +14,7 @@ from typing import Any
 
 from . import __version__
 from .errors import (ContractError, ExitCode, JiaoduiError, NotFoundError,
-                     UnsupportedError, emit_error)
+                     UnsupportedError, UsageError, VerifyFailedError, emit_error)
 from .log import log, set_quiet
 
 
@@ -23,10 +23,12 @@ def _json_out(payload: Any) -> None:
 
 
 def _resolve_config_dir() -> Path:
+    """定位学科配置目录：env → cwd/config → 仓库 config → 包内 data（发行版）。"""
     env = os.environ.get("JIAODUI_CONFIG_DIR")
     if env:
         return Path(env)
-    candidates = [Path.cwd() / "config", Path(__file__).resolve().parent.parent / "config"]
+    pkg = Path(__file__).resolve().parent
+    candidates = [Path.cwd() / "config", pkg.parent / "config", pkg / "data"]
     for c in candidates:
         if (c / "subjects").is_dir():
             return c
@@ -190,7 +192,14 @@ def cmd_verify_report(args: argparse.Namespace) -> int:
         for i in result.manual:
             log(f"   🔎 [{i.code}] {i.message}")
         print(json.dumps(payload, ensure_ascii=False))
-    return ExitCode.OK if result.ok else ExitCode.VERIFY_FAILED
+    if result.ok:
+        return ExitCode.OK
+    # 业务失败同样遵守「失败向 stderr 输出一行结构化 JSON」的契约
+    emit_error(VerifyFailedError(
+        f"报告未通过交付校验：{result.summary or '（无严重度）'}，错误 {len(result.errors)} 条",
+        details={"unit": str(args.unit),
+                 "errors": [i.to_dict() for i in result.errors]}))
+    return ExitCode.VERIFY_FAILED
 
 
 def cmd_parse_report(args: argparse.Namespace) -> int:
@@ -293,8 +302,15 @@ def cmd_build_docx(args: argparse.Namespace) -> int:
 
 # ---------------------------------------------------------------- parser
 
+class _Parser(argparse.ArgumentParser):
+    """参数错误也走统一的结构化错误出口（stderr JSON + 退出码 2）。"""
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        raise UsageError(message, details={"usage": self.format_usage().strip()})
+
+
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="jiaodui", description="K-12 校对确定性工具核心")
+    p = _Parser(prog="jiaodui", description="K-12 校对确定性工具核心")
     p.add_argument("--version", action="version", version=f"jiaodui {__version__}")
     p.add_argument("--quiet", action="store_true", help="静默进度输出")
     p.add_argument("--json", action="store_true", help="机器可读 JSON 输出")
@@ -373,7 +389,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except JiaoduiError as exc:
+        return emit_error(exc)
     set_quiet(bool(getattr(args, "quiet", False)))
     try:
         return int(args.func(args))

@@ -1213,10 +1213,25 @@ NO_ISSUE_SHORT = """无问题
 """
 
 
+def _source_from_report(text):
+    """从报告反推「重建正文」作为单元源文，使报告能通过 verify-report 闸门。
+
+    仅用于 build_docx 测试的 fixture 搭建；闸门本身的行为由 test_verify_contract 锁定。
+    """
+    from jiaodui.markers import split_marked_body
+    from jiaodui.report_parse import split_sections, strip_reference_preamble
+
+    _head, marked, _reasons = split_sections(text)
+    return split_marked_body(strip_reference_preamble(marked or ""))
+
+
 def _write_unit_report(paper, unit, text):
     d = paper / unit
     d.mkdir(parents=True, exist_ok=True)
     (d / "_校对报告.md").write_text(text, encoding="utf-8")
+    src = d / f"{unit}.md"
+    if not src.exists():
+        src.write_text(_source_from_report(text), encoding="utf-8")
     return d
 
 
@@ -1242,7 +1257,8 @@ class TestBuildDocxAudit:
         assert res.anchor_count == 2
         assert res.formula_fallback_count == 0
         assert res.missing_count == 0
-        assert res.heading_comment_count == 0
+        # 第2题为无问题单元，按契约单列一条标题批注
+        assert res.heading_comment_count == 1
         assert res.ok is True
         assert [u["unit"] for u in res.units] == ["第1题", "第2题"]
         assert all(u["missing"] == 0 for u in res.units)
@@ -1267,10 +1283,10 @@ class TestBuildDocxAudit:
         assert "SKIPANCH" not in doc
 
     def test_no_issue_heading_comment_listed_separately(self, tmp_path):
+        src7 = "**教师版** 金属棒从$h$高处释放。"
+        no_issue_valid = "无问题\n\n### 标记原文\n" + src7 + "\n\n### 修改原因\n无\n"
         paper = _make_illustrated_paper(
-            tmp_path, {"第1题": REPORT_WITH_MARKS, "单元7": NO_ISSUE_SHORT})
-        (paper / "单元7" / "单元7.md").write_text(
-            "**教师版** 金属棒从$h$高处释放。", encoding="utf-8")
+            tmp_path, {"第1题": REPORT_WITH_MARKS, "单元7": no_issue_valid})
         res = build_docx(str(paper), str(tmp_path / "out"))
         assert res.marker_count == 2
         assert res.anchor_count == 2
@@ -1281,31 +1297,25 @@ class TestBuildDocxAudit:
         assert unit7["markers"] == 0
         assert unit7["heading_comment"] == 1
 
-    def test_noop_marker_is_missing_and_artifact_kept(self, tmp_path):
+    def test_noop_marker_unit_excluded(self, tmp_path):
+        """空操作报告未通过 verify-report，必须排除出 Word 交付。"""
         paper = _make_illustrated_paper(tmp_path, {"第1题": NOOP_REPORT})
         res = build_docx(str(paper), str(tmp_path / "out"))
-        assert res.marker_count == 2
-        assert res.anchor_count == 1
-        assert res.formula_fallback_count == 0
-        assert res.missing_count == 1
+        assert res.marker_count == 0, "不合格报告不得计入"
+        assert [e["unit"] for e in res.excluded_units] == ["第1题"]
+        assert "空操作" in res.excluded_units[0]["reason"]
         assert res.ok is False
-        assert res.out_path and os.path.exists(res.out_path)
-        assert any("既无 Word 批注锚点" in w for w in res.warnings)
 
-    def test_broken_unit_counted_as_missing(self, tmp_path):
+    def test_broken_unit_excluded_not_counted(self, tmp_path):
+        """含标记但缺分段的单元未过闸门，排除且不计入标记数。"""
         paper = _make_illustrated_paper(tmp_path, {
             "第1题": REPORT_WITH_MARKS,
             "单元9": "有批注标记但缺分段：【1|原句|改为句】\n",
         })
         res = build_docx(str(paper), str(tmp_path / "out"))
-        assert res.marker_count == 3
-        assert res.anchor_count == 2
-        assert res.missing_count == 1
+        assert res.marker_count == 2, "只统计合格单元"
+        assert [e["unit"] for e in res.excluded_units] == ["单元9"]
         assert res.ok is False
-        broken = [u for u in res.units if u["unit"] == "单元9"][0]
-        assert broken["markers"] == 1
-        assert broken["missing"] == 1
-        assert broken["anchors"] == 0
 
     def test_empty_dir_not_ok(self, tmp_path):
         empty = tmp_path / "空目录"

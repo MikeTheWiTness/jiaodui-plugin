@@ -108,4 +108,48 @@ def test_pipeline_build_docx(tmp_path):
     result = build_docx(str(tmp_path / "卷子"))
     assert result.marker_count == 2
     assert result.missing_count == 0
+    assert result.anchor_structure_ok is True
+    assert result.excluded_units == []
     assert result.ok, result.warnings
+
+def _write_unverified_report(unit_dir: Path) -> None:
+    """含标记但缺严重度总结行 → verify-report 拒绝。"""
+    from jiaodui.paths import find_source_md
+
+    src = find_source_md(unit_dir).read_text(encoding="utf-8")
+    original = next(ch for ch in src if ch.strip() and ch not in "$\\")
+    marked = src.replace(original, f"【1|{original}|{original}改】", 1)
+    (unit_dir / "_校对报告.md").write_text(
+        f"### 标记原文\n{marked}\n### 修改原因\n1. 参数写错。\n", encoding="utf-8")
+
+
+@pytest.mark.skipif(not Path(PANDOC).is_file(), reason="需要 pandoc")
+def test_build_docx_excludes_unverified_units(tmp_path):
+    from jiaodui.docx_report import build_docx
+
+    res = _split(tmp_path)
+    units = sorted(Path(p) for p in res.unit_dirs)
+    _write_report_from_source(units[0])
+    _write_unverified_report(units[1])
+
+    result = build_docx(str(tmp_path / "卷子"))
+    assert [e["unit"] for e in result.excluded_units] == ["第2题"], result.excluded_units
+    assert result.marker_count == 1, "只统计合格单元的标记"
+    assert result.ok is False, "存在被排除单元时不得判为通过"
+    # 不合格单元的标记与原因不得进入 docx
+    if result.out_path and Path(result.out_path).is_file():
+        import zipfile
+        with zipfile.ZipFile(result.out_path) as z:
+            comments = z.read("word/comments.xml").decode("utf-8") if "word/comments.xml" in z.namelist() else ""
+        assert "2改" not in comments
+
+
+def test_docx_result_ok_requires_anchor_structure(tmp_path):
+    from jiaodui.docx_report import DocxBuildResult
+
+    f = tmp_path / "x.docx"
+    f.write_bytes(b"PK\x03\x04")
+    base = dict(out_path=str(f), missing_count=0)
+    assert DocxBuildResult(**base, anchor_structure_ok=False).ok is False
+    assert DocxBuildResult(**base, anchor_structure_ok=True).ok is True
+

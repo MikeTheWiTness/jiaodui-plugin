@@ -56,6 +56,15 @@ def test_skip_unit(tmp_path):
     assert status_of_unit(d).state == SKIPPED
 
 
+def test_failed_without_report(tmp_path):
+    """技术崩溃后恢复：有失败记录但无报告，仍应保留为失败，不能回到未开始。"""
+    d = _make_unit(tmp_path)
+    (d / "_校对失败.md").write_text("API 超时，重派 1 次仍失败\n详情", encoding="utf-8")
+    st = status_of_unit(d)
+    assert st.state == FAILED
+    assert "API 超时" in (st.reason or "")
+
+
 def test_scan_status_counts(tmp_path):
     _make_unit(tmp_path, name="第1题", report=VALID)
     _make_unit(tmp_path, name="第2题")
