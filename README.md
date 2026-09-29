@@ -11,10 +11,11 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 
 ## 当前状态：M1（高中物理端到端竖切已跑通）
 
-M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已完成高中物理一条真实竖切：
-`convert → split → 5 个单元子 agent 校对 → verify-report → build-report → build-docx`。
-真机结果：5/5 单元首次通过校验；Word 复核 **标记 24 = 锚点 24 + 公式兜底 0，缺失 0**；
-不合格报告被排除出汇总与交付（反向验证退出码 4 / 6）。详见 [docs/M1.md](docs/M1.md)。
+M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已在**当前代码**上完成高中物理一条真实竖切：
+`convert → split（含完整讲义导入清理）→ 5 个单元子 agent 校对 → verify-report → build-report → build-docx`。
+真机结果：5/5 单元通过校验（28 条标记）；Word 复核 **标记 28 = 锚点 28 + 公式兜底 0，缺失 0**，
+28 条批注均带修改原因；不合格报告被排除出汇总与交付（反向验证退出码 4 / 6）。
+样本、单元源文与报告冻结在 [evaluation/m1](evaluation/m1/README.md)，可还原后独立复现。详见 [docs/M1.md](docs/M1.md) §9。
 
 已实现 11 个 v1 命令：
 
@@ -24,7 +25,7 @@ M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已完成高�
 | `jiaodui convert <file>` | docx / idml / md → `_raw.md` |
 | `jiaodui split <raw_md> --subject <学科> --mode exam\|lecture` | 规则拆分出单元目录与源文、图片 |
 | `jiaodui precheck-split <dir>` | 拆分预检：单元数 / 首行 / 字符数分布 / 空与超长单元 |
-| `jiaodui slice --boundaries <f>` | 按边界清单确定性切片 |
+| `jiaodui slice --boundaries <f> [--mode] [--subject]` | 按边界清单确定性切片；`--preview` 打印讲义清理后正文供定行号 |
 | `jiaodui status <paper_dir>` | 扫描单元状态（未开始 / 已交付未过校验 / 已完成 / 失败） |
 | `jiaodui verify-report --unit <dir>` | 交付即校验：格式 + 原因对应 + 严重度 + 原文完整性 |
 | `jiaodui parse-report --unit <dir>` | 报告 → `_校对数据.json`（默认拒绝未过校验的报告） |

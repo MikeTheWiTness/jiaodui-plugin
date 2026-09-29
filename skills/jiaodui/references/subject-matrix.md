@@ -28,7 +28,7 @@
 ### 拆分模式 `--mode`
   - `exam`：试卷，产出 `第N题.md`，按题号规则切题。
   - `lecture`：讲义，产出 `单元N.md`，按班型 / 例练包裹标记切单元。
-- 默认走**规则拆分**；`precheck-split` 报出空单元 / 超长单元 / 异常首行时才升级**智能拆分**（拆分子 agent 出边界清单 → `slice --boundaries`）。讲义模式先用 `slice --preview` 取**清理后**正文再定行号；用原始 raw 行号会错位。
+- 默认走**规则拆分**；`precheck-split` 报出空单元 / 超长单元 / 异常首行时才升级**智能拆分**（拆分子 agent 出边界清单 → `slice --boundaries`）。讲义模式由拆分子 agent 先用 `slice --preview` 取**清理后**正文再定行号（主 agent 不读预览），预览与切片必须同 `--mode`/`--subject`；用原始 raw 行号、或漏 `--mode`（默认 exam 不清理）都会错位。
 
 ## 三、共性（只写一次，在 SKILL.md）
 转换 → 拆分 → 抽查 → 状态扫描 → 滑动窗口派单元子 agent → verify-report 闸门（自修 ≤3 轮）→ 整卷报告 → 主 agent 通读 → Word 批注版 → 交付 + 失败清单。所有学科的产物命名、校验项、失败留痕完全一致，见 `references/report-contract.md` 与 `references/failure-modes.md`。

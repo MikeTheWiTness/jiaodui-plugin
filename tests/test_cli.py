@@ -136,11 +136,13 @@ def test_slice_requires_boundaries_without_preview(tmp_path):
 
 
 def test_slice_lecture_boundaries_from_preview(tmp_path):
-    """智能拆分流程：先 preview 取清理后正文定行号，再 slice。"""
+    """完整 skill 示例：preview(--mode lecture --subject) → 定行号 → slice(同参数)。"""
     raw = tmp_path / "讲义_raw.md"
     raw.write_text(LECTURE_GRID, encoding="utf-8")
-    preview = run("slice", "--raw", str(raw), "--mode", "lecture", "--preview")
+    preview = run("slice", "--raw", str(raw), "--mode", "lecture",
+                  "--subject", "高中物理", "--preview")
     assert preview.returncode == 0, preview.stderr
+    assert "+---" not in preview.stdout
     lines = preview.stdout.splitlines()
     i1 = lines.index("**例1**（多选）")
     i2 = lines.index("**例2**（多选）")
@@ -148,6 +150,36 @@ def test_slice_lecture_boundaries_from_preview(tmp_path):
     bpath.write_text(json.dumps({
         "raw": str(raw),
         "mode": "lecture",
+        "subject": "高中物理",
+        "base_name": "讲义",
+        "boundaries": [
+            {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
+            {"name": "单元2", "start_line": i2 + 1, "end_line": len(lines)},
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+    r = run("slice", "--boundaries", str(bpath), "--mode", "lecture",
+            "--subject", "高中物理", "--out-root", str(tmp_path / "out"), "--json")
+    assert r.returncode == 0, r.stderr
+    payload = json.loads(r.stdout)
+    assert len(payload["unit_dirs"]) == 2
+    u1 = (Path(payload["unit_dirs"][0]) / "单元1.md").read_text(encoding="utf-8")
+    u2 = (Path(payload["unit_dirs"][1]) / "单元2.md").read_text(encoding="utf-8")
+    assert "**例1**" in u1 and "题干一" in u1 and "**例2**" not in u1
+    assert "**例2**" in u2 and "题干二" in u2
+    assert "+---" not in u1 and "+---" not in u2
+
+
+def test_slice_without_mode_misslices_grid_lecture(tmp_path):
+    """回归：漏 --mode（默认 exam）就不清理网格表，预览行号切在原始 raw 上必然错位。"""
+    raw = tmp_path / "讲义_raw.md"
+    raw.write_text(LECTURE_GRID, encoding="utf-8")
+    preview = run("slice", "--raw", str(raw), "--mode", "lecture", "--preview")
+    lines = preview.stdout.splitlines()
+    i1 = lines.index("**例1**（多选）")
+    i2 = lines.index("**例2**（多选）")
+    bpath = tmp_path / "boundaries.json"
+    bpath.write_text(json.dumps({
+        "raw": str(raw),
         "base_name": "讲义",
         "boundaries": [
             {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
@@ -157,11 +189,10 @@ def test_slice_lecture_boundaries_from_preview(tmp_path):
     r = run("slice", "--boundaries", str(bpath), "--out-root", str(tmp_path / "out"), "--json")
     assert r.returncode == 0, r.stderr
     payload = json.loads(r.stdout)
-    assert len(payload["unit_dirs"]) == 2
-    u1 = (Path(payload["unit_dirs"][0]) / "单元1.md").read_text(encoding="utf-8")
-    assert "**例1**" in u1 and "**例2**" not in u1
-
-def test_precheck_split_command(tmp_path):
+    texts = [(Path(d) / f"{Path(d).name}.md").read_text(encoding="utf-8")
+             for d in payload["unit_dirs"]]
+    assert any("+---" in t for t in texts), "漏 mode 时应把表格边框切进来"
+    assert not any("题干二" in t for t in texts), "漏 mode 时题干二应丢失"
     paper = tmp_path / "卷子"
     for i in (1, 2):
         d = paper / f"第{i}题"

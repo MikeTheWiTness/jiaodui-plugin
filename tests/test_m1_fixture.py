@@ -2,7 +2,7 @@
 
 覆盖：
 1. 5 个单元的报告在随仓源文上通过 verify-report；
-2. 批注版 Word 生成 24 条批注且每条都有修改原因（含区间编号 1-3. / 3-6.）。
+2. 批注版 Word 生成 28 条批注且每条都有修改原因（含区间编号 1-2. 等）。
 """
 import re
 import shutil
@@ -40,6 +40,6 @@ def test_m1_fixture_build_docx_has_all_reasons(tmp_path):
     z = zipfile.ZipFile(docx_path)
     cmt = z.read("word/comments.xml").decode("utf-8")
     blocks = re.findall(r'<w:comment w:id="(\d+)"[^>]*>(.*?)</w:comment>', cmt, re.S)
-    assert len(blocks) == 24
+    assert len(blocks) == 28
     missing = [cid for cid, body in blocks if "修改原因：" not in body]
     assert missing == [], f"缺少修改原因的批注：{missing}"
