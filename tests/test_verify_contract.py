@@ -288,3 +288,41 @@ def test_ordinary_marker_kept_literal_near_formula():
     assert r.ok, [i.message for i in r.errors]
     assert "integrity.unknown-diff" in _codes(r, WARNING)
 
+
+
+def test_phantom_marker_without_source_formula_rejected():
+    """源文没有任何公式，却用 unknown 标记凭空插入公式内容 → 拒绝。"""
+    source = "这是普通正文。"
+    report = ("一般问题\n### 标记原文\n这是【1|$x$|$y$】普通正文。\n"
+              "### 修改原因\n1. 原因。\n")
+    r = verify_report_text(report, source)
+    assert not r.ok
+    assert _codes(r) & {"integrity.missing-paragraph", "integrity.extra-paragraph"}
+
+
+def test_display_formula_local_marker_accepted():
+    source = "已知 $$a+b$$。"
+    report = ("一般问题\n### 标记原文\n已知 $$【1|$\\mathrm{a}$|c】+b$$。\n"
+              "### 修改原因\n1. 原因。\n")
+    r = verify_report_text(report, source)
+    assert r.ok, [i.message for i in r.errors]
+    assert "integrity.unknown-diff" in _codes(r, WARNING)
+
+
+def test_display_formula_whole_wrapped_marker_accepted():
+    source = "已知 $$a+b$$。"
+    report = ("一般问题\n### 标记原文\n已知 【1|$$\\mathrm{a}+b$$|$$c+d$$】。\n"
+              "### 修改原因\n1. 原因。\n")
+    r = verify_report_text(report, source)
+    assert r.ok, [i.message for i in r.errors]
+
+
+def test_adjacent_formulas_two_markers_accepted():
+    """两个相邻公式各配一个 unknown 占位符：必须尝试合法划分而不是只认首个正则匹配。"""
+    source = "取 $a$ $b$。"
+    report = ("一般问题\n### 标记原文\n取 【1|$\\mathrm{a}$|$c$】【2|$\\mathrm{b}$|$d$】。\n"
+              "### 修改原因\n1. 甲。\n2. 乙。\n")
+    r = verify_report_text(report, source)
+    assert r.ok, [i.message for i in r.errors]
+    assert "integrity.unknown-diff" in _codes(r, WARNING)
+

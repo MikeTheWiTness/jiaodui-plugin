@@ -94,3 +94,15 @@ def test_scan_math_spans_ignores_marker_internal_dollars():
     text = "x $a$ 与 【1|a$|b$】 y $c$"
     spans = scan_math_spans(text)
     assert len(spans) == 2
+
+
+def test_scan_math_spans_handles_display_formula():
+    spans = scan_math_spans("x $$a+b$$ y $c$")
+    assert (2, 9) in spans, spans
+    assert (12, 15) in spans, spans
+
+
+def test_scan_math_spans_does_not_treat_display_as_two_empty():
+    spans = scan_math_spans("$$a+b$$")
+    assert spans == [(0, 7)], spans
+

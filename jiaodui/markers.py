@@ -175,17 +175,40 @@ def scan_math_spans(text: str) -> list[tuple[int, int]]:
     转义美元不参与配对；标记字段内部的美元先屏蔽为等长占位，避免干扰公式配对。
     """
     masked = _MARKER_MASK_RE.sub(lambda m: "【" + "X" * (len(m.group(0)) - 2) + "】", text)
-    spans = []
-    offset = 0
-    for line in masked.split("\n"):
-        start = None
-        for i, ch in enumerate(line):
-            if ch != "$" or (i > 0 and line[i - 1] == "\\"):
+
+    def _escaped(s: str, i: int) -> bool:
+        return i > 0 and s[i - 1] == chr(92)
+
+    def _next_dollar(s: str, start: int) -> int:
+        for j in range(start, len(s)):
+            if s[j] == "$" and not _escaped(s, j):
+                return j
+        return -1
+
+    def _next_double(s: str, start: int) -> int:
+        for j in range(start, len(s) - 1):
+            if s[j] == "$" and s[j + 1] == "$" and not _escaped(s, j):
+                return j
+        return -1
+
+    # 从左到右扫描：$$…$$ 视为显示公式（可跨行）；单个 $ 为行内公式。
+    # 不用正则，避免把相邻的两个行内公式 `$a$$b$` 误判成一个显示公式。
+    spans: list[tuple[int, int]] = []
+    i, n = 0, len(masked)
+    while i < n:
+        if masked[i] != "$" or _escaped(masked, i):
+            i += 1
+            continue
+        if i + 1 < n and masked[i + 1] == "$" and not _escaped(masked, i + 1):
+            close = _next_double(masked, i + 2)
+            if close != -1:
+                spans.append((i, close + 2))
+                i = close + 2
                 continue
-            if start is None:
-                start = offset + i
-            else:
-                spans.append((start, offset + i + 1))
-                start = None
-        offset += len(line) + 1
+        close = _next_dollar(masked, i + 1)
+        if close != -1:
+            spans.append((i, close + 1))
+            i = close + 1
+        else:
+            i += 1
     return spans

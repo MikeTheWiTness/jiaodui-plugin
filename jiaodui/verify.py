@@ -260,12 +260,12 @@ def _is_math_field(audit: M.MarkerAudit) -> bool:
                 or _MATH_HINT_RE.search(audit.correction or ""))
 
 
-def _paragraph_pattern(compressed_para: str, exempt_nums: set[int]):
-    """含豁免占位符的段落 → (正则, 占位符个数)；不可豁免的段落返回 None。
+def _paragraph_segments(compressed_para: str, exempt_nums: set[int]):
+    """把段落切成 [字面量, None(占位符), 字面量, ...]；不可豁免时返回 None。
 
-    正则里每个占位符用命名组 (?P<gN>.*?) 表示；匹配成功后再逐组检查它对应的
-    源文区间是否真的落在一个公式区间内（见 _relaxed_match）——因此既不会像
-    无边界通配符那样吸收公式旁的正文，也允许只标记公式内部的局部内容。
+    不使用正则的「首个划分」，而是在匹配时对占位符逐个尝试、并要求它吸收的
+    源文片段完整落在一个真实公式区间内——因此既不会吸收公式旁的正文，
+    也允许公式内部局部标记、相邻公式各配一个占位符等合法划分。
     """
     tokens = list(_UNKNOWN_TOKEN_RE.finditer(compressed_para))
     if not tokens:
@@ -275,43 +275,62 @@ def _paragraph_pattern(compressed_para: str, exempt_nums: set[int]):
         if num not in exempt_nums:
             return None
     parts = _UNKNOWN_TOKEN_RE.split(compressed_para)
-    pattern = ""
-    groups = 0
+    segments: list[str | None] = []
     for i, part in enumerate(parts):
-        pattern += re.escape(part)
+        if part:
+            segments.append(part)
         if i < len(parts) - 1:
-            groups += 1
-            pattern += f"(?P<g{groups}>.*?)"
-    return pattern, groups
+            segments.append(None)
+    return segments
 
 
-def _relaxed_match(src_c: str, pat_info, src_spans: list[tuple[int, int]]) -> bool:
+def _match_segments(segments: list, s: str, spans: list[tuple[int, int]],
+                    si: int, pos: int, memo: dict) -> bool:
+    """递归匹配：占位符只能匹配「完整落在某一个公式区间内」的片段。
+
+    空匹配同样受区间约束（要求所在位置位于某个公式区间内），因此
+    「源文没有任何公式却凭空插入带原文字段的标记」不会被放行。
+    """
+    if si == len(segments):
+        return pos == len(s)
+    key = (si, pos)
+    if key in memo:
+        return memo[key]
+    seg = segments[si]
+    ok = False
+    if seg is not None:
+        ok = s.startswith(seg, pos) and _match_segments(
+            segments, s, spans, si + 1, pos + len(seg), memo)
+    else:
+        for a, b in spans:
+            if a <= pos <= b:
+                for end in range(pos, b + 1):
+                    if _match_segments(segments, s, spans, si + 1, end, memo):
+                        ok = True
+                        break
+            if ok:
+                break
+    memo[key] = ok
+    return ok
+
+
+def _relaxed_match(src_c: str, segments: list, src_spans: list[tuple[int, int]]) -> bool:
     """占位符吸收的每一段源文都必须落在同一个真实公式区间内。"""
-    pattern, groups = pat_info
-    m = re.fullmatch(pattern, src_c)
-    if not m:
-        return False
-    for gi in range(1, groups + 1):
-        s, e = m.span(f"g{gi}")
-        if s == e:
-            continue  # 未吸收任何字符
-        if not any(a <= s and e <= b for a, b in src_spans):
-            return False
-    return True
+    return _match_segments(segments, src_c, src_spans, 0, 0, {})
 
 
-def _paras_match(src_c: str, rep_c: str, pat_info,
+def _paras_match(src_c: str, rep_c: str, seg_info,
                  src_spans: list[tuple[int, int]]) -> str | None:
     """段落匹配：'exact' / 'relaxed'（差异仅落在真实公式区间内）/ None。"""
     if src_c == rep_c:
         return "exact"
-    if pat_info and _relaxed_match(src_c, pat_info, src_spans):
+    if seg_info and _relaxed_match(src_c, seg_info, src_spans):
         return "relaxed"
     return None
 
 
 def _align_paragraphs(src_c: list[str], rep_c: list[str],
-                      patterns: list,
+                      segments_list: list,
                       src_spans: list[list[tuple[int, int]]]):
     """按顺序做一对一 DP 对齐，返回 (pairs, unmatched_src, unmatched_rep)。
 
@@ -322,7 +341,7 @@ def _align_paragraphs(src_c: list[str], rep_c: list[str],
     kind: list[list[str | None]] = [[None] * m for _ in range(n)]
     for i in range(n):
         for j in range(m):
-            kind[i][j] = _paras_match(src_c[i], rep_c[j], patterns[j], src_spans[i])
+            kind[i][j] = _paras_match(src_c[i], rep_c[j], segments_list[j], src_spans[i])
     dp = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(n - 1, -1, -1):
         for j in range(m - 1, -1, -1):
@@ -381,10 +400,10 @@ def _check_integrity(text: str, marked_section: str | None, source_text: str | N
     src_c = [_compress(p) for p in src_paras]
     rep_c = [_compress(p) for p in rep_paras]
     src_spans = [M.scan_math_spans(p) for p in src_c]
-    patterns = [_paragraph_pattern(rep_c[j], exempt_nums) for j in range(len(rep_c))]
+    segments_list = [_paragraph_segments(rep_c[j], exempt_nums) for j in range(len(rep_c))]
 
     pairs, unmatched_src, unmatched_rep = _align_paragraphs(
-        src_c, rep_c, patterns, src_spans)
+        src_c, rep_c, segments_list, src_spans)
     for i in unmatched_src:
         stats["missing_paragraphs"] += 1
         issues.append(VerifyIssue(
