@@ -1,5 +1,7 @@
 # M1 端到端竖切样本（高中物理「第 6 讲」）
 
+> 此快照为历史布局，保持原样。当前新布局见 ADR 0002；历史写入仍须授权工作区并显式 `--legacy-layout`。
+
 本目录是 [docs/M1.md](../../docs/M1.md) 的可复现快照，随提交入仓；
 `output/` 下的运行产物仍不入仓，复现时先还原本快照。
 
@@ -39,7 +41,7 @@ for u in 单元1 单元2 单元3 单元4 单元5; do
   .venv/bin/jiaodui verify-report --unit "output/M1-第6讲校对测试/units/第 6 讲校对测试/$u"
   echo "$u exit=$?"
 done
-.venv/bin/jiaodui build-docx "output/M1-第6讲校对测试/units/第 6 讲校对测试"
+.venv/bin/jiaodui build-docx "output/M1-第6讲校对测试/units/第 6 讲校对测试" --work-root "$PWD" --legacy-layout
 ```
 
 预期：5 个单元 `verify-report` 退出码全 0；`build-docx` 输出

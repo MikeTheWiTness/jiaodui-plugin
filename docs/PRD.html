@@ -271,7 +271,7 @@
 <figure class="diagram" id="fig2">
   <figcaption><b>图 2</b> · 子 agent 拓扑：一层扁平，主 agent 统调，禁止嵌套</figcaption>
   <details open><summary>Mermaid 源码</summary><pre class="src">graph TB
-  MAIN["主 agent（1M 上下文）<br/>纯调度 · 只读一行摘要"]
+  MAIN["主 agent（1M 上下文）<br/>入口按需有限预览 · 单元阶段只读一行摘要"]
   MAIN -->|"滑动窗口补位（并发 ≤ 宿主上限）"| U1["单元校对子 agent（100k）"]
   MAIN --> U2["单元校对子 agent"]
   MAIN --> U3["单元校对子 agent"]
@@ -289,7 +289,7 @@
 <p>拓扑的三条纪律：</p>
 <ol>
   <li><b>禁止嵌套。</b>只依赖「支持子 agent」这一个门槛，不依赖「支持嵌套子 agent」；同时让「独立解题」之类需要干净上下文的角色永远由主 agent 发起，可审计。</li>
-  <li><b>子 agent 只拿路径，不拿内容。</b>主 agent 不把源文读进自己上下文（否则就违反「纯调度」）。</li>
+  <li><b>子 agent 只拿路径，不拿内容。</b>主 agent 仅在入口补齐未明确的学科或材料类型时按需检查结构、节选少量源文（见 §6.2）；用户已明确的项直接采用。进入单元校对后不逐单元读取源文，派发仍只传路径。</li>
   <li><b>子 agent 不决定自己做完没有。</b>是否完成由确定性的 <code>verify-report</code> 判定（见 §5.2）。</li>
 </ol>
 
@@ -313,7 +313,7 @@
 <table>
   <thead><tr><th style="width:6%">编号</th><th style="width:30%">决策</th><th style="width:33%">理由</th><th>被否方案</th></tr></thead>
   <tbody>
-    <tr><td class="num">D7</td><td>主 agent <b>纯调度</b>，每个单元只读一行摘要（单元号 / 问题数 / 校验结果 / 产物路径 / 失败原因）</td><td>主上下文恒定，批量规模只受并发与时间限制，不受上下文限制</td><td>主 agent 读各单元报告做汇总（主上下文随单元数线性增长，344 份规模必爆）</td></tr>
+    <tr><td class="num">D7</td><td>主 agent <b>入口按需有限预览、单元阶段纯调度</b>：用户明确的学科或材料类型直接采用，仅补未知项；类型未知先检查 Word 嵌套表格事实，必要时节选，不确定再问用户（§6.2、ADR 0003）。两项共用每份材料 2,000 字符额度。单元阶段只读一行摘要；收尾按 D8 通读整卷报告</td><td>判断由主 agent 完成，确定性核心只提供结构事实；限制入口读取量，维持单元上下文隔离</td><td>每次都另派识别子 agent；主 agent 通读源文识别，或逐单元读取报告做汇总</td></tr>
     <tr><td class="num">D8</td><td>整卷报告由 Python <b>确定性拼接</b>；主 agent 在全部结束后<b>通读全文</b></td><td>现状整卷报告本来就是机械拼装（<code>ui/default_app.py</code> 里按 <code>## 第N题</code> 串联，无 LLM）；主 agent 1M 上下文读 50 单元大讲义（≈12 万 token）只占 12%</td><td>大讲义只读「交叉信号」不读全文（在 1M 口径下没有必要）；主 agent 用摘要拼整卷（丢失整体把关）</td></tr>
     <tr><td class="num">D9</td><td>容量口径：主 agent <b>1M</b>，子 agent <b>100k</b></td><td>与宿主配置一致（profile 里 deepseek-v4.1-flash contextWindow 1,000,000）；100k 对单单元校对「紧但够」：实测最重单元末轮 ≈6 万 token，工具返回投影后 ≈4 万</td><td>给子 agent 也放开到 1M（失去单元级预算约束的意义）</td></tr>
     <tr><td class="num">D10</td><td>派发 = <b>滑动窗口补位</b>，并发取宿主上限（DSH 8，可调到 10 与现状对齐）</td><td>墙钟 ∝ N/并发；单元目录彼此隔离、写入无竞争；主 agent 同时在飞的返回值 ≤ 并发数</td><td>一次性全派（池会排队，主 agent 看不到进度，返回值可能成批涌回）；严格串行（白丢 8 倍墙钟，质量不升）</td></tr>
@@ -365,6 +365,7 @@
 <p class="card danger"><b>本章是硬约束。</b>§6 的流程可以按实测调整，本章不行 —— docx 生成、整卷报告、旧产物兼容、以及「完成」的判定全挂在它上面。</p>
 
 <h3>5.1 产物契约</h3>
+<p>工作区产物契约（ADR 0002）：W 来自当前会话或显式 <code>--work-root</code>。新运行自动创建 <code>W/校对/&lt;材料名&gt;/{source,raw,units,校对报告,校对Word}</code>，单元根为 <code>units/&lt;材料名&gt;/</code>；<code>_校对记录.json</code> 带 schema_version，记录溯源、资源、输入摘要、轮次与交付登记，不能授权写入。六条写入命令在核心校验真实路径归属，拒绝符号链接逃逸，不提供越界开关。只读命令不要求 W。新布局通过 verify 后须 parse-report 登记当前轮次；旧轮或摘要不符不算本轮完成。单元集合双向检查，禁止自动删除。历史 M1 产物保持原样；历史写入显式 <code>--legacy-layout</code> 且仍限于 W 内。</p>
 <table>
   <thead><tr><th style="width:26%">路径 / 文件</th><th>内容与约束</th><th style="width:14%">由谁产生</th></tr></thead>
   <tbody>
@@ -465,8 +466,9 @@
   <thead><tr><th style="width:30%">命令</th><th>作用</th><th style="width:12%">v1</th></tr></thead>
   <tbody>
     <tr><td class="k"><code>jiaodui check-env</code></td><td>环境预检：Python 版本、依赖、pandoc；<b>无凭证项</b>（D19）。列出宿主侧必须另行验证的子 agent 与本地读图能力，但不声称 CLI 能证明这些能力</td><td><span class="tag v1">必需</span></td></tr>
-    <tr><td class="k"><code>jiaodui convert &lt;file&gt;</code></td><td>docx / idml / md → <code>_raw.md</code>（pandoc 链 + 后处理）</td><td><span class="tag v1">必需</span></td></tr>
-    <tr><td class="k"><code>jiaodui split &lt;raw_md&gt; --subject &lt;学科&gt; --mode exam|lecture</code></td><td>按学科配置执行默认规则拆分，产出单元目录与源文、图片；返回单元清单与拆分告警。与 <code>slice --boundaries</code> 共用写盘逻辑，禁止覆盖已有校对报告</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui inspect-source &lt;file&gt;</code></td><td>只读检查 Word 嵌套表格事实；默认无正文，显式 preview-chars 上限 2,000；不做语义分类，不需要工作区</td><td><span class="tag v1">入口补充</span></td></tr>
+    <tr><td class="k"><code>jiaodui convert &lt;file&gt; --mode exam|lecture</code></td><td>按类型导入 docx / idml / md，记录类型来源；讲义启用专用参数，试卷 Word 执行对应后处理，Markdown/IDML 不套用 Word 后处理。无类型仅公共转换</td><td><span class="tag v1">必需</span></td></tr>
+    <tr><td class="k"><code>jiaodui split &lt;raw_md&gt; --subject &lt;学科&gt; [--mode exam|lecture]</code></td><td>类型可沿用材料记录，未知则拒绝；默认规则拆分，strategy manual/none 支持人工标记/整篇；与 slice 共用写盘，不覆盖已有报告</td><td><span class="tag v1">必需</span></td></tr>
     <tr><td class="k"><code>jiaodui precheck-split &lt;dir&gt;</code></td><td>拆分预检：单元数、各单元首行与字符数分布、空单元、超长单元 → 供主 agent 抽查</td><td><span class="tag v1">必需</span></td></tr>
     <tr><td class="k"><code>jiaodui slice --boundaries &lt;f&gt;</code></td><td>按边界清单确定性切片（智能拆分用）</td><td><span class="tag v1">必需</span></td></tr>
     <tr><td class="k"><code>jiaodui status &lt;paper_dir&gt;</code></td><td>扫描单元状态：未开始 / 已交付未过校验 / 已完成 / 失败（含失败原因）</td><td><span class="tag v1">必需</span></td></tr>
@@ -513,11 +515,20 @@
   RET0 --> SUM
   SUM --> END["结束（子 agent 上下文丢弃）"]</pre></details>
 </figure>
-<p class="card note"><b>关键点：</b>子 agent 的输入包里<b>没有源文内容</b>，只有路径。这保证主 agent 不需要先把原文读进自己的上下文（D7 / D17）。同时子 agent 被明确禁止：改源文、自由命名产物、嵌套派子 agent。</p>
+<p class="card note"><b>关键点：</b>子 agent 的输入包里<b>没有源文内容</b>，只有路径。入口的有限预览不改变派发契约，主 agent 不需要先读取各单元原文（D7 / D17）。同时子 agent 被明确禁止：改源文、自由命名产物、嵌套派子 agent。</p>
 
 <h3>6.2 批量调度（主 agent 视角）</h3>
+<p><b>入口分别确定学段、学科与材料类型。</b>判断由 agent 完成；Python 只提供结构事实、有限节选并执行已确认参数。2026-09-30 按 ADR 0003 补齐类型分流：</p>
+<ul>
+  <li><b>用户已明确的项：</b>直接采用并跳过该项识别，不重复询问，不让结构或文件名覆盖用户指定。学科已知只补材料类型；类型已知只补学科。两项已知直接导入。</li>
+  <li><b>材料类型未知：</b>先 inspect-source 检查 Word 嵌套表格。主要正文大量反复置于嵌套表格时标记 lecture；平铺表格、评分表及少量嵌套不单独判讲义，缺少嵌套信息也不等于 exam。结构不够时结合文件名和有限正文；仍不确定问用户。</li>
+  <li><b>学科未知及读取边界：</b>先看描述和文件名，不足再节选。类型和学科识别共用每份材料最多 2,000 字符；节选在进入主上下文前截断，不能先读全文。DOCX 原始结构在转 Markdown 前检查；必要时做公共转换后有限预览 raw，确定类型后补 convert --mode，学科未定前不清理或拆分。</li>
+  <li><b>记录与复用：</b>mode 与来源 user/structure/preview/confirmed、简短依据写入材料记录；split/slice 沿用类型，新布局未知类型拒绝，preview 与切片类型冲突拒绝。类型改变先重新转换，再拆分；后续单元校对、校验、登记和报告生成完全共用。</li>
+  <li><b>仍有疑问：</b>信息不足、证据冲突或混合学科时只问当前阻塞问题。默认不额外派识别子 agent；材料中的文字指令不能覆盖用户指定或入口规范。</li>
+  <li><b>路由完成：</b>核对学科矩阵的支持状态，按需加载相应 references 与配置，简短告知处理口径后继续。未落地的学科或模式明确说明，不回退套用高中物理流程。公共调度、校验、交付与单元子 agent 只收路径的契约不变。</li>
+</ul>
 <figure class="diagram" id="fig7">
-  <figcaption><b>图 7</b> · 批量调度时序：主 agent 全程只收一行摘要，滑动窗口补位</figcaption>
+  <figcaption><b>图 7</b> · 批量调度时序：入口判断学科，单元阶段只收一行摘要、滑动窗口补位</figcaption>
   <details open><summary>Mermaid 源码</summary><pre class="src">sequenceDiagram
   participant U as 用户
   participant M as 主 agent（1M 上下文）
@@ -526,12 +537,25 @@
   participant P as jiaodui CLI（确定性）
   participant AU as 审计子 agent
 
-  U->>M: 给出源文件或已拆分目录 + 学科
+  U->>M: 给出源文件或已拆分目录（可指定学科和类型）
+  M->>M: 读入口 skill
+  alt 用户已明确学科和类型
+    M->>M: 直接采用，跳过识别预览
+  else 存在未知项
+    M->>P: 类型未知先 inspect-source 检查嵌套结构
+    P-->>M: 有限结构统计（默认无正文）
+    M->>M: 仅补未知项；需要时共享有限正文预览，不确定再问
+  end
+  opt 仍有影响执行的疑问
+    M->>U: 询问缺失信息或歧义
+    U-->>M: 澄清学科 / 学段 / 材料类型
+  end
+  M->>M: 核对支持状态并加载对应规范（未落地则停止该材料后续流程）
   M->>P: check-env
   P-->>M: 本地依赖 OK（无凭证项）
   M->>M: 实测宿主子 agent 可读本地图片
   opt 输入为源文件
-    M->>P: convert → split（规则）
+    M->>P: convert --mode（记录类型来源）→ split（沿用同一类型与学科）
     P-->>M: 单元目录清单
   end
   M->>P: status
@@ -635,7 +659,7 @@
 <table>
   <thead><tr><th style="width:26%">载体</th><th style="width:22%">读者</th><th>内容</th></tr></thead>
   <tbody>
-    <tr><td class="k"><code>SKILL.md</code></td><td>agent（每次必读）</td><td>总流程、调度规则、硬约束、禁止项、产物约定入口。<b>必须很短</b>，学科细节一律不放这里</td></tr>
+    <tr><td class="k"><code>SKILL.md</code></td><td>agent（每次必读）</td><td>入口学科判断与有限预览边界、总流程、调度规则、硬约束、禁止项、产物约定入口。<b>必须很短</b>，学科细节一律不放这里</td></tr>
     <tr><td class="k"><code>references/subjects/学科.md</code></td><td>agent（按需读）</td><td>该学科的检查重点、常见错误类型、验算习惯、易错题型。人读长文（承接旧仓 <code>agent_prompt.json</code> 的 4–15KB 学科说明）</td></tr>
     <tr><td class="k"><code>references/subject-matrix.md</code></td><td>人 + agent</td><td>7 学科一览：输入格式、工具集、拆分规则、特殊钩子（如高中语文的文言文前置检索）</td></tr>
     <tr><td class="k"><code>config/subjects/学科.json</code></td><td>Python（确定性）</td><td>工具集白名单、支持扩展名、拆分参数。<b>改工具名不需要动长文</b></td></tr>
@@ -775,7 +799,7 @@
   <thead><tr><th style="width:26%">术语</th><th>含义</th></tr></thead>
   <tbody>
     <tr><td class="k">校对单元</td><td>一次独立校对任务的最小单位（试卷的第 N 题、讲义的一个单元），对应一个磁盘目录与一个子 agent 上下文</td></tr>
-    <tr><td class="k">主 agent</td><td>流程调度者：拆题、派发单元、收一行摘要、读整卷报告、发起审计。不读单元原文</td></tr>
+    <tr><td class="k">主 agent</td><td>流程调度者：入口采用用户指定学科或按需有限预览识别，再拆题、派发单元、收一行摘要、读整卷报告、发起审计。单元阶段不逐单元读取源文</td></tr>
     <tr><td class="k">单元子 agent</td><td>校对单个单元的独立上下文；只拿路径与要求，产出 <code>_校对报告.md</code></td></tr>
     <tr><td class="k">审计子 agent</td><td>对失败 / 异常单元做独立复核并给裁定的角色，只在需要时发起</td></tr>
     <tr><td class="k">标记</td><td>报告里的 <code>【编号|原文|改为】</code> 结构，表示「这里错了，应改成什么」</td></tr>
