@@ -17,6 +17,7 @@ import pytest
 from jiaodui.docx_report import (DocxBuildResult, build_docx, find_pandoc,
                                  generate_combined_docx)
 from jiaodui.formula_render import matplotlib_available
+from jiaodui.formula_render import _CJK_FONT
 
 PANDOC = find_pandoc()
 # 真实 import 判定：find_spec 会把「装了但 dlopen 失败（macOS 代码签名）」
@@ -481,9 +482,12 @@ class TestEscapedPipeInMarkers(unittest.TestCase):
         self.assertIn("∥", doc)
         # 改后（单竖线公式）写入批注内容：matplotlib 可用时渲染为公式图片、
         # 不再以 LaTeX 文本出现；缺失时按契约降级为原文文本（此处不强求图片）
-        if HAS_MPL:
+        if HAS_MPL and _CJK_FONT:
             self.assertIn("<w:drawing>", cmt)
             self.assertNotIn(r"\left|{E}_{1}-{E}_{2}\right|", cmt)
+        else:
+            self.assertIn(r"\left|{E}_{1}-{E}_{2}\right|", cmt)
+            self.assertIn("双竖线改单竖线。", cmt)
 
 
 @PANDOC_REQUIRED

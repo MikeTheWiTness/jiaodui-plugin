@@ -4,8 +4,9 @@
 
 1. 加载更新后的插件（既有 JS 模块代际需要重启宿主），打开独立工作区 A，在「校对」preset 调用原生工具：`args: ["check-env", "--json"]`。保存工具的完整返回与 `runtime.work_root`，确认 stdout 非空、CLI 路径正确、work_root 等于 A。
 2. 同一宿主打开独立工作区 B，重复调用，确认 work_root 等于 B 且不同于 A。两次都不传 cwd 或 work-root，才能检验真实会话注入。
-3. 以工作区外的同一源文件，在两会话分别调用 convert、split，随后让单元子 agent 读取真实图片、落盘报告、verify、parse-report 登记，再 build-report/build-docx。确认所有校对产物只在各自 `校对/<材料名>/` 下；原始源文件 SHA 不变。
-4. 将其中的材料目录整体搬到另一个工作区，重新 status/build-docx，确认登记有效且图片不缺失。重跑、冲突、双向单元集和符号链接反例另由确定性测试覆盖。
+3. 首次校对派发前按随包 skill 的 `references/vision-probe.md` 验证子 agent：只派发 `assets/vision-probe.png` 的绝对路径和观察要求，不传答案或 SVG。不依赖教材图片，也不在工作区创建随机探针目录。DSH `read_image` 使用 `file_path`；参数错误按当前 schema 修正后最多重试 2 次，若用户明确遇错即停则停止。无图材料也必须能走此探针。
+4. 以工作区外的同一源文件，在两会话分别调用 convert、split，再让单元子 agent 读取实际材料图片、落盘报告、verify、parse-report 登记，最后 build-report/build-docx。确认所有校对产物只在各自 `校对/<材料名>/` 下；原始源文件 SHA 不变。同会话同模型/工具配置复用成功的固定探针，不逐材料重测；透明教材图仍按需合成白底。
+5. 将其中的材料目录整体搬到另一个工作区，重新 status/build-docx，确认登记有效且图片不缺失。重跑、冲突、双向单元集和符号链接反例另由确定性测试覆盖。
 
 check-env 的 runtime.work_root 在子进程内解析 JIAODUI_WORK_ROOT，因此其正确返回同时验证显式 env 注入。记录包括宿主版本、会话工作区、工具退出码、完整 stdout/stderr、产物路径和执行日期。不记录凭证。
 

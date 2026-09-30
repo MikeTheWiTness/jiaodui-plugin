@@ -116,3 +116,24 @@ def test_bundled_skill_has_no_extra_files():
     src_files = _skill_files(SKILL_SRC)
     dst_files = _skill_files(SKILL_PKG)
     assert dst_files == src_files
+
+
+def test_vision_probe_white_png_is_ready_without_source_material():
+    """白底探针随包可直接解码；透明资源无需在用户工作区现场渲染。"""
+    from PIL import Image, ImageChops
+    from xml.etree import ElementTree
+    assets = SKILL_PKG / "assets"
+    assert ElementTree.parse(assets / "vision-probe.svg").getroot().tag.endswith("svg")
+    with Image.open(assets / "vision-probe-transparent.png") as source, Image.open(assets / "vision-probe.png") as ready:
+        assert source.size == ready.size == (480, 480)
+        assert source.mode == "RGBA" and source.getchannel("A").getextrema() == (0, 255)
+        rgba = source.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, "white")
+        white.alpha_composite(rgba)
+        assert ImageChops.difference(white.convert("RGB"), ready.convert("RGB")).getbbox() is None
+        assert ready.convert("RGBA").getchannel("A").getextrema() == (255, 255)
+        assert ready.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+        # 独立观察要求中的三个蓝点，避免提交空白或漏图的 PNG。
+        for point in ((186, 415), (240, 415), (294, 415)):
+            assert ready.convert("RGB").getpixel(point) == (40, 123, 209)
+        assert ready.convert("RGB").getpixel((240, 240)) == (223, 51, 69)

@@ -580,7 +580,7 @@
   AU-->>M: 裁定：可修 / 需人工 / 建议弃用
   M-->>U: 总摘要 + 失败清单（不自动改源文）</pre></details>
 </figure>
-<p class="card danger"><b>读图是前置硬门槛。</b><code>check-env</code> 只能提示，不能代替主 agent 验证宿主能力。主 agent 须在任何校对派发前用实际本地图片验证子 agent 可读取；验证失败就拒绝本次执行，不能静默跳过图片检查（D14）。</p>
+<p class="card danger"><b>读图是前置硬门槛。</b><code>check-env</code> 只能提示，不能代替主 agent 验证宿主能力。首次校对派发前让干净上下文的子 agent 读取随包 <code>assets/vision-probe.png</code> 白底 PNG 并描述内容，输入只给绝对路径及观察要求，不给答案或 SVG 源码。无图片材料同样可验证，不再寻找教材图片或生成随机探针目录；同会话同模型/工具配置通过后复用，新会话或配置改变重测。DSH <code>read_image</code> 用 <code>file_path</code>，调用前以当前 schema 为准；参数校验错误先纠正、最多重试 2 次，用户明确遇错即停时从其要求。有限修正后仍不能确认视觉能力才停止校对，不能静默跳过图片检查。固定探针通过不替代真实题图检查；实际透明 PNG 仍按需白底合成（D14）。</p>
 
 <h3>6.3 失败路径</h3>
 <figure class="diagram" id="fig8">

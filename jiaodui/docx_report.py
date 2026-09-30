@@ -23,6 +23,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from dataclasses import dataclass, field
+from lxml import etree
 
 from .log import log
 from .markers import (INLINE_MARKER_CAPTURE_RE, MARKER_NOOP,
@@ -146,10 +147,39 @@ def _is_included_unit(part: str) -> bool:
     return True
 
 
+_WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_WORD = {"w": _WORD_NS}
+
+
+def _word_xml(doc_xml: str):
+    """解析完整 OOXML；同时兼容无命名空间声明的历史测试片段。"""
+    parser = etree.XMLParser(resolve_entities=False, no_network=True)
+    try:
+        return etree.fromstring(doc_xml.encode("utf-8"), parser), False
+    except etree.XMLSyntaxError:
+        return etree.fromstring(f'<probe {_NS}>{doc_xml}</probe>'.encode("utf-8"), parser), True
+
+
+def _is_heading_one(paragraph) -> bool:
+    style = paragraph.find("w:pPr/w:pStyle", _WORD)
+    return style is not None and style.get(f"{{{_WORD_NS}}}val") == "Heading1"
+
+
 def _split_unit_sections(doc_xml: str) -> list[str]:
-    """按 Heading1 段落把 document.xml 切成各单元正文段（不含文首前导）。"""
-    chunks = re.split(r'(?=<w:p>\s*<w:pPr>\s*<w:pStyle w:val="Heading1")', doc_xml)
-    return chunks[1:] if chunks else []
+    """按标题样式切单元，不依赖 pPr 子元素顺序或段落属性。"""
+    if not doc_xml:
+        return []
+    root, _ = _word_xml(doc_xml)
+    body = root.find("w:body", _WORD)
+    if body is None:
+        body = root
+    sections: list[str] = []
+    for node in body:
+        if node.tag == f"{{{_WORD_NS}}}p" and _is_heading_one(node):
+            sections.append("")
+        if sections:
+            sections[-1] += etree.tostring(node, encoding="unicode", with_tail=False)
+    return sections
 
 
 def _audit_generated_docx(out_path: str | None, included: list[str],
@@ -338,9 +368,13 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
     # 全局硬门槛交叉复核：正文三段锚点数量、comments.xml 批注数必须相等，
     # 且等于「marker 锚点 + 无问题标题批注」。
     expected_ids = result.anchor_count + result.heading_comment_count
+    expected_headings = sum(1 for _, part in questions if not _report_marker_counts([("unit", part)])["unit"])
     pairing_ok, pairing_problems = _check_anchor_pairing(doc_xml, comment_ids)
     count_ok = (len(comment_ids) == expected_ids)
-    result.anchor_structure_ok = bool(out_path) and pairing_ok and count_ok
+    result.anchor_structure_ok = (bool(out_path) and pairing_ok and count_ok
+                                   and result.heading_comment_count == expected_headings)
+    if out_path and result.heading_comment_count != expected_headings:
+        result.warnings.append(f"无问题标题批注 {result.heading_comment_count} 与期望 {expected_headings} 不一致（不交付）")
     for problem in pairing_problems:
         result.warnings.append(f"锚点配对不一致：{problem}（不交付）")
     if out_path and not count_ok:
@@ -913,29 +947,44 @@ def _anchor_heading_comments(doc_xml: str, heading_anchors: dict) -> str:
     批注锚点只能在此转换后处理：匹配 pStyle=Heading1 段落中 w:t 文本等于
     标题文本的 run，在 run 前后插入 commentRangeStart/End + commentReference。
     """
+    if not heading_anchors:
+        return doc_xml
+    root, fragment = _word_xml(doc_xml)
+    paragraphs = root.xpath(".//w:p", namespaces=_WORD)
+    if root.tag == f"{{{_WORD_NS}}}p":
+        paragraphs.insert(0, root)
+    changed = False
     for gid, title in heading_anchors.items():
-        # rangeStart 在 run 前、rangeEnd+reference 在 run 后（与 pandoc 正常锚点同构）。
-        # rPr 用「自闭合元素序列」匹配（pandoc rPr 子元素均为自闭合），
-        # 避免 .*? 回溯跨段匹配到远处标题段。
-        pat = re.compile(
-            r'(<w:p>\s*<w:pPr>\s*<w:pStyle w:val="Heading1"[^>]*/>\s*</w:pPr>\s*)'
-            r'(<w:r>\s*<w:rPr>\s*(?:<w:[^>]*/>\s*)*</w:rPr>\s*<w:t[^>]*>)('
-            + re.escape(escape(title)) + r')(</w:t>\s*</w:r>)(\s*</w:p>)', re.DOTALL)
-
-        def _repl(m, _gid=gid):
-            return (m.group(1)
-                    + f'<w:commentRangeStart w:id="{_gid}"/>'
-                    + m.group(2) + m.group(3) + m.group(4)
-                    + f'<w:commentRangeEnd w:id="{_gid}"/>'
-                    + f'<w:r><w:commentReference w:id="{_gid}"/></w:r>'
-                    + m.group(5))
-
-        doc_xml, count = pat.subn(_repl, doc_xml)
-        if count == 0:
+        matches = [p for p in paragraphs if _is_heading_one(p)
+                   and "".join(p.xpath(".//w:t/text()", namespaces=_WORD)) == title]
+        if not matches:
             log(f"   ⚠️ Word 报告：标题「{title}」未在 Heading1 段落匹配，无问题批注锚点丢失")
-        elif count > 1:
-            log(f"   ⚠️ Word 报告：标题「{title}」匹配到 {count} 处，存在同名标题重复注入")
-    return doc_xml
+            continue
+        if len(matches) != 1:
+            log(f"   ⚠️ Word 报告：标题「{title}」匹配到 {len(matches)} 处，拒绝重复注入")
+            continue
+        paragraph = matches[0]
+        text_children = [child for child in paragraph if child.xpath(".//w:t", namespaces=_WORD)]
+        if not text_children:
+            continue
+        start = etree.Element(f"{{{_WORD_NS}}}commentRangeStart")
+        start.set(f"{{{_WORD_NS}}}id", str(gid))
+        end = etree.Element(f"{{{_WORD_NS}}}commentRangeEnd")
+        end.set(f"{{{_WORD_NS}}}id", str(gid))
+        ref_run = etree.Element(f"{{{_WORD_NS}}}r")
+        ref = etree.SubElement(ref_run, f"{{{_WORD_NS}}}commentReference")
+        ref.set(f"{{{_WORD_NS}}}id", str(gid))
+        paragraph.insert(paragraph.index(text_children[0]), start)
+        after_text = paragraph.index(text_children[-1]) + 1
+        paragraph.insert(after_text, end)
+        paragraph.insert(after_text + 1, ref_run)
+        changed = True
+    if not changed:
+        return doc_xml
+    if fragment:
+        return "".join(etree.tostring(child, encoding="unicode") for child in root)
+    declaration = doc_xml[:doc_xml.index("?>") + 2] if doc_xml.startswith("<?xml") else ""
+    return declaration + etree.tostring(root, encoding="unicode")
 
 
 def _strip_unanchored_comments(doc_xml: str):

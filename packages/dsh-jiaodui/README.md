@@ -13,6 +13,7 @@
       cordis.patch.yml       自带组合包：插入 preset-jiaodui（含 skill 挂载 + 原生工具行）
       tools/index.js         宿主半侧插件：注册 jiaodui 原生工具（argv 透传 CLI）
       skills/jiaodui/        随包 skill（仓库 skills/jiaodui 的副本，测试守一致性）
+        assets/             固定读图探针（SVG 源、透明 PNG、预合成白底 PNG）
       locale/{zh,en}.json    插件管理页的标题与描述
       icon.svg               插件卡片图标
       README.md
@@ -62,6 +63,7 @@ Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要
 2. **新开**一个会话，在 agent preset 里选「校对」（或在「设置 → 通用」把它设为之后会话的默认）。
 3. 验证 skill：会话的 skill 目录里应出现 `jiaodui`；加载它返回 SKILL.md 正文。
 4. 验证工具：让 agent 调用 `jiaodui` 工具，例如 `args: ["check-env"]`，应看到退出码与输出。
+5. 视觉门槛使用随包 `skills/jiaodui/assets/vision-probe.png`，不依赖待校对文件有没有图片，不需要现场绘图。按 skill 的 `references/vision-probe.md` 派发不带答案的观察任务；DSH `read_image` 使用 `file_path`，应先核对工具 schema。同一会话和模型/工具配置通过一次即可复用。
 
 ## 配置（profile patch 按行 id 覆盖）
 
