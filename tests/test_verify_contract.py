@@ -140,6 +140,20 @@ def test_reason_missing_and_orphan_rejected():
     assert "reason.missing" in codes and "reason.orphan" in codes
 
 
+def test_valid_second_reason_before_unheaded_verification_note():
+    source = "甲错字。\n\n乙错字。"
+    report = ("一般问题\n### 标记原文\n甲【1|错字|正字】。\n\n乙【2|错字|正字】。\n"
+              "### 修改原因\n1. 第一处错别字。\n\n2. 第二处错别字。\n核验说明：其余内容已核对。")
+    assert verify_report_text(report, source).ok
+    missing = report.replace("2. 第二处错别字。\n", "")
+    assert "reason.missing" in _codes(verify_report_text(missing, source))
+
+
+def test_multiline_duplicate_reasons_still_rejected():
+    text = VALID.replace("1. 参数写错。", "1. 第一条。\n继续解释。\n1. 第二条。\n核验说明：其他内容。")
+    assert "reason.duplicate" in _codes(verify_report_text(text, SOURCE))
+
+
 def test_reason_duplicate_number_rejected():
     text = VALID.replace("1. 参数写错。", "1. 第一条。\n1. 第二条。")
     r = verify_report_text(text, SOURCE)

@@ -231,7 +231,8 @@ def _check_anchor_pairing(doc_xml: str, comment_ids: set[str]) -> tuple[bool, li
     return (not problems), problems
 
 
-def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
+def build_docx(paper_dir: str, out_dir: str | None = None,
+               *, legacy_layout: bool = False) -> DocxBuildResult:
     """生成 Word 批注版，并在生成后解压复核「实际锚点」是否与错误标记对账。
 
     对账口径（PRD §5.1 / §6.4）：
@@ -243,24 +244,36 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
     - missing_count = marker_count - anchor_count - formula_fallback_count；
       missing_count != 0 时 ok=False（产物保留，由上层决定是否交付）。
     """
+    from . import material
+    from .workdir import ensure_tree, input_path
+    paper_path = input_path(paper_dir)
+    root, data = material.downstream(paper_path, legacy_layout=legacy_layout)
+    out_dir = str(ensure_tree(out_dir if out_dir is not None else root / "校对Word"))
+    paper_dir = str(paper_path)
     result = DocxBuildResult(out_path=None)
-    paper_path = Path(paper_dir)
     if not paper_path.is_dir():
         log(f"❌ Word 报告：目录不存在 {paper_dir}")
         result.warnings.append(f"目录不存在: {paper_dir}")
         return result
 
-    from .verify import verify_unit  # 局部导入，避免潜在循环依赖
+    from .verify import verify_report_text  # 局部导入，避免潜在循环依赖
 
     questions_all = _collect_reports(paper_path)
+    if data is not None:
+        seen = {qid for qid, _ in questions_all}
+        from . import paths
+        for name in data["unit_set"]:
+            if name not in seen and not paths.is_skip_unit(paper_path / name):
+                result.excluded_units.append({"unit": name, "reason": "本轮尚无校对报告"})
+                result.warnings.append(f"{name}: 尚无校对报告，不可作为整卷交付")
     # 硬约束：下游不得消费未通过 verify-report 的报告。先校验，再排除不合格正文。
     questions = []
     for qid, part in questions_all:
-        verdict = verify_unit(paper_path / qid)
-        if verdict.ok:
+        verdict = verify_report_text(part, _read_unit_source(paper_path, qid))
+        if verdict.ok and (data is None or material.registered(root, data, paper_path / qid)):
             questions.append((qid, part))
             continue
-        reason = "；".join(i.message for i in verdict.errors[:2]) or "verify-report 未通过"
+        reason = "；".join(i.message for i in verdict.errors[:2]) or "本轮尚未登记或摘要已改变"
         result.excluded_units.append({"unit": qid, "reason": reason})
         result.warnings.append(f"{qid}: 未通过 verify-report，已排除出 Word 交付（{reason}）")
         log(f"⛔ {qid}: 未通过 verify-report，排除出 Word 交付")
@@ -281,7 +294,7 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
         return result
 
     out_path = generate_combined_docx(paper_dir, out_dir,
-                                      only_units={qid for qid, _ in questions})
+                                      only_units={qid for qid, _ in questions}, legacy_layout=legacy_layout)
     result.out_path = out_path
     if out_path is None:
         result.warnings.append("docx 生成失败：无可处理单元或 pandoc 转换失败")
@@ -342,7 +355,7 @@ def build_docx(paper_dir: str, out_dir: str | None = None) -> DocxBuildResult:
 
 
 def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
-                           only_units: set[str] | None = None) -> str | None:
+                           only_units: set[str] | None = None, *, legacy_layout: bool = False) -> str | None:
     """扫描试卷/讲义目录，生成一份带批注的合并 Word 报告。
 
     Args:
@@ -352,7 +365,10 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
     Returns:
         docx 路径，失败返回 None
     """
-    paper_path = Path(paper_dir)
+    from . import material
+    from .workdir import ensure_inside, ensure_tree, input_path
+    paper_path = input_path(paper_dir)
+    root, data = material.downstream(paper_path, legacy_layout=legacy_layout)
     if not paper_path.is_dir():
         log(f"❌ Word 报告：目录不存在 {paper_dir}")
         return None
@@ -362,19 +378,24 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
         return None
 
     questions = _collect_reports(paper_path)
+    if data is not None:
+        from .verify import verify_report_text
+        questions = [(qid, part) for qid, part in questions
+                     if material.registered(root, data, paper_path / qid)
+                     and verify_report_text(part, _read_unit_source(paper_path, qid)).ok]
     if only_units is not None:
         questions = [(qid, part) for qid, part in questions if qid in only_units]
     if not questions:
         log(f"⚠️ Word 报告：{paper_dir} 下未找到任何可交付的 _校对报告.md")
         return None
 
-    out_root = Path(out_dir) if out_dir else paper_path.parent / "校对Word"
+    out_root = ensure_tree(out_dir if out_dir is not None else root / "校对Word")
     # 必须绝对化：pandoc 以临时目录为 cwd，相对 out_dir 会把 docx 写进临时目录，
     # 后续 _inject_comments 按调用方 cwd 打开相对路径必然 FileNotFoundError
     out_root = out_root.resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     safe_name = "".join(c for c in paper_path.name if c not in r'\/:*?"<>|')
-    out_path = out_root / f"{safe_name}_校对批注版.docx"
+    out_path = ensure_inside(out_root / f"{safe_name}_校对批注版.docx")
 
     work = Path(tempfile.mkdtemp(prefix="_docx_report_"))
     img_root = work / "images"

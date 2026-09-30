@@ -475,7 +475,8 @@ def verify_unit(unit_dir: str | Path, source_path: str | Path | None = None) -> 
     """读取单元目录中的 _校对报告.md 与源文，返回校验结果。"""
     from .paths import find_source_md, report_path
 
-    unit_dir = Path(unit_dir)
+    from .workdir import input_path
+    unit_dir = input_path(unit_dir)
     report = report_path(unit_dir)
     if not report.is_file():
         result = VerifyResult()
@@ -483,7 +484,7 @@ def verify_unit(unit_dir: str | Path, source_path: str | Path | None = None) -> 
         return result
     text = report.read_text(encoding="utf-8")
     src: str | None = None
-    src_path = Path(source_path) if source_path else find_source_md(unit_dir)
+    src_path = input_path(source_path) if source_path else find_source_md(unit_dir)
     if src_path and src_path.is_file():
         src = src_path.read_text(encoding="utf-8")
     return verify_report_text(text, src)

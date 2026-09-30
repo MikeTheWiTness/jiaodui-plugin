@@ -17,6 +17,8 @@ PY = str(ROOT / ".venv" / "bin" / "python")
 
 
 def run(*args):
+    if args and args[0] in {"convert", "split", "slice", "parse-report", "build-report", "build-docx"}:
+        args = (*args, "--legacy-layout")
     return subprocess.run([PY, "-m", "jiaodui", *args], cwd=ROOT,
                           capture_output=True, text=True)
 

@@ -11,12 +11,14 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 PY = str(ROOT / ".venv" / "bin" / "python")
 
-V1_COMMANDS = ["check-env", "convert", "split", "slice", "precheck-split",
+V1_COMMANDS = ["check-env", "inspect-source", "convert", "split", "slice", "precheck-split",
                "status", "verify-report", "parse-report", "calc",
                "build-report", "build-docx"]
 
 
 def run(*args):
+    if args and args[0] in {"convert", "split", "slice", "parse-report", "build-report", "build-docx"}:
+        args = (*args, "--legacy-layout")
     return subprocess.run([PY, "-m", "jiaodui", *args], cwd=ROOT,
                           capture_output=True, text=True)
 
@@ -315,4 +317,3 @@ def test_build_docx_excluded_emits_stderr_json(tmp_path):
     assert r.returncode == 6
     err = json.loads(r.stderr.strip().splitlines()[-1])
     assert err["error"]["code"] == "docx_incomplete"
-

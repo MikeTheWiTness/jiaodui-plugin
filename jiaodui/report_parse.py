@@ -15,6 +15,7 @@ import traceback
 
 from .log import log
 from .markers import INLINE_MARKER_CAPTURE_RE, INLINE_MARKER_DETECT_RE
+from .workdir import ensure_inside
 
 # 严重度总结词；未识别到任何一条时记为 UNSTATED，不冒充「无问题」
 SEVERITY_KEYWORDS = ("严重错误", "一般问题", "轻微问题", "无问题")
@@ -27,13 +28,20 @@ _SUMMARY_LABEL_RE = re.compile(r"^(?:总结行|总结)\s*[\*#]*\s*[:：]?\s*")
 
 # 修改原因条目必须行首锚定：正文里的数字（如 $n\approx1.22$）不是编号。
 # 编号分隔符限定为 点/顿号/右括号：纯空格分隔（"1 原因"）会让正文行首数字有机可乘
+# 原因正文允许续行；裸核验说明是契约允许的非编号附注，不属于上一条原因。
+# 编号后必须在同一行有非空正文，不能把下一条或附注充作空原因。
+_REASON_END = (
+    r"(?=\n[ \t]*\d+(?:[ \t]*[-–][ \t]*\d+)?[ \t]*[\.\)、]"
+    r"|\n[ \t]*[①-⑳]|\n[ \t]*\n"
+    r"|\n[ \t]*(?:\*\*)?核验说明(?:\*\*)?[ \t]*[：:]|\Z)"
+)
 _REASON_ASCII_RE = re.compile(
-    r"(?m)^[ \t]*(\d+)(?:\s*[-–]\s*(\d+))?[ \t]*[\.\)、][ \t]*(.+?)"
-    r"(?=\n[ \t]*\d+(?:\s*[-–]\s*\d+)?[ \t]*[\.\)、]|\n[ \t]*[①-⑳]|\n\n|\Z)"
+    r"(?m)^[ \t]*(\d+)(?:[ \t]*[-–][ \t]*(\d+))?[ \t]*[\.\)、][ \t]*"
+    r"(?=\S)([\s\S]+?)" + _REASON_END
 )
 _REASON_CIRCLED_RE = re.compile(
-    r"(?m)^[ \t]*([①-⑳](?:\s*[-–]\s*([①-⑳]))?)[ \t]*[\.\)、]?[ \t]*(.+?)"
-    r"(?=\n[ \t]*[①-⑳]|\n[ \t]*\d+(?:\s*[-–]\s*\d+)?[ \t]*[\.\)、]|\n\n|\Z)"
+    r"(?m)^[ \t]*(?>([①-⑳](?:[ \t]*[-–][ \t]*([①-⑳]))?)[ \t]*[\.\)、]?[ \t]*)"
+    r"(?=\S)([\s\S]+?)" + _REASON_END
 )
 
 
@@ -126,7 +134,7 @@ def parse_reason_entries(reasons_section: str | None) -> list[tuple[int, str]]:
     """
     if not reasons_section:
         return []
-    reasons_section = _trim_reasons_section(reasons_section)
+    reasons_section = _trim_reasons_section(reasons_section.replace("\r\n", "\n").replace("\r", "\n"))
     entries: list[tuple[int, str]] = []
     # 两类编号各自独立解析；同时出现时合并，交由调用方统一判重/查孤立。
     # 不允许「出现圈号就整段只按圈号解析」，否则阿拉伯数字条目被静默丢弃。
@@ -285,12 +293,12 @@ def extract_json(text: str):
 
 def save_proofread_json(res: str, q_dir: str, tool_calls: list | None = None) -> bool:
     """把报告解析结果落盘为 <q_dir>/_校对数据.json。"""
+    json_path = ensure_inside(os.path.join(q_dir, "_校对数据.json"))
     data = extract_json(res)
     if data is None:
         return False
     if tool_calls:
         data["tool_calls"] = tool_calls
-    json_path = os.path.join(q_dir, "_校对数据.json")
     try:
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)

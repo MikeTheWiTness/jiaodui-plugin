@@ -35,7 +35,7 @@ def test_m1_fixture_units_pass_gate():
 def test_m1_fixture_build_docx_has_all_reasons(tmp_path):
     paper = tmp_path / "第 6 讲校对测试"
     shutil.copytree(UNIT_ROOT, paper)
-    docx_path = generate_combined_docx(str(paper), str(tmp_path / "out"))
+    docx_path = generate_combined_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
     assert docx_path and Path(docx_path).is_file()
     z = zipfile.ZipFile(docx_path)
     cmt = z.read("word/comments.xml").decode("utf-8")

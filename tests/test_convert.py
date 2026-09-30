@@ -84,7 +84,7 @@ def test_check_pandoc_true(monkeypatch):
     assert calls == [["/fake/pandoc", "--version"]]
 
 
-def test_pandoc_to_docx_command(monkeypatch):
+def test_pandoc_to_docx_command(monkeypatch, tmp_path):
     monkeypatch.setattr(convert, "find_pandoc", lambda: "/fake/pandoc")
     seen = {}
 
@@ -95,7 +95,7 @@ def test_pandoc_to_docx_command(monkeypatch):
     monkeypatch.setattr(convert.subprocess, "run", fake_run)
     assert pandoc_to_docx("in.md", "out.docx") is True
     assert seen["cmd"] == [
-        "/fake/pandoc", "-f", "markdown", "-t", "docx", "in.md", "-o", "out.docx",
+        "/fake/pandoc", "-f", "markdown", "-t", "docx", "in.md", "-o", str(tmp_path / "out.docx"),
     ]
 
 
@@ -113,7 +113,7 @@ def test_pandoc_to_docx_without_pandoc(monkeypatch):
     assert pandoc_to_docx("in.md", "out.docx") is False
 
 
-def test_convert_with_pandoc_command_and_mathjax(monkeypatch):
+def test_convert_with_pandoc_command_and_mathjax(monkeypatch, tmp_path):
     monkeypatch.setattr(convert, "find_pandoc", lambda: "/fake/pandoc")
     seen = {}
 
@@ -126,8 +126,8 @@ def test_convert_with_pandoc_command_and_mathjax(monkeypatch):
     assert convert.convert_with_pandoc("a.docx", "o.md", "imgs", use_mathjax=False) is True
     assert seen["cmd"] == [
         "/fake/pandoc", "-f", "docx", "-t", "markdown-smart",
-        "--extract-media", "imgs", "--wrap", "none",
-        "--markdown-headings", "atx", "a.docx", "-o", "o.md",
+        "--extract-media", str(tmp_path / "imgs"), "--wrap", "none",
+        "--markdown-headings", "atx", "a.docx", "-o", str(tmp_path / "o.md"),
     ]
 
     convert.convert_with_pandoc("a.docx", "o.md", "imgs", use_mathjax=True)
@@ -287,11 +287,11 @@ def test_existing_target_overwritten_in_place_without_attempt_copy(tmp_path):
     assert sorted(p.name for p in out_dir.glob("*.md")) == ["a_raw.md"]
 
 
-def test_md_branch_post_processes_markdown(tmp_path):
+def test_md_branch_preserves_original_formatting(tmp_path):
     src = tmp_path / "a.md"
     src.write_text("速度v^2^", encoding="utf-8")
     result = convert_to_raw(str(src), str(tmp_path / "out"), "a")
-    assert "v<上标>2</上标>" in Path(result.raw_md).read_text(encoding="utf-8")
+    assert Path(result.raw_md).read_text(encoding="utf-8") == "速度v^2^"
 
 
 # ============================================================

@@ -1,0 +1,31 @@
+{
+  "name": "dsh-jiaodui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "把 jiaodui K-12 校对流程接入 DSH profile 的组合包：挂载 jiaodui skill、注册原生工具、声明 jiaodui agent preset",
+  "main": "tools/index.js",
+  "exports": {
+    ".": "./tools/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./skills/*": "./skills/*"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "icon": "./icon.svg",
+  "files": [
+    "cordis.patch.yml",
+    "tools/",
+    "skills/",
+    "locale/",
+    "host-probe/",
+    "icon.svg",
+    "README.md"
+  ],
+  "license": "MIT"
+}

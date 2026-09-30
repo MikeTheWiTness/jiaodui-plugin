@@ -9,6 +9,7 @@ import importlib.util
 import os
 import shutil
 import sys
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,6 +31,7 @@ class CheckItem:
 class EnvReport:
     items: list[CheckItem] = field(default_factory=list)
     host_checks_required: list[str] = field(default_factory=list)
+    runtime: dict = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -41,6 +43,7 @@ class EnvReport:
             "python": sys.version.split()[0],
             "items": [i.to_dict() for i in self.items],
             "host_checks_required": self.host_checks_required,
+            "runtime": self.runtime,
         }
 
 
@@ -88,6 +91,13 @@ def _module_state(name: str) -> tuple[bool, str]:
 
 def check_env() -> EnvReport:
     report = EnvReport()
+    from .workflow import resolve_config_dir
+    from .workdir import workspace_root
+    root = workspace_root(required=False)
+    cli = shutil.which("jiaodui")
+    report.runtime = {"cli_path": str(Path(cli).resolve()) if cli else str(Path(sys.argv[0]).resolve()),
+                      "python_path": sys.executable, "config_dir": str(resolve_config_dir().resolve()),
+                      "work_root": str(root) if root else None}
     v = sys.version_info
     report.items.append(CheckItem(
         "python", v >= (3, 12), f"Python {v.major}.{v.minor}.{v.micro}（要求 >=3.12）"))
@@ -103,8 +113,17 @@ def check_env() -> EnvReport:
         report.items.append(CheckItem(label, ok, detail, required=required))
 
     pandoc = _find_pandoc()
+    pandoc_detail = pandoc or "未找到；设置 JIAODUI_PANDOC 或安装 pandoc"
+    if pandoc:
+        try:
+            version = subprocess.run([pandoc, "--version"], capture_output=True, text=True, timeout=10)
+            first = version.stdout.splitlines()
+            if first:
+                pandoc_detail = f"{pandoc}（{first[0]}）"
+        except (OSError, subprocess.TimeoutExpired):
+            pandoc_detail = f"{pandoc}（版本查询失败）"
     report.items.append(CheckItem("pandoc（docx↔md、md→docx）", bool(pandoc),
-                                  pandoc or "未找到；设置 JIAODUI_PANDOC 或安装 pandoc"))
+                                  pandoc_detail))
 
     playwright = _has_module("playwright")
     report.items.append(CheckItem("playwright（classics 古籍检索，后置能力）", playwright,

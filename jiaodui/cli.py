@@ -1,4 +1,4 @@
-"""jiaodui 命令行入口：11 个 v1 命令。
+"""jiaodui 命令行入口：入口检查与确定性校对命令。
 
 契约：所有命令支持 --json；失败向 stderr 输出一行结构化 JSON 并返回稳定退出码；
 进度与诊断走 stderr，机器可读结果走 stdout。核心逻辑只有一份，CLI 只做参数解析。
@@ -24,30 +24,23 @@ def _json_out(payload: Any) -> None:
 
 
 def _resolve_config_dir() -> Path:
-    """定位学科配置目录：env → cwd/config → 仓库 config → 包内 data（发行版）。"""
-    env = os.environ.get("JIAODUI_CONFIG_DIR")
-    if env:
-        return Path(env)
-    pkg = Path(__file__).resolve().parent
-    candidates = [Path.cwd() / "config", pkg.parent / "config", pkg / "data"]
-    for c in candidates:
-        if (c / "subjects").is_dir():
-            return c
-    return candidates[-1]
+    """配置解析委托确定性核心。"""
+    from .workflow import resolve_config_dir
+    return resolve_config_dir()
 
 
 def _resolve_subject_config(subject: str) -> dict:
-    from .config import load_subject_config
-
-    config_dir = _resolve_config_dir() / "subjects"
-    path = config_dir / f"{subject}.json"
-    if not path.is_file():
-        raise NotFoundError(f"找不到学科配置：{path}", details={"subject": subject,
-                                                              "config_dir": str(config_dir)})
-    return load_subject_config(path)
+    from .workflow import subject_config
+    return subject_config(subject)
 
 
 # ---------------------------------------------------------------- commands
+
+def cmd_inspect_source(args: argparse.Namespace) -> int:
+    from .inspect_source import inspect_source
+    payload = inspect_source(args.file, preview_chars=args.preview_chars)
+    _json_out(payload)
+    return ExitCode.OK
 
 def cmd_check_env(args: argparse.Namespace) -> int:
     from .checkenv import check_env
@@ -71,18 +64,14 @@ def cmd_check_env(args: argparse.Namespace) -> int:
 
 
 def cmd_convert(args: argparse.Namespace) -> int:
-    from .convert import convert_to_raw
-
-    src = Path(args.file)
-    if not src.is_file():
-        raise NotFoundError(f"源文件不存在：{src}")
-    src_dir = src.parent
-    base_name = args.base_name or src.stem
-    out_dir = Path(args.out_dir) if args.out_dir else src_dir
-    result = convert_to_raw(str(src), str(out_dir), base_name, use_mathjax=args.mathjax)
+    from .workflow import convert_material
+    result = convert_material(args.file, args.out_dir, args.base_name,
+                              material_name=args.material_name, use_mathjax=args.mathjax,
+                              legacy_layout=args.legacy_layout, mode=args.mode,
+                              mode_origin=args.mode_origin, mode_reason=args.mode_reason)
     payload = {"ok": True, "raw_md": result.raw_md, "images_dir": result.images_dir,
                "copied": result.copied, "missing": result.missing,
-               "warnings": result.warnings, "source_kind": result.source_kind}
+               "warnings": result.warnings, "source_kind": result.source_kind, "mode": result.mode}
     if args.json:
         _json_out(payload)
     else:
@@ -92,24 +81,14 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
 
 def _split(args: argparse.Namespace) -> int:
-    from .split import split_exam, split_lecture
-
-    raw_path = Path(args.raw_md)
-    if not raw_path.is_file():
-        raise NotFoundError(f"raw md 不存在：{raw_path}")
-    config = _resolve_subject_config(args.subject)
-    base_name = args.base_name or raw_path.stem.replace("_raw", "")
-    out_root = Path(args.out_root) if args.out_root else raw_path.parent
-    if args.images_dir:
-        config["images_source"] = args.images_dir
-    # 传路径而非正文：split 会据此推导图片源目录 {raw_md 所在目录}/{base_name}_images/media
-    if args.mode == "exam":
-        result = split_exam(str(raw_path), str(out_root), base_name, config)
-    else:
-        # 讲义默认执行导入清理（表格清理 + 装饰图清除），与旧仓 clean_enabled 默认一致；
-        # --no-clean 保留原始表格包裹，供排查/对照使用。
-        result = split_lecture(str(raw_path), str(out_root), base_name, config,
-                               clean=not args.no_clean)
+    from .workflow import split_material
+    result = split_material(args.raw_md, subject=args.subject, mode=args.mode,
+                            out_root=args.out_root, base_name=args.base_name,
+                            material_name=args.material_name, images_dir=args.images_dir,
+                            clean=not args.no_clean, rerun=args.rerun,
+                            adopt_units=args.adopt_units, legacy_layout=args.legacy_layout,
+                            mode_origin=args.mode_origin, mode_reason=args.mode_reason,
+                            strategy=args.strategy)
     payload = {"ok": True, "units": result.units, "unit_dirs": result.unit_dirs,
                "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
     if args.json:
@@ -121,53 +100,18 @@ def _split(args: argparse.Namespace) -> int:
 
 
 def cmd_slice(args: argparse.Namespace) -> int:
-    from .split import lecture_cleaned_text, slice_by_boundaries
-
-    # 学科配置可选：给定时【出题意图】清理与规则 split 完全一致。
-    config = _resolve_subject_config(args.subject) if args.subject else {}
-
+    from .workflow import slice_material
+    result = slice_material(args.boundaries, raw=args.raw, subject=args.subject, mode=args.mode,
+                            out_root=args.out_root, base_name=args.base_name, material_name=args.material_name,
+                            clean=not args.no_clean, rerun=args.rerun,
+                            legacy_layout=args.legacy_layout, preview=args.preview,
+                            mode_origin=args.mode_origin, mode_reason=args.mode_reason)
     if args.preview:
-        if not args.raw:
-            raise UsageError("--preview 需要 --raw <raw_md>")
-        raw_path = Path(args.raw)
-        if not raw_path.is_file():
-            raise NotFoundError(f"raw md 不存在：{raw_path}")
-        mode = args.mode or "lecture"
-        base_name = args.base_name or raw_path.stem.replace("_raw", "")
-        if str(mode).lower() == "lecture" and not args.no_clean:
-            cleaned = lecture_cleaned_text(str(raw_path), base_name, config)
-        else:
-            cleaned = raw_path.read_text(encoding="utf-8")
         if args.json:
-            _json_out({"ok": True, "mode": mode, "cleaned": cleaned})
+            _json_out(result)
         else:
-            print(cleaned)
+            print(result["cleaned"])
         return ExitCode.OK
-
-    if not args.boundaries:
-        raise UsageError("slice 需要 --boundaries <清单.json>，或用 --preview 查看清理后正文")
-    bpath = Path(args.boundaries)
-    if not bpath.is_file():
-        raise NotFoundError(f"边界清单不存在：{bpath}")
-    data = json.loads(bpath.read_text(encoding="utf-8"))
-    raw_path = args.raw or data.get("raw") or data.get("source")
-    if not raw_path:
-        raise JiaoduiError("边界清单缺少 raw/source 字段，且未提供 --raw")
-    raw_path = Path(raw_path)
-    if not raw_path.is_absolute() and not raw_path.is_file():
-        raw_path = bpath.parent / raw_path
-    if not raw_path.is_file():
-        raise NotFoundError(f"raw md 不存在：{raw_path}")
-    boundaries = data.get("boundaries", data if isinstance(data, list) else None)
-    if not boundaries:
-        raise JiaoduiError("边界清单缺少 boundaries 数组")
-    mode = args.mode or data.get("mode", "exam")
-    base_name = args.base_name or data.get("base_name") or raw_path.stem.replace("_raw", "")
-    out_root = Path(args.out_root) if args.out_root else (Path(data["out_root"]) if data.get("out_root") else raw_path.parent)
-    if not args.subject and data.get("subject"):
-        config = _resolve_subject_config(data["subject"])
-    result = slice_by_boundaries(str(raw_path), boundaries, str(out_root), base_name, mode,
-                                 clean=not args.no_clean, config=config)
     payload = {"ok": True, "unit_dirs": result.unit_dirs, "units": result.units,
                "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
     if args.json:
@@ -209,10 +153,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_verify_report(args: argparse.Namespace) -> int:
     from .verify import verify_unit
+    from .workdir import input_path
 
     result = verify_unit(args.unit, source_path=args.source)
     payload = result.to_dict()
-    payload["unit"] = str(args.unit)
+    payload["unit"] = str(input_path(args.unit))
     if args.json:
         _json_out(payload)
     else:
@@ -237,31 +182,13 @@ def cmd_verify_report(args: argparse.Namespace) -> int:
 
 
 def cmd_parse_report(args: argparse.Namespace) -> int:
-    from .paths import data_path, report_path
-    from .report_parse import save_proofread_json
-    from .verify import verify_unit
-
-    unit = Path(args.unit)
-    report = report_path(unit)
-    if not report.is_file():
-        raise NotFoundError(f"找不到报告：{report}")
-    result = verify_unit(unit, source_path=args.source)
-    if not result.ok and not args.legacy:
-        raise ContractError(
-            "报告未通过 verify-report，拒绝解析（历史产物兼容请显式加 --legacy）",
-            details={"errors": [i.message for i in result.errors]})
-    text = report.read_text(encoding="utf-8")
-    ok = save_proofread_json(text, str(unit))
-    payload = {"ok": ok, "data": str(data_path(unit)),
-               "verified": result.ok, "legacy": bool(args.legacy and not result.ok)}
+    from .workflow import parse_unit
+    payload = parse_unit(args.unit, source=args.source, legacy=args.legacy, legacy_layout=args.legacy_layout)
     if args.json:
         _json_out(payload)
     else:
-        log(f" {'✅' if ok else '❌'} _校对数据.json：{data_path(unit)}")
+        log(f" ✅ _校对数据.json：{payload['data']}")
         print(json.dumps(payload, ensure_ascii=False))
-    if not ok:
-        raise BusinessError(f"报告无法解析为 _校对数据.json：{unit}", code="parse_failed",
-                            details={"unit": str(unit)})
     return ExitCode.OK
 
 
@@ -313,7 +240,7 @@ def cmd_calc(args: argparse.Namespace) -> int:
 def cmd_build_report(args: argparse.Namespace) -> int:
     from .report import build_report
 
-    result = build_report(args.paper_dir, out_path=args.out)
+    result = build_report(args.paper_dir, out_path=args.out, legacy_layout=args.legacy_layout)
     payload = result.to_dict()
     payload["ok"] = result.out_path is not None
     if args.json:
@@ -330,7 +257,7 @@ def cmd_build_report(args: argparse.Namespace) -> int:
 def cmd_build_docx(args: argparse.Namespace) -> int:
     from .docx_report import build_docx
 
-    result = build_docx(args.paper_dir, out_dir=args.out_dir)
+    result = build_docx(args.paper_dir, out_dir=args.out_dir, legacy_layout=args.legacy_layout)
     payload = result.__dict__ if hasattr(result, "__dict__") else dict(result)
     payload["ok"] = bool(getattr(result, "ok", False))
     if args.json:
@@ -356,6 +283,10 @@ def cmd_build_docx(args: argparse.Namespace) -> int:
 class _Parser(argparse.ArgumentParser):
     """参数错误也走统一的结构化错误出口（stderr JSON + 退出码 2）。"""
 
+    def __init__(self, *args, **kwargs):
+        kwargs["allow_abbrev"] = False
+        super().__init__(*args, **kwargs)
+
     def error(self, message: str) -> None:  # type: ignore[override]
         raise UsageError(message, details={"usage": self.format_usage().strip()})
 
@@ -365,22 +296,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"jiaodui {__version__}")
     p.add_argument("--quiet", action="store_true", help="静默进度输出")
     p.add_argument("--json", action="store_true", help="机器可读 JSON 输出")
+    p.add_argument("--work-root", help="当前工作区绝对路径（也可由宿主注入 JIAODUI_WORK_ROOT）")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("check-env", help="环境预检（无凭证项）")
     sp.set_defaults(func=cmd_check_env)
 
+    sp = sub.add_parser("inspect-source", help="只读检查 Word 嵌套表格与有限正文节选")
+    sp.add_argument("file")
+    sp.add_argument("--preview-chars", type=int, default=0, help="节选字符数 0..2000；默认不返回正文")
+    sp.set_defaults(func=cmd_inspect_source)
+
     sp = sub.add_parser("convert", help="docx / idml / md → _raw.md")
     sp.add_argument("file")
     sp.add_argument("--out-dir")
     sp.add_argument("--base-name")
-    sp.add_argument("--mathjax", action="store_true")
+    sp.add_argument("--mathjax", action="store_true", default=None)
+    sp.add_argument("--mode", choices=["exam", "lecture"], help="材料类型，讲义自动启用其专用转换参数")
     sp.set_defaults(func=cmd_convert)
 
     sp = sub.add_parser("split", help="规则拆分：源文 → 单元目录")
     sp.add_argument("raw_md")
     sp.add_argument("--subject", required=True)
-    sp.add_argument("--mode", choices=["exam", "lecture"], required=True)
+    sp.add_argument("--mode", choices=["exam", "lecture"], help="材料类型；省略时沿用材料清单，未知则拒绝")
+    sp.add_argument("--strategy", choices=["rule", "manual", "none"], default="rule",
+                    help="规则拆分 / 人工单元标记 / 整篇单元；智能拆分使用 slice")
     sp.add_argument("--out-root")
     sp.add_argument("--base-name")
     sp.add_argument("--images-dir")
@@ -438,10 +378,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     # 每个子命令都接受 --json / --quiet（默认 SUPPRESS，保留顶层取值）
     for sp in sub.choices.values():
+        sp.add_argument("--work-root", default=argparse.SUPPRESS, help="当前工作区绝对路径")
         sp.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                         help="机器可读 JSON 输出")
         sp.add_argument("--quiet", action="store_true", default=argparse.SUPPRESS,
                         help="静默进度输出")
+    for name in ("convert", "split", "slice", "parse-report", "build-report", "build-docx"):
+        sub.choices[name].add_argument("--legacy-layout", action="store_true", help="显式使用历史布局，仍受工作区边界限制")
+    for name in ("convert", "split", "slice"):
+        sub.choices[name].add_argument("--material-name", help="材料目录名称")
+        sub.choices[name].add_argument("--mode-origin", choices=["user", "structure", "preview", "confirmed"],
+                                       help="类型来源：用户指定 / 结构 / 有限预览 / 询问确认")
+        sub.choices[name].add_argument("--mode-reason", help="类型判断的简短依据（不超过 500 字符）")
+    for name in ("split", "slice"):
+        sub.choices[name].add_argument("--rerun", action="store_true", help="开启新轮次，旧报告不计为本轮完成")
+    sub.choices["split"].add_argument("--adopt-units", action="store_true", help="显式接纳当前磁盘单元集，留痕且不删除产物")
     return p
 
 
@@ -453,7 +404,9 @@ def main(argv: list[str] | None = None) -> int:
         return emit_error(exc)
     set_quiet(bool(getattr(args, "quiet", False)))
     try:
-        return int(args.func(args))
+        from .workdir import workspace_scope
+        with workspace_scope(args.work_root):
+            return int(args.func(args))
     except JiaoduiError as exc:
         return emit_error(exc)
     except KeyboardInterrupt:

@@ -17,8 +17,9 @@ DELIVERED_UNVERIFIED = "已交付未过校验"
 COMPLETED = "已完成"
 FAILED = "失败"
 SKIPPED = "跳过"
+CURRENT_PENDING = "本轮未完成"
 
-STATE_ORDER = [NOT_STARTED, DELIVERED_UNVERIFIED, COMPLETED, FAILED, SKIPPED]
+STATE_ORDER = [NOT_STARTED, DELIVERED_UNVERIFIED, COMPLETED, FAILED, SKIPPED, CURRENT_PENDING]
 
 
 @dataclass
@@ -119,7 +120,17 @@ def status_of_unit(unit_dir: str | Path) -> UnitStatus:
 
 def scan_status(paper_dir: str | Path) -> PaperStatus:
     """扫描 paper_dir 下所有单元的状态。"""
-    paper_dir = Path(paper_dir)
+    from . import material
+    from .workdir import input_path
+    paper_dir = input_path(paper_dir)
+    root = material.find_material(paper_dir)
+    data = material.load(root) if root is not None else None
+    if data is not None:
+        expected = material.check_units(root, data)
+        if paper_dir != expected:
+            from .errors import BusinessError
+            raise BusinessError("请扫描清单中的单元根目录", code="paper-path-mismatch",
+                                details={"paper_dir": str(expected)})
     result = PaperStatus(paper_dir=str(paper_dir))
     if not paper_dir.is_dir():
         result.warnings.append(f"目录不存在：{paper_dir}")
@@ -128,5 +139,9 @@ def scan_status(paper_dir: str | Path) -> PaperStatus:
     if not dirs:
         result.warnings.append("未发现任何单元目录（第N题 / 板块N / 单元N）")
     for d in dirs:
-        result.units.append(status_of_unit(d))
+        status = status_of_unit(d)
+        if data is not None and status.state == COMPLETED and not material.registered(root, data, d):
+            status.state = CURRENT_PENDING
+            status.reason = "本轮尚未登记交付，或报告/单元输入摘要已改变（旧报告不算本轮完成）"
+        result.units.append(status)
     return result

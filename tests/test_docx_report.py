@@ -24,6 +24,25 @@ PANDOC = find_pandoc()
 HAS_MPL = matplotlib_available()
 PANDOC_REQUIRED = pytest.mark.skipif(PANDOC is None, reason="pandoc 不可用")
 
+
+@PANDOC_REQUIRED
+def test_two_reasons_before_unheaded_note_reach_word_comments(tmp_path):
+    """真实 Word 生成须保留两条原因，附注不能吞掉末条或混入批注。"""
+    paper = tmp_path / "卷子"
+    unit = paper / "第1题"
+    unit.mkdir(parents=True)
+    (unit / "第1题.md").write_text("甲错字，乙错字。", encoding="utf-8")
+    (unit / "_校对报告.md").write_text(
+        "一般问题\n### 标记原文\n甲【1|错字|正字】，乙【2|错字|正字】。\n"
+        "### 修改原因\n1. 第一处原因。\n补充第一处解释。\n\n"
+        "2. 第二处原因。\n核验说明：其余文字正确。", encoding="utf-8")
+    result = build_docx(str(paper), legacy_layout=True)
+    assert result.ok and result.anchor_count == 2
+    with zipfile.ZipFile(result.out_path) as archive:
+        comments = archive.read("word/comments.xml").decode("utf-8")
+    assert "第一处原因。" in comments and "补充第一处解释。" in comments
+    assert "第二处原因。" in comments and "核验说明" not in comments
+
 _1PX_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
@@ -90,7 +109,7 @@ class TestGenerateCombinedDocx(unittest.TestCase):
 
     def test_generate_combined_docx(self):
         out_dir = os.path.join(self.tmp, "out")
-        docx_path = generate_combined_docx(self.paper, out_dir)
+        docx_path = generate_combined_docx(self.paper, out_dir, legacy_layout=True)
         self.assertIsNotNone(docx_path)
         self.assertTrue(os.path.exists(docx_path))
 
@@ -111,7 +130,7 @@ class TestGenerateCombinedDocx(unittest.TestCase):
 
     def test_no_caption_and_no_uuid(self):
         out_dir = os.path.join(self.tmp, "out2")
-        docx_path = generate_combined_docx(self.paper, out_dir)
+        docx_path = generate_combined_docx(self.paper, out_dir, legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -120,7 +139,7 @@ class TestGenerateCombinedDocx(unittest.TestCase):
 
     def test_image_embedded_and_renamed(self):
         out_dir = os.path.join(self.tmp, "out3")
-        docx_path = generate_combined_docx(self.paper, out_dir)
+        docx_path = generate_combined_docx(self.paper, out_dir, legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -130,7 +149,7 @@ class TestGenerateCombinedDocx(unittest.TestCase):
 
     def test_headings_and_page_breaks(self):
         out_dir = os.path.join(self.tmp, "out4")
-        docx_path = generate_combined_docx(self.paper, out_dir)
+        docx_path = generate_combined_docx(self.paper, out_dir, legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -140,7 +159,7 @@ class TestGenerateCombinedDocx(unittest.TestCase):
     def test_empty_dir_returns_none(self):
         empty = os.path.join(self.tmp, "空目录")
         os.makedirs(empty)
-        self.assertIsNone(generate_combined_docx(empty, self.tmp))
+        self.assertIsNone(generate_combined_docx(empty, self.tmp, legacy_layout=True))
 
     def test_relative_out_dir_resolved_to_absolute(self):
         """回归：相对 out_dir 时 docx 必须落到调用方 cwd 下且返回绝对路径。
@@ -152,13 +171,14 @@ class TestGenerateCombinedDocx(unittest.TestCase):
         old_cwd = os.getcwd()
         os.chdir(self.tmp)
         try:
-            docx_path = generate_combined_docx(self.paper, "output/校对Word")
+            docx_path = generate_combined_docx(self.paper, "output/校对Word", legacy_layout=True)
             self.assertIsNotNone(docx_path)
             self.assertTrue(os.path.isabs(docx_path))
             self.assertTrue(os.path.exists(docx_path))
             # 文件必须真实落在 out_dir 对应的相对位置，而非漂移到 pandoc 临时目录
             rel = os.path.join("output", "校对Word", os.path.basename(docx_path))
-            self.assertTrue(os.path.exists(rel))
+            from jiaodui.workdir import workspace_root
+            self.assertTrue(os.path.exists(workspace_root() / rel))
             z = zipfile.ZipFile(docx_path)
             cmt = z.read("word/comments.xml").decode("utf-8")
             self.assertEqual(len(self._findall(cmt, "<w:comment w:id=")), 2)
@@ -209,7 +229,7 @@ class TestStderrNoneResilience(unittest.TestCase):
 
         with mock.patch.object(docx_report.subprocess, "run",
                                side_effect=_run_stderr_none):
-            docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+            docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         self.assertTrue(os.path.exists(docx_path))
         z = zipfile.ZipFile(docx_path)
@@ -295,7 +315,7 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
         with open(os.path.join(paper, "单元7", "单元7.md"), "w", encoding="utf-8") as f:
             f.write("**教师版**（2022·模拟）（多选）\n如图所示，金属棒从$h$高处释放，不计空气阻力。\n")
         with mock.patch.object(docx_report, "log") as mlog:
-            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out_seg"))
+            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out_seg"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         messages = [c.args[0] for c in mlog.call_args_list]
         self.assertTrue(any("单元7 无批注" in m for m in messages))
@@ -322,7 +342,7 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
             "单元7": self.NO_ISSUE_REPORT,
         })
         with mock.patch.object(docx_report, "log") as mlog:
-            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out"))
+            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         messages = [c.args[0] for c in mlog.call_args_list]
         self.assertTrue(any("单元7 无批注" in m for m in messages))
@@ -343,7 +363,7 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
         })
         with open(os.path.join(paper, "单元7", "单元7.md"), "w", encoding="utf-8") as f:
             f.write("**教师版**（2022·模拟）（多选）\n如图所示，金属棒从$h$高处释放。\n")
-        docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out2"))
+        docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out2"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -368,7 +388,7 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
             "单元7": self.NO_ISSUE_REPORT,
             "单元9": self.NO_ISSUE_REPORT,
         })
-        docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out_noissue"))
+        docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out_noissue"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -383,7 +403,7 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
             "![外链图](https://p3-hippo-sign.example.com/x/y.png?lk3s=19ff00fe&x-expires=2067)")
         paper = self._make_paper({"第1题": url_report})
         with mock.patch.object(docx_report, "log") as mlog:
-            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out_url"))
+            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out_url"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         messages = [c.args[0] for c in mlog.call_args_list]
         self.assertFalse(any("图片未找到" in m for m in messages))
@@ -405,7 +425,7 @@ class TestSkippedUnitsDiagnostics(unittest.TestCase):
             "单元9": "有批注标记但缺分段：【1|原句|改为句】\n",
         })
         with mock.patch.object(docx_report, "log") as mlog:
-            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out2"))
+            docx_path = generate_combined_docx(paper, os.path.join(self.tmp, "out2"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         messages = [c.args[0] for c in mlog.call_args_list]
         self.assertTrue(any("单元9 含批注标记但缺少" in m for m in messages))
@@ -448,7 +468,7 @@ class TestEscapedPipeInMarkers(unittest.TestCase):
 
     def test_latex_pipe_not_split(self):
         r"""\| 转义竖线整体保留在 original，批注数正确"""
-        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -493,7 +513,7 @@ class TestReasonRangeMapping(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_range_reason_reaches_every_comment(self):
-        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         cmt = z.read("word/comments.xml").decode("utf-8")
@@ -613,7 +633,7 @@ class TestCommentFormulaImages(unittest.TestCase):
 
     def _generate(self):
         out_dir = os.path.join(self.tmp, "out")
-        docx_path = generate_combined_docx(self.paper, out_dir)
+        docx_path = generate_combined_docx(self.paper, out_dir, legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         return z, {
@@ -685,7 +705,7 @@ class TestAnchorInsideFormula(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_formula_anchor_skipped_and_text_restored(self):
-        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -733,7 +753,7 @@ class TestSkipAnchorRobustness(unittest.TestCase):
 
     def test_identical_formulas_only_target_highlighted(self):
         """三个相同公式：仅含标记的甲式被文本化高亮，乙丙两式保持 oMath。"""
-        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -759,7 +779,7 @@ class TestSkipAnchorRobustness(unittest.TestCase):
         )
         with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
             f.write(report)
-        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out2"))
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out2"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -797,7 +817,7 @@ class TestExtremeFormulaAnchors(unittest.TestCase):
         )
         with open(os.path.join(q, "_校对报告.md"), "w", encoding="utf-8") as f:
             f.write(report)
-        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         return z.read("word/document.xml").decode("utf-8"), \
@@ -969,7 +989,7 @@ class TestMarkerIntegrityDocx(unittest.TestCase):
         if source is not None:
             with open(os.path.join(q, f"{qname}.md"), "w", encoding="utf-8") as f:
                 f.write(source)
-        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"))
+        docx_path = generate_combined_docx(self.paper, os.path.join(self.tmp, "out"), legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         return (z.read("word/document.xml").decode("utf-8"),
@@ -1139,7 +1159,7 @@ class TestFencedMarkerSection(unittest.TestCase):
 
     def test_fence_stripped_math_converted(self):
         out_dir = os.path.join(self.tmp, "out")
-        docx_path = generate_combined_docx(self.paper, out_dir)
+        docx_path = generate_combined_docx(self.paper, out_dir, legacy_layout=True)
         self.assertIsNotNone(docx_path)
         z = zipfile.ZipFile(docx_path)
         doc = z.read("word/document.xml").decode("utf-8")
@@ -1291,7 +1311,7 @@ class TestBuildDocxAudit:
     def test_counts_match_actual_anchors(self, tmp_path):
         paper = _make_illustrated_paper(
             tmp_path, {"第1题": REPORT_WITH_MARKS, "第2题": REPORT_NO_MARKS})
-        res = build_docx(str(paper), str(tmp_path / "out"))
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
         assert isinstance(res, DocxBuildResult)
         assert res.marker_count == 2
         assert res.anchor_count == 2
@@ -1310,7 +1330,7 @@ class TestBuildDocxAudit:
 
     def test_formula_fallback_counts_as_covered(self, tmp_path):
         paper = _make_illustrated_paper(tmp_path, {"第1题": FORMULA_FALLBACK_REPORT})
-        res = build_docx(str(paper), str(tmp_path / "out"))
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
         assert res.marker_count == 2
         assert res.anchor_count == 1
         assert res.formula_fallback_count == 1
@@ -1327,7 +1347,7 @@ class TestBuildDocxAudit:
         no_issue_valid = "无问题\n\n### 标记原文\n" + src7 + "\n\n### 修改原因\n无\n"
         paper = _make_illustrated_paper(
             tmp_path, {"第1题": REPORT_WITH_MARKS, "单元7": no_issue_valid})
-        res = build_docx(str(paper), str(tmp_path / "out"))
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
         assert res.marker_count == 2
         assert res.anchor_count == 2
         assert res.heading_comment_count == 1
@@ -1340,7 +1360,7 @@ class TestBuildDocxAudit:
     def test_noop_marker_unit_excluded(self, tmp_path):
         """空操作报告未通过 verify-report，必须排除出 Word 交付。"""
         paper = _make_illustrated_paper(tmp_path, {"第1题": NOOP_REPORT})
-        res = build_docx(str(paper), str(tmp_path / "out"))
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
         assert res.marker_count == 0, "不合格报告不得计入"
         assert [e["unit"] for e in res.excluded_units] == ["第1题"]
         assert "空操作" in res.excluded_units[0]["reason"]
@@ -1352,7 +1372,7 @@ class TestBuildDocxAudit:
             "第1题": REPORT_WITH_MARKS,
             "单元9": "有批注标记但缺分段：【1|原句|改为句】\n",
         })
-        res = build_docx(str(paper), str(tmp_path / "out"))
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
         assert res.marker_count == 2, "只统计合格单元"
         assert [e["unit"] for e in res.excluded_units] == ["单元9"]
         assert res.ok is False
@@ -1360,7 +1380,7 @@ class TestBuildDocxAudit:
     def test_empty_dir_not_ok(self, tmp_path):
         empty = tmp_path / "空目录"
         empty.mkdir()
-        res = build_docx(str(empty), str(tmp_path / "out"))
+        res = build_docx(str(empty), str(tmp_path / "out"), legacy_layout=True)
         assert res.out_path is None
         assert res.ok is False
         assert res.warnings
@@ -1370,7 +1390,7 @@ class TestBuildDocxAudit:
         old_cwd = os.getcwd()
         os.chdir(tmp_path)
         try:
-            res = build_docx(str(paper), "output/校对Word")
+            res = build_docx(str(paper), "output/校对Word", legacy_layout=True)
         finally:
             os.chdir(old_cwd)
         assert res.ok is True
@@ -1379,7 +1399,7 @@ class TestBuildDocxAudit:
 
     def test_generate_combined_docx_compat_wrapper(self, tmp_path):
         paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
-        path = generate_combined_docx(str(paper), str(tmp_path / "out"))
+        path = generate_combined_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
         assert isinstance(path, str)
         assert os.path.exists(path)
         z = zipfile.ZipFile(path)
@@ -1429,4 +1449,3 @@ def test_anchor_pairing_detects_extra_end_and_reference():
     ok, problems = _check_anchor_pairing(doc, {"1"})
     assert not ok
     assert any("999" in p for p in problems)
-

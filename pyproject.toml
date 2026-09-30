@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 classics = ["playwright>=1.40"]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pyyaml>=6.0"]
 
 [project.scripts]
 jiaodui = "jiaodui.cli:main"

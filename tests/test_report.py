@@ -22,7 +22,7 @@ def test_only_verified_included(tmp_path):
     _unit(paper, "第1题", VALID)
     _unit(paper, "第2题", BAD)
     out = tmp_path / "out.md"
-    r = build_report(paper, out_path=out)
+    r = build_report(paper, out_path=out, legacy_layout=True)
     assert r.out_path and out.is_file()
     text = out.read_text(encoding="utf-8")
     assert "设【1|a|b】为$O$点。" in text
@@ -37,5 +37,5 @@ def test_skipped_unit_placeholder(tmp_path):
     paper.mkdir()
     d = _unit(paper, "第1题", VALID)
     (d / ".skip_proofread").touch()
-    r = build_report(paper, out_path=tmp_path / "out.md")
+    r = build_report(paper, out_path=tmp_path / "out.md", legacy_layout=True)
     assert r.skipped and not r.included

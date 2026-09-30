@@ -72,8 +72,8 @@ def test_pipeline_verify_status_report(tmp_path):
     assert ps.counts()[COMPLETED] == 1
     assert ps.counts()[DELIVERED_UNVERIFIED] == 1
 
-    out = tmp_path.parent / "out.md"
-    br = build_report(tmp_path, out_path=out)
+    out = tmp_path / "out.md"
+    br = build_report(tmp_path, out_path=out, legacy_layout=True)
     text = out.read_text(encoding="utf-8")
     assert "【1|" in text and "1改】" in text
     assert "这里没有规范段落" not in text
@@ -105,7 +105,7 @@ def test_pipeline_build_docx(tmp_path):
     units = sorted(Path(p) for p in res.unit_dirs)
     for u in units:
         _write_report_from_source(u)
-    result = build_docx(str(tmp_path / "卷子"))
+    result = build_docx(str(tmp_path / "卷子"), legacy_layout=True)
     assert result.marker_count == 2
     assert result.missing_count == 0
     assert result.anchor_structure_ok is True
@@ -132,7 +132,7 @@ def test_build_docx_excludes_unverified_units(tmp_path):
     _write_report_from_source(units[0])
     _write_unverified_report(units[1])
 
-    result = build_docx(str(tmp_path / "卷子"))
+    result = build_docx(str(tmp_path / "卷子"), legacy_layout=True)
     assert [e["unit"] for e in result.excluded_units] == ["第2题"], result.excluded_units
     assert result.marker_count == 1, "只统计合格单元的标记"
     assert result.ok is False, "存在被排除单元时不得判为通过"
@@ -183,12 +183,12 @@ def test_formula_boundary_phantom_excluded_from_delivery(tmp_path):
     status = scan_status(paper)
     assert status.counts()[COMPLETED] == 1
     assert status.counts()[DELIVERED_UNVERIFIED] == 1
-    aggregate = build_report(paper)
+    aggregate = build_report(paper, legacy_layout=True)
     assert [u["unit"] for u in aggregate.included] == ["第1题"]
     assert [u["unit"] for u in aggregate.failed] == ["第2题"]
     assert "【1|$z$|$w$】" not in Path(aggregate.out_path).read_text(encoding="utf-8")
 
-    docx = build_docx(str(paper))
+    docx = build_docx(str(paper), legacy_layout=True)
     assert not docx.ok
     assert [u["unit"] for u in docx.excluded_units] == ["第2题"]
     assert docx.marker_count == docx.anchor_count == 1

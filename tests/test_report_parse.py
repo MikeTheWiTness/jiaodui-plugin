@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from jiaodui.report_parse import (SEVERITY_KEYWORDS, UNSTATED, parse_proofread_md,
                                   parse_reasons, split_sections)
@@ -79,3 +80,32 @@ def test_save_and_load_json(tmp_path):
     data = json.loads((tmp_path / "_校对数据.json").read_text(encoding="utf-8"))
     assert data["summary"] == "一般问题"
     assert data["corrections"][0]["correction"] == "对"
+
+
+@pytest.mark.parametrize("numbering", [("1.", "2."), ("①", "②"), ("1.", "②")])
+def test_multiline_reasons_followed_by_verification_note(numbering):
+    first, second = numbering
+    text = (f"{first} 第一条原因。\n继续解释第一条。\n\n"
+            f"{second} 第二条原因。\n核验说明：这段无需修改，不属于编号原因。")
+    assert parse_reasons(text) == {1: "第一条原因。\n继续解释第一条。", 2: "第二条原因。"}
+
+
+def test_range_reason_before_multiline_note():
+    text = "1-2. 两个缺图占位均来自原始 Word。\n核验说明：另一张图可辨认。\n不据缺图推断内容。"
+    assert parse_reasons(text) == {1: "两个缺图占位均来自原始 Word。", 2: "两个缺图占位均来自原始 Word。"}
+
+
+def test_empty_reason_not_filled_by_later_note_or_next_number():
+    assert parse_reasons("1.   \n核验说明：不能冒充原因。") == {}
+    assert parse_reasons("1.\n2. 第二条原因。") == {2: "第二条原因。"}
+
+
+@pytest.mark.parametrize("header", ["①.", "①-③.", "① )", "①–③、"])
+def test_empty_circled_reason_cannot_use_delimiter_as_body(header):
+    assert parse_reasons(f"{header}\n核验说明：不充当原因。") == {}
+
+
+def test_verification_note_does_not_hide_later_duplicate_reason():
+    from jiaodui.report_parse import parse_reason_entries
+    text = "1. 原因甲。\n核验说明：额外说明。\n1. 原因乙。"
+    assert parse_reason_entries(text) == [(1, "原因甲。"), (1, "原因乙。")]

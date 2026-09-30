@@ -6,6 +6,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from .workdir import ensure_inside, ensure_tree
 
 
 @dataclass
@@ -39,6 +40,7 @@ def copy_md_images(
     Returns:
         ImageCopyResult: 包含重写后的内容、复制数、丢失数
     """
+    target_img_dir = ensure_tree(target_img_dir)
     if not md_content:
         return ImageCopyResult(content=md_content)
 
@@ -85,8 +87,8 @@ def copy_md_images(
             return m.group(0)
 
         # 复制到目标目录（已存在则跳过）
-        dest = target_img_dir / img_name
-        if not dest.exists():
+        dest = ensure_inside(target_img_dir / img_name)
+        if dest.resolve() != src_path.resolve():
             try:
                 shutil.copy2(src_path, dest)
             except (OSError, shutil.Error):

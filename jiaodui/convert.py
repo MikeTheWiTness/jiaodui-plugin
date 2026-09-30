@@ -19,6 +19,7 @@ from pathlib import Path
 from .decor_utils import strip_decor_images, strip_decor_images_from_file
 from .errors import EnvError, NotFoundError, UnsupportedError
 from .log import log
+from .workdir import ensure_inside, ensure_tree, input_path
 
 __all__ = [
     "ConvertResult",
@@ -69,6 +70,7 @@ class ConvertResult:
     missing: int
     warnings: list[str] = field(default_factory=list)
     source_kind: str = ""
+    mode: str | None = None
 
 
 # ============================================================
@@ -137,6 +139,8 @@ def convert_with_pandoc(input_path, output_md, img_dir, use_mathjax=False):
     -t markdown-smart 禁用 pandoc 的「智能引号」扩展，
     防止中文弯引号被转换为英文直引号。
     """
+    output_md = str(ensure_inside(output_md))
+    img_dir = str(ensure_tree(img_dir))
     pandoc = find_pandoc()
     cmd = [
         pandoc, "-f", "docx", "-t", "markdown-smart",
@@ -156,6 +160,7 @@ def convert_with_pandoc(input_path, output_md, img_dir, use_mathjax=False):
 
 def pandoc_to_docx(md_path: str, docx_path: str) -> bool:
     """markdown → docx（供 docx 生成模块使用）。"""
+    docx_path = str(ensure_inside(docx_path))
     pandoc = find_pandoc()
     if not pandoc:
         log("❌ Pandoc 未安装，无法生成 Word")
@@ -1203,7 +1208,7 @@ def _organize_images(content, source_dirs, images_dir, base, warnings):
 
     返回 (新内容, copied, missing)。找不到或复制失败时保留原引用并写入 warnings。
     """
-    media_dir = Path(images_dir) / "media"
+    media_dir = ensure_tree(Path(images_dir) / "media")
     media_dir.mkdir(parents=True, exist_ok=True)
     copied = 0
     missing = 0
@@ -1244,12 +1249,10 @@ def _organize_images(content, source_dirs, images_dir, base, warnings):
             warnings.append(f"图片未找到，保留原引用：{src}")
             return m.group(0)
 
-        dest = media_dir / name
+        dest = ensure_inside(media_dir / name)
         try:
-            if not dest.exists():
+            if not dest.exists() or dest.resolve() != found.resolve():
                 shutil.copy2(found, dest)
-            elif dest.resolve() != found.resolve():
-                warnings.append(f"图片重名，沿用已存在文件：{name}")
         except (OSError, shutil.Error) as e:
             missing += 1
             warnings.append(f"图片复制失败，保留原引用：{src}（{e}）")
@@ -1261,8 +1264,8 @@ def _organize_images(content, source_dirs, images_dir, base, warnings):
     return _IMG_RE.sub(repl, content), copied, missing
 
 
-def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings):
-    """docx 分支：pandoc → normalize_caret_tilde → 格式增强 → 图片归置 → 后处理。"""
+def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, *, mode=None):
+    """docx 公共转换后仅 exam 走试卷后处理；讲义清理留到拆分时执行。"""
     if not check_pandoc():
         raise EnvError("Pandoc 未安装，无法转换 Word 文档", details={"path": str(src)})
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -1287,15 +1290,16 @@ def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings):
     with open(raw_md, encoding="utf-8") as f:
         content = f.read()
     content, copied, missing = _organize_images(
-        content, [images_dir, raw_md.parent], images_dir, base, warnings
+        content, [images_dir / "media", images_dir, raw_md.parent], images_dir, base, warnings
     )
     with open(raw_md, "w", encoding="utf-8") as f:
         f.write(content)
-    post_process_md(str(raw_md))
+    if mode == "exam":
+        post_process_md(str(raw_md))
     return copied, missing
 
 
-def _convert_md_to_raw(src, raw_md, images_dir, base, warnings):
+def _convert_md_to_raw(src, raw_md, images_dir, base, warnings, *, mode=None):
     """md 分支：复制/规范化到规范名，图片搬到 {base}_images/media 或保留报告。"""
     try:
         content = src.read_text(encoding="utf-8")
@@ -1314,55 +1318,66 @@ def _convert_md_to_raw(src, raw_md, images_dir, base, warnings):
     ]
     content, copied, missing = _organize_images(content, source_dirs, images_dir, base, warnings)
     raw_md.write_text(content, encoding="utf-8")
-    post_process_md(str(raw_md))
+    # 原始 Markdown 已有自己的格式，只归置图片，不套用 Word 后处理。
     return copied, missing
 
 
-def _convert_idml_to_raw(src, raw_md, images_dir, base, warnings):
-    """idml 分支：idml_extractor 转 markdown 后走同一套 md 后处理。"""
+def _convert_idml_to_raw(src, raw_md, images_dir, base, warnings, *, mode=None):
+    """idml 分支：提取为 Markdown 并归置图片，不重复执行 Word 后处理。"""
     data = extract_idml_to_markdown(str(src), str(raw_md))
     content = data["markdown"]
     source_dirs = [src.parent, images_dir, images_dir / "media", raw_md.parent]
     content, copied, missing = _organize_images(content, source_dirs, images_dir, base, warnings)
     raw_md.write_text(content, encoding="utf-8")
-    post_process_md(str(raw_md))
+    # IDML 提取器已完成格式处理，不再套用 Word 专属后处理。
     return copied, missing
 
 
-def convert_to_raw(src_path: str, out_dir: str, base_name: str, use_mathjax: bool = False) -> ConvertResult:
+def convert_to_raw(src_path: str, out_dir: str | None = None, base_name: str | None = None,
+                   use_mathjax: bool | None = None, *, mode: str | None = None) -> ConvertResult:
     """把源文件转换为 out_dir/{base_name}_raw.md，并归置图片。
 
-    - docx：pandoc docx→md（图片解包到 {base}_images/media）→ normalize_caret_tilde
-      → python-docx 格式增强 → 图片归置 → 通用后处理。
+    - docx：pandoc docx→md → normalize_caret_tilde → 格式增强 → 图片归置；
+      lecture 默认启用 mathjax，exam 执行试卷后处理，未确定类型只做公共转换。
     - md：复制/规范化为规范名，图片搬到 {base}_images/media（搬不动则保留原引用并报告）。
-    - idml：idml_extractor 转 markdown 后走同一套 md 后处理。
+    - idml：idml_extractor 转 markdown 后归置图片，不套用 Word 后处理。
     - 未识别扩展名抛 UnsupportedError（结构化）。
 
     目标已存在时不生成 attempt 副本，直接覆盖规范名并在 warnings 中说明。
     """
-    src = Path(src_path)
+    if mode is not None and mode not in {"exam", "lecture"}:
+        from .errors import UsageError
+        raise UsageError("材料类型必须为 exam 或 lecture")
+    src = input_path(src_path)
     if not src.is_file():
         raise NotFoundError(f"源文件不存在: {src_path}", details={"path": str(src_path)})
 
-    out = Path(out_dir)
+    if out_dir is None:
+        from .workflow import convert_material
+        return convert_material(src, base_name=base_name, use_mathjax=use_mathjax, mode=mode)
+    use_mathjax = mode == "lecture" if use_mathjax is None else use_mathjax
+    out = ensure_tree(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     base = (base_name or src.stem).strip() or src.stem
 
-    raw_md = out / f"{base}_raw.md"
-    images_dir = out / f"{base}_images"
+    raw_md = ensure_inside(out / f"{base}_raw.md")
+    images_dir = ensure_tree(out / f"{base}_images")
+    if raw_md == src:
+        from .errors import BusinessError
+        raise BusinessError("转换输出不能覆盖源文件", code="source-overwrite")
     warnings: list[str] = []
     if raw_md.exists():
         warnings.append(f"目标已存在，按规范名覆盖写入：{raw_md.name}")
 
     ext = src.suffix.lower()
     if ext in (".docx", ".doc"):
-        copied, missing = _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings)
+        copied, missing = _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, mode=mode)
         source_kind = "docx"
     elif ext in (".md", ".markdown"):
-        copied, missing = _convert_md_to_raw(src, raw_md, images_dir, base, warnings)
+        copied, missing = _convert_md_to_raw(src, raw_md, images_dir, base, warnings, mode=mode)
         source_kind = "md"
     elif ext == ".idml":
-        copied, missing = _convert_idml_to_raw(src, raw_md, images_dir, base, warnings)
+        copied, missing = _convert_idml_to_raw(src, raw_md, images_dir, base, warnings, mode=mode)
         source_kind = "idml"
     else:
         raise UnsupportedError(f"不支持的文件格式: {ext}", details={"ext": ext, "path": str(src)})
@@ -1374,4 +1389,5 @@ def convert_to_raw(src_path: str, out_dir: str, base_name: str, use_mathjax: boo
         missing=missing,
         warnings=warnings,
         source_kind=source_kind,
+        mode=mode,
     )

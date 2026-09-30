@@ -26,6 +26,7 @@ from .image_utils import ImageCopyResult, copy_md_images
 from .log import log
 from .paths import IMAGES_DIR, SKIP_MARKER_FILE, find_source_md
 from .units import scan_unit_dirs
+from .workdir import ensure_inside, ensure_tree
 
 
 def prepare_lecture_content(content: str, problem_markers=None) -> str:
@@ -259,15 +260,15 @@ def _load_raw(raw_md, base_name: str, config: dict | None = None):
 def _write_unit(target_root: Path, unit_name: str, content: str,
                 src_media: Path | None):
     """写单个单元目录：只落源文与图片，绝不触碰 _ 前缀的校对产物。"""
-    unit_dir = target_root / unit_name
+    unit_dir = ensure_tree(target_root / unit_name)
     unit_dir.mkdir(parents=True, exist_ok=True)
-    img_dir = unit_dir / IMAGES_DIR
+    img_dir = ensure_tree(unit_dir / IMAGES_DIR)
     img_dir.mkdir(parents=True, exist_ok=True)
     if src_media is not None:
         img_result = copy_md_images(content, [src_media], img_dir)
     else:
         img_result = ImageCopyResult(content=content)
-    md_path = unit_dir / f"{unit_name}.md"
+    md_path = ensure_inside(unit_dir / f"{unit_name}.md")
     md_path.write_text(img_result.content, encoding="utf-8")
     return unit_dir, md_path, img_result
 
@@ -451,7 +452,7 @@ def split_exam(raw_md: str, output_root: str, base_name: str, config: dict) -> S
         return result
 
     end_answers = parse_end_answers(ans_lines) if answer_mode == "end" else None
-    target_root = Path(output_root) / base_name
+    target_root = ensure_tree(Path(output_root) / base_name)
     target_root.mkdir(parents=True, exist_ok=True)
     if src_media is not None and not src_media.exists():
         log(f"   🔍 图片源目录不存在: {src_media}")
@@ -669,7 +670,7 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
         result.warnings.append("未识别到任何单元（内容可能全是纯标题壳）")
         return result
 
-    target_root = Path(output_root) / base_name
+    target_root = ensure_tree(Path(output_root) / base_name)
     target_root.mkdir(parents=True, exist_ok=True)
     if src_media is not None and not src_media.exists():
         log(f"   🔍 图片源目录不存在: {src_media}")
@@ -687,6 +688,21 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
 
 
 # ─── 边界切片（智能拆分用） ─────────────────────────────────
+
+def split_by_strategy(raw_md: str, output_root: str, base_name: str, config: dict,
+                      *, mode: str, strategy: str, clean: bool = True) -> SplitResult:
+    """人工标记与整篇导入共用既有清理和写盘，不调用模型、不另造产物名。"""
+    from .errors import UsageError
+    if strategy not in {"manual", "none"} or mode not in {"lecture", "exam"}:
+        raise UsageError("人工/整篇拆分需要有效 strategy 和 mode")
+    content, _ = _load_raw(raw_md, base_name, config)
+    if clean and mode == "lecture":
+        content = _clean_lecture(content, _ensure_normalized(config))
+    units = parse_unit_markers(content) if strategy == "manual" else [{"content": content}]
+    boundaries = [{"text": unit["content"]} for unit in units]
+    # 正文已经清理，禁止在写盘阶段再次清理导致边界变化。
+    return slice_by_boundaries(raw_md, boundaries, output_root, base_name, mode,
+                               clean=False, config=config)
 
 _CONTRACT_UNIT_NAME_RE = re.compile(r"^(第\d+题|板块\d+|单元\d+)$")
 
@@ -737,8 +753,9 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
     可能不同、行号随之错位。
     """
     base_name = (base_name or "").strip()
+    raw_config = config or {}
     config = _ensure_normalized(config)
-    content, src_media = _load_raw(raw_md, base_name, {})
+    content, src_media = _load_raw(raw_md, base_name, raw_config)
     if clean and str(mode).lower() == "lecture":
         content = _clean_lecture(content, config)
     lines = content.splitlines()
@@ -747,7 +764,7 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
         result.warnings.append("边界清单为空")
         return result
 
-    target_root = Path(output_root) / base_name
+    target_root = ensure_tree(Path(output_root) / base_name)
     target_root.mkdir(parents=True, exist_ok=True)
 
     for idx, boundary in enumerate(boundaries, start=1):
@@ -782,7 +799,8 @@ def precheck_split(paper_dir: str, *, overlong_threshold: int | None = None) -> 
     Returns:
         PrecheckResult。
     """
-    root = Path(paper_dir)
+    from .workdir import input_path
+    root = input_path(paper_dir)
     threshold = OVERLONG_THRESHOLD if overlong_threshold is None else int(overlong_threshold)
     result = PrecheckResult()
     unit_dirs = scan_unit_dirs(root)

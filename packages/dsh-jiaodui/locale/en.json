@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Proofreading (jiaodui)",
+    "description": "Mounts the jiaodui proofreading skill, registers the jiaodui native tool, and declares a jiaodui agent preset (high-school physics only for now)"
+  }
+}
