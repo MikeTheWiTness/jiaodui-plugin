@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-PY = str(ROOT / ".venv" / "bin" / "python")
+PY = sys.executable
 
 V1_COMMANDS = ["check-env", "inspect-source", "convert", "split", "slice", "precheck-split",
                "status", "verify-report", "parse-report", "calc",

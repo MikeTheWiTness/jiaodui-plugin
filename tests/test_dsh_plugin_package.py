@@ -96,10 +96,16 @@ def test_skill_frontmatter_is_discoverable():
     assert "\ndescription:" in text
 
 
-@pytest.mark.parametrize(
-    "relative",
-    [str(p.relative_to(SKILL_SRC)) for p in sorted(SKILL_SRC.rglob("*")) if p.is_file()],
-)
+def _skill_files(root: Path) -> set[str]:
+    """比较交付文件，排除 Finder 自动生成且不入包的目录元数据。"""
+    return {
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if p.is_file() and p.name != ".DS_Store"
+    }
+
+
+@pytest.mark.parametrize("relative", sorted(_skill_files(SKILL_SRC)))
 def test_bundled_skill_matches_repo_source(relative: str):
     src = (SKILL_SRC / relative).read_bytes()
     dst = (SKILL_PKG / relative).read_bytes()
@@ -107,6 +113,6 @@ def test_bundled_skill_matches_repo_source(relative: str):
 
 
 def test_bundled_skill_has_no_extra_files():
-    src_files = {str(p.relative_to(SKILL_SRC)) for p in SKILL_SRC.rglob("*") if p.is_file()}
-    dst_files = {str(p.relative_to(SKILL_PKG)) for p in SKILL_PKG.rglob("*") if p.is_file()}
+    src_files = _skill_files(SKILL_SRC)
+    dst_files = _skill_files(SKILL_PKG)
     assert dst_files == src_files

@@ -107,7 +107,8 @@ export function apply(ctx, config = {}) {
       if (typeof headerCwd !== 'string' || !isAbsolute(headerCwd)) {
         throw new Error('jiaodui: 当前会话缺少绝对工作区路径，请先打开工作区')
       }
-      const policy = ctx.sandboxPolicy ?? ctx.get?.('sandboxPolicy')
+      // 可选服务通过 get 查询；Cordis 会拒绝直接读取未声明 inject 的属性。
+      const policy = ctx.get('sandboxPolicy')
       const cwd = realpathSync(policy?.resolve({ session })?.workspaceRoot ?? headerCwd)
       if (args?.cwd && (!isAbsolute(args.cwd) || realpathSync(args.cwd) !== cwd)) throw new Error('jiaodui: cwd 必须等于当前会话工作区绝对路径')
       for (let i = 0; i < argv.length; i++) {

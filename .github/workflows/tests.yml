@@ -12,7 +12,7 @@ jobs:
         with:
           node-version: '22'
       - run: sudo apt-get update && sudo apt-get install -y pandoc
-      - run: python -m venv --system-site-packages .venv
-      - run: .venv/bin/python -m pip install -e '.[dev]' build
-      - run: .venv/bin/pytest -q
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install -e '.[dev,render]' build
+      - run: .venv/bin/python -m pytest -o addopts='' -q -rs
       - run: .venv/bin/python -m build --wheel

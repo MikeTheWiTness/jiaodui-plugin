@@ -20,10 +20,10 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { apply } from './packages/dsh-jiaodui/tools/index.js';
+import { apply, inject } from './packages/dsh-jiaodui/tools/index.js';
 let tool;
 const requests=[];
-const ctx={tools:{register(t){tool=t}},subprocess:{
+const services={tools:{register(t){tool=t}},subprocess:{
   async resolveExecutable(){return process.execPath},
   spawn(spec){
     requests.push(spec);
@@ -41,16 +41,29 @@ const ctx={tools:{register(t){tool=t}},subprocess:{
     return {done,collected:{stdout:{readFrom(){return {text:stdout,lossy:false}}},stderr:{readFrom(){return {text:stderr,lossy:false}}}}};
   }
 }};
+// 模拟 Cordis：未声明 inject 的属性访问立即抛错；可选服务用 get 查询。
+let policyLookups=0;
+const ctx=new Proxy({get(name){
+  assert.equal(name,'sandboxPolicy');policyLookups++;return services[name];
+}},{get(target,prop,receiver){
+  if(Reflect.has(target,prop))return Reflect.get(target,prop,receiver);
+  if(!inject.includes(prop))throw new Error(`cannot get property "${prop}" without inject`);
+  return services[prop];
+}});
+assert.throws(()=>ctx.sandboxPolicy,/without inject/);
 const cwd=process.argv[1];
 apply(ctx,{command:'node',timeoutMs:5000});
 const exec={agent:{session:{header:{cwd}}}};
 let result=await tool.execute({args:['-e','setTimeout(()=>console.log(process.env.JIAODUI_WORK_ROOT),30)']},exec);
 assert.equal(result.stdout.trim(),cwd);assert.equal(result.exitCode,0);assert.equal(requests[0].cwd,cwd);
+assert.equal(policyLookups,1);
 const second=join(cwd,'B');mkdirSync(second);
 let policyCalls=0;
-ctx.sandboxPolicy={resolve({session}){policyCalls++;return {workspaceRoot:session.header.cwd}}};
-result=await tool.execute({args:['-e','console.log(process.env.JIAODUI_WORK_ROOT)']},{agent:{session:{header:{cwd:second}}}});
+services.sandboxPolicy={resolve({session}){policyCalls++;assert.equal(session,exec.agent.session);return {workspaceRoot:second}}};
+result=await tool.execute({args:['-e','console.log(process.env.JIAODUI_WORK_ROOT)']},exec);
 assert.equal(result.stdout.trim(),second);assert.equal(requests[1].cwd,second);assert.equal(policyCalls,1);
+assert.equal(policyLookups,2);
+delete services.sandboxPolicy;
 await assert.rejects(()=>tool.execute({args:['--work-root',second,'--help']},exec),/work-root/);
 result=await tool.execute({args:['-e','setTimeout(()=>{console.error("failure");process.exit(4)},30)']},exec);
 assert.equal(result.exitCode,4);assert.equal(result.stderr.trim(),'failure');

@@ -50,13 +50,15 @@ M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已在**当前
 ## 环境
 
 ```bash
-python3.12 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install -q sympy pytest
-.venv/bin/python -m pip install -e .
-jiaodui check-env
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -e '.[dev,render]' build
+.venv/bin/jiaodui check-env --json
+.venv/bin/python -m pytest -o addopts='' -q -rs
 ```
 
-需要外部 `pandoc`（docx↔md）；`matplotlib`、`playwright` 为可选能力，缺失时优雅降级。
+使用 pyenv / Homebrew / python.org 的独立 Python 3.12，不继承系统包。macOS 上不要用 DSH 自带的签名 Python 创建此环境，否则 pip 安装的原生扩展可能因 Team ID 不一致被拒绝加载。环境迁移时可让 `.venv` 指向已经验证的仓库内独立环境，插件的 CLI 自动发现路径不变。
+
+需要外部 `pandoc`（docx↔md）；`render` 可选依赖组提供 matplotlib 公式图片渲染，`classics` 提供 Playwright。未安装时对应能力仍优雅降级；开发与 CI 安装 `render` 以实际执行公式和 Word 图片测试。
 
 ## 架构
 

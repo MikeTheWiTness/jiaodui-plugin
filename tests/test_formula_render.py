@@ -12,15 +12,15 @@ from jiaodui.formula_render import _CJK_FONT, latex_to_png, matplotlib_available
 HAS_MPL = matplotlib_available()
 
 
-@pytest.mark.skipif(HAS_MPL, reason="matplotlib 可用时该退化用例不适用")
-def test_missing_matplotlib_returns_false_without_file(tmp_path):
+def test_missing_matplotlib_returns_false_without_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("jiaodui.formula_render._ensure_matplotlib", lambda: False)
     out = tmp_path / "f.png"
     assert latex_to_png(r"v = at", out) is False
     assert not out.exists()
 
 
-@pytest.mark.skipif(HAS_MPL, reason="matplotlib 可用时该退化用例不适用")
-def test_missing_matplotlib_failed_render_leaves_no_file(tmp_path):
+def test_missing_matplotlib_failed_render_leaves_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr("jiaodui.formula_render._ensure_matplotlib", lambda: False)
     out = tmp_path / "f.png"
     out.write_bytes(b"stale")
     assert latex_to_png(r"v = at", out) is False

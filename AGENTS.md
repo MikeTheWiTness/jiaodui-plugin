@@ -18,13 +18,14 @@
 
 ## 环境
 
-- Python 3.12；开发用仓库内 `.venv`（`--system-site-packages`，复用宿主运行时的 lxml / Pillow / python-docx，避免 macOS 代码签名冲突）。
+- Python 3.12；用 pyenv / Homebrew / python.org 的独立解释器创建仓库内 `.venv`，不加 `--system-site-packages`，依赖全部装入该环境。不要用 DSH 自带的签名 Python 创建 CLI 环境：它可能拒绝加载 pip 安装的 matplotlib 等原生扩展（Team ID 不一致）。
   ```bash
-  /Users/chouchou/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/bin/python3 -m venv --system-site-packages .venv
-  .venv/bin/python -m pip install -q sympy pytest
+  python3.12 -m venv .venv
+  .venv/bin/python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -e '.[dev,render]' build
   ```
+- `.venv` 也可指向仓库内已验证的独立环境（本机为 `.venv-cli`）；插件仍从 `.venv/bin/jiaodui` 自动发现 CLI。旧 DSH 环境只作备份，不参与测试或运行。
 - 外部依赖 `pandoc`（docx↔md）；路径可用 `JIAODUI_PANDOC` 覆盖。
-- 测试：`.venv/bin/pytest -q`；`pip install -i https://pypi.tuna.tsinghua.edu.cn/simple <package>` 优先清华源。
+- 测试：`.venv/bin/python -m pytest -q`；全量测试用 `.venv/bin/python -m pytest -o addopts='' -q -rs`（取消默认标记过滤）。CLI 子进程测试用 `sys.executable`，确保与测试进程使用同一环境；pip 安装优先清华源。
 
 ## 分层与禁令
 

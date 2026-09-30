@@ -35,9 +35,13 @@
 ```bash
 python3.12 -m pip install build
 python3.12 -m build --wheel
-pipx install --python python3.12 dist/jiaodui-0.1.0-py3-none-any.whl
+pipx install --python python3.12 'dist/jiaodui-0.1.0-py3-none-any.whl[render]'
 jiaodui check-env --json
 ```
+
+Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要用 DSH 自带的签名 Python 创建 CLI 环境，也不要继承其系统包：签名运行时可能拒绝加载 pip 安装的原生扩展（Team ID 不一致）。`[render]` 安装 matplotlib，供 Word 批注中的公式渲染；不需要此能力时可省略。
+
+开发软链安装使用仓库内的独立 `.venv`：`python3.12 -m venv .venv`，再执行 `.venv/bin/python -m pip install -e '.[dev,render]'`。`.venv` 也可为指向已验证独立环境的软链，无须修改 profile 的工具配置。用 `.venv/bin/jiaodui check-env --json` 检查解释器路径和 matplotlib 可用性。
 
 插件按显式 `command`、开发软链对应的仓库 venv、PATH 上的 `jiaodui` 查找；复制安装不依赖施工仓库。未找到时明确报安装错误，不自动安装或回退任意 Python。
 
