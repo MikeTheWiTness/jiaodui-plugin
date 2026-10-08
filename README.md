@@ -5,7 +5,10 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - 需求与契约：[docs/PRD.html](docs/PRD.html)
 - 执行顺序与完成判据：[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 - M5 架构决策：[ADR-0001：多学科入口与逐科落地](docs/adr/0001-m5-subject-entry-and-rollout.md)
+- 交付闸门：[ADR-0004：闸门单一实现（含图片资源）](docs/adr/0004-gate-single-implementation.md)
+- 学科工具：[ADR-0005：量纲校验的声明形态与多解判定](docs/adr/0005-dimensional-declaration-and-ambiguity.md)
 - 仓库约定（AI 助手必读）：[AGENTS.md](AGENTS.md)
+- 缺陷修复计划：[docs/REMEDIATION.md](docs/REMEDIATION.md)
 - M0 验收：[docs/M0.md](docs/M0.md)　·　M1 端到端验收：[docs/M1.md](docs/M1.md)
 - 基线复算：[docs/BASELINE.md](docs/BASELINE.md)
 - 入口与拆分迁移核对：[docs/ENTRY_MIGRATION.md](docs/ENTRY_MIGRATION.md)
@@ -31,9 +34,11 @@ M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已在**当前
 | `jiaodui precheck-split <dir>` | 拆分预检：单元数 / 首行 / 字符数分布 / 空与超长单元 |
 | `jiaodui slice --boundaries <f> [--mode] [--subject]` | 按边界清单确定性切片；`--preview` 打印讲义清理后正文供定行号 |
 | `jiaodui status <paper_dir>` | 扫描单元状态（未开始 / 已交付未过校验 / 已完成 / 失败） |
-| `jiaodui verify-report --unit <dir>` | 交付即校验：格式 + 原因对应 + 严重度 + 原文完整性 |
+| `jiaodui verify-report --unit <dir>` | 交付即校验：格式 + 原因对应 + 严重度 + 原文完整性 + 图片资源 |
 | `jiaodui parse-report --unit <dir>` | 报告 → `_校对数据.json`（默认拒绝未过校验的报告） |
-| `jiaodui calc <op>` | sympy 符号计算沙箱（白名单 + 容差，默认不回显生成代码） |
+| `jiaodui repair-report --unit <dir> [--apply]` | 显式完整性修复：只从源文重建标记原文段；默认预览，`--apply` 原子替换并复验 |
+| `jiaodui calc <op>` | sympy 符号计算沙箱（白名单 + 容差，默认不回显生成代码）；`--subject` 校验工具族并注入物理量表 |
+| `jiaodui quantities --subject <学科> [--search 词]` | 只读列出学科物理量表（不进 agent 上下文，按需查） |
 | `jiaodui build-report <paper_dir>` | 整卷报告：只拼入通过校验的正文，失败写占位 |
 | `jiaodui build-docx <paper_dir>` | Word 批注版，生成后复核实际锚点，缺失必须为 0 |
 
@@ -43,9 +48,9 @@ M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已在**当前
 
 ## 工作区产物
 
-新运行在当前工作区自动创建 `校对/<材料名>/`，分别用 `source/`、`raw/`、`units/<材料名>/`、`校对报告/`、`校对Word/` 保存源文件副本、中间产物和最终报告。六条写入命令必须由宿主注入 `JIAODUI_WORK_ROOT`，或显式传 `--work-root /绝对工作区`；只读命令独立可用。源文件可位于工作区外，但产物不可越界。
+新运行在当前工作区自动创建 `校对/<材料名>/`，分别用 `source/`、`raw/`、`units/<材料名>/`、`校对报告/`、`校对Word/` 保存源文件副本、中间产物和最终报告。写入命令（convert / split / slice 非 preview / parse-report / build-report / build-docx / repair-report --apply）必须由宿主注入 `JIAODUI_WORK_ROOT`，或显式传 `--work-root /绝对工作区`；只读命令独立可用。源文件可位于工作区外，但产物不可越界。
 
-单元通过 `verify-report` 后必须运行 `parse-report` 登记当前轮次；断点续跑保留已完成报告，`split --rerun` 开新轮次。同名源文件变化拒绝覆盖，可用 `--material-name` 指定新材料名。历史产物写入使用 `--legacy-layout`，仍需授权工作区。详见 [ADR 0002](docs/adr/0002-workspace-material-layout.md)。
+单元通过 `verify-report` 后必须运行 `parse-report` 登记当前轮次；若因未标记正文被转录改动导致完整性失败，可先用 `repair-report` 预览、确认唯一后 `--apply`，修复不判断意见正确性、不放宽闸门。断点续跑保留已完成报告，`split --rerun` 开新轮次；拆分结果与当前单元集不同时用 `split` / `slice --replace-units`（陈旧单元归档到 `units/<材料名>/.superseded/<run_id>/`，只移动不删除）。同名源文件变化拒绝覆盖，可用 `--material-name` 指定新材料名。历史产物写入使用 `--legacy-layout`，仍需授权工作区。详见 [ADR 0002](docs/adr/0002-workspace-material-layout.md)。
 
 ## 环境
 
@@ -74,7 +79,8 @@ jiaodui/           Python 包：确定性核心 + CLI 壳（唯一逻辑所在�
   convert.py       docx / idml / md → _raw.md
   calc/            sympy 沙箱（白名单 + 容差）
   docx_report.py   Word 批注版生成与锚点复核
-config/subjects/   机器读学科配置
+jiaodui/data/subjects/  机器读学科配置（运行时唯一来源）
+config/subjects/   同上的人工可读镜像（改配置请改包内那份）
 skills/jiaodui/    人读 skill 与 references
 tests/             行为契约测试
 ```

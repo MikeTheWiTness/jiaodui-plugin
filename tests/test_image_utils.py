@@ -131,6 +131,28 @@ class TestCopyMdImages:
         assert result.copied == 2  # 两次引用都算“成功复制”
         assert (fx.target_img_dir / "reuse.png").exists()
 
+    def test_exact_relative_path_wins_over_basename_fallback(self, fx):
+        exact = fx.src_dirs[0] / "nested" / "same.png"
+        exact.parent.mkdir(parents=True)
+        exact.write_bytes(b"exact")
+        (fx.src_dirs[0] / "same.png").write_bytes(b"wrong")
+
+        result = copy_md_images("![图](./nested/same.png)", fx.src_dirs, fx.target_img_dir)
+
+        assert result.copied == 1
+        assert (fx.target_img_dir / "same.png").read_bytes() == b"exact"
+
+    def test_same_basename_with_different_content_is_conflict(self, fx):
+        (fx.src_dirs[0] / "same.png").write_bytes(b"one")
+        (fx.src_dirs[1] / "same.png").write_bytes(b"two")
+
+        result = copy_md_images("![图](./same.png)", fx.src_dirs, fx.target_img_dir)
+
+        assert result.copied == 0
+        assert result.conflicts == 1
+        assert result.missing == 1
+        assert not (fx.target_img_dir / "same.png").exists()
+
     def test_empty_content(self, fx):
         """空字符串应原样返回。"""
         result = copy_md_images("", fx.src_dirs, fx.target_img_dir)
@@ -165,6 +187,6 @@ class TestCopyMdImages:
         """返回值应为 ImageCopyResult 数据类。"""
         result = copy_md_images("text", fx.src_dirs, fx.target_img_dir)
         assert isinstance(result, ImageCopyResult)
-        assert hasattr(result, "content")
-        assert hasattr(result, "copied")
-        assert hasattr(result, "missing")
+        # 行为断言：无引用文本原样返回、零复制零缺失（hasattr 恒真，无法证伪）
+        assert result.content == "text"
+        assert (result.copied, result.missing) == (0, 0)

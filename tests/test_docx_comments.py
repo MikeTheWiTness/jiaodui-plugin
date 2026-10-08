@@ -153,15 +153,21 @@ class TestInsertCommentsIntoMd(unittest.TestCase):
 
 
 class TestExtractCommentsToMd(unittest.TestCase):
-    def test_function_exists(self):
-        from jiaodui.docx_comments import extract_comments_to_md
-        self.assertTrue(callable(extract_comments_to_md))
+    def test_nonexistent_file_returns_false(self, tmp_path=None):
+        """行为断言：源文件不存在 → 返回 False，且不留输出文件。
 
-    def test_nonexistent_file_returns_false(self):
+        原来的 callable() 断言恒真，已被这条替代。
+        """
+        import tempfile
+        from pathlib import Path
 
         from jiaodui.docx_comments import extract_comments_to_md
-        result = extract_comments_to_md("/nonexistent/path.docx", "/tmp/out.md")
-        self.assertFalse(result)
+
+        with tempfile.TemporaryDirectory() as d:
+            out_path = Path(d) / "out.md"
+            result = extract_comments_to_md(str(Path(d) / "缺失.docx"), str(out_path))
+            self.assertFalse(result)
+            self.assertFalse(out_path.exists(), "失败时不得留下输出文件")
 
 
 class TestEdgeCases(unittest.TestCase):

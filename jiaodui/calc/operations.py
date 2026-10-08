@@ -12,7 +12,9 @@ operation 元数据，run_operation 直接返回沙箱的结构化 dict。
 """
 from __future__ import annotations
 
+import io
 import re as _re
+import tokenize
 from typing import Any, Callable
 
 from .chemistry import _MOLAR_MASSES
@@ -115,11 +117,16 @@ OPERATIONS: dict[str, dict] = {
             _p("dim_operation", False, "str", "check_consistency",
                "操作：check_consistency / get_dimensions / convert"),
             _p("unit_definitions", True, "dict", None,
-               "表达式里每个符号的单位声明，如 {'F': 'newton', 'L': 'meter'}；"
-               "无量纲量声明为 'dimensionless'；歧义符号用候选列表 "
-               "{'V': ['meter/second', 'meter**3']}"),
+               "表达式里每个符号的声明，三种形态：单位表达式 {'F': 'newton'}；"
+               "显式量纲 {'F': 'dim:M*L*T**-2'}（只允许 M/L/T/I/Θ/N/J）；"
+               "物理量名+单位 {'F': {'quantity': '力', 'unit': 'newton'}}。"
+               "无量纲写 'dimensionless'；候选列表表示调用方显式列出的全部候选读数，"
+               "工具会枚举所有组合并回报全部自洽解（{'V': ['meter/second', 'meter**3']}）"),
             _p("target_units", False, "str", "",
                "目标单位表达式，仅 dim_operation='convert' 时使用，如 'kilometer / hour'"),
+            _p("quantities", False, "dict", {},
+               "学科物理量表 {物理量名: 单位表达式}，由宿主按 --subject 注入；"
+               "只用于给 quantity 声明做量纲交叉校验（内部参数）"),
         ],
     },
     "limit": {
@@ -206,7 +213,11 @@ def _fail(message: str) -> dict:
 
 
 def _validate_params(operation: str, meta: dict, params: dict) -> str | None:
-    """校验必填与类型，返回可读错误信息；通过则返回 None。"""
+    """校验参数名、必填项与类型，返回可读错误信息；通过则返回 None。"""
+    known = {spec["name"] for spec in meta["params"]}
+    unknown = sorted(set(params) - known)
+    if unknown:
+        return f"operation '{operation}' 存在未知参数：{', '.join(unknown)}"
     for spec in meta["params"]:
         name = spec["name"]
         if name not in params or params[name] is None:
@@ -226,6 +237,24 @@ def _validate_params(operation: str, meta: dict, params: dict) -> str | None:
 def _effective_params(meta: dict, params: dict) -> dict:
     """按元数据补齐默认值，只保留已声明的参数。"""
     return {spec["name"]: params.get(spec["name"], spec["default"]) for spec in meta["params"]}
+
+
+def _has_top_level_equals(expression: str) -> bool:
+    """识别顶层单等号，避免把等式交给表达式求值而暴露底层语法错误。"""
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(expression).readline)
+        depth = 0
+        for token in tokens:
+            if token.type == tokenize.OP:
+                if token.string in "([{":
+                    depth += 1
+                elif token.string in ")]}":
+                    depth = max(0, depth - 1)
+                elif token.string == "=" and depth == 0:
+                    return True
+    except (tokenize.TokenError, IndentationError):
+        return False
+    return False
 
 
 # ---- stoichiometry 专用：先解析方程式再生成沙箱代码 ----
@@ -300,6 +329,10 @@ def run_operation(operation: str, **params) -> dict:
         return _fail(error)
 
     eff = _effective_params(meta, params)
+    if operation == "evaluate" and _has_top_level_equals(eff["expression"]):
+        return _fail(
+            "evaluate 不接受顶层等式；请改用 solve、formula，或用 equality 分别传入两侧表达式比较"
+        )
 
     try:
         if operation == "stoichiometry":

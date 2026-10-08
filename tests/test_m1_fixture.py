@@ -32,6 +32,39 @@ def test_m1_fixture_units_pass_gate():
 
 
 @pytest.mark.skipif(PANDOC is None, reason="pandoc 不可用")
+def test_m1_fixture_delivery_ledger_is_balanced(tmp_path, monkeypatch):
+    """交付路径必须对账：标记 28 = 锚点 28 + 公式兜底 0，缺失 0（R-F02）。
+
+    M1 的验收口径（「28 = 28 锚点 + 0 兜底」）此前只在 CI 之外用 shell 复现，
+    真实语料上**没有任何测试守着交付路径的对账**。这里把它变成机器断言：
+    先跑交付入口 build_docx，再独立解压数一遍批注，不信任上位计数。
+    """
+    from jiaodui.docx_report import build_docx
+
+    work = tmp_path / "M1"
+    shutil.copytree(FIXTURE, work)
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(work))
+    paper = work / "units" / "第 6 讲校对测试"
+
+    res = build_docx(str(paper), legacy_layout=True)
+
+    assert res.ok, res.warnings
+    assert res.marker_count == 28
+    assert res.anchor_count == 28
+    assert res.formula_fallback_count == 0
+    assert res.missing_count == 0
+    assert res.over_count == 0
+    assert res.anchor_structure_ok
+    assert res.out_path and Path(res.out_path).is_file()
+
+    with zipfile.ZipFile(res.out_path) as z:
+        comment_parts = [n for n in z.namelist() if n.startswith("word/comments")]
+        counted = sum(len(re.findall(r"<w:comment ", z.read(n).decode("utf-8")))
+                      for n in comment_parts)
+    assert counted == 28, "独立复核的批注数必须与验收口径一致"
+
+
+@pytest.mark.skipif(PANDOC is None, reason="pandoc 不可用")
 def test_m1_fixture_build_docx_has_all_reasons(tmp_path):
     paper = tmp_path / "第 6 讲校对测试"
     shutil.copytree(UNIT_ROOT, paper)

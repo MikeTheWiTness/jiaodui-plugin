@@ -42,6 +42,19 @@ def cmd_inspect_source(args: argparse.Namespace) -> int:
     _json_out(payload)
     return ExitCode.OK
 
+
+def cmd_inspect_images(args: argparse.Namespace) -> int:
+    from .inspect_images import inspect_unit_images
+    payload = inspect_unit_images(args.unit)
+    _json_out(payload)
+    if not payload["ok"]:
+        raise VerifyFailedError(
+            "图片引用清单未通过：存在缺图、无效引用或不支持的远程引用",
+            details={"unit": str(args.unit), "errors": payload["errors"]},
+        )
+    return ExitCode.OK
+
+
 def cmd_check_env(args: argparse.Namespace) -> int:
     from .checkenv import check_env
 
@@ -86,7 +99,8 @@ def _split(args: argparse.Namespace) -> int:
                             out_root=args.out_root, base_name=args.base_name,
                             material_name=args.material_name, images_dir=args.images_dir,
                             clean=not args.no_clean, rerun=args.rerun,
-                            adopt_units=args.adopt_units, legacy_layout=args.legacy_layout,
+                            adopt_units=args.adopt_units, replace_units=args.replace_units,
+                            legacy_layout=args.legacy_layout,
                             mode_origin=args.mode_origin, mode_reason=args.mode_reason,
                             strategy=args.strategy)
     payload = {"ok": True, "units": result.units, "unit_dirs": result.unit_dirs,
@@ -104,6 +118,7 @@ def cmd_slice(args: argparse.Namespace) -> int:
     result = slice_material(args.boundaries, raw=args.raw, subject=args.subject, mode=args.mode,
                             out_root=args.out_root, base_name=args.base_name, material_name=args.material_name,
                             clean=not args.no_clean, rerun=args.rerun,
+                            replace_units=args.replace_units,
                             legacy_layout=args.legacy_layout, preview=args.preview,
                             mode_origin=args.mode_origin, mode_reason=args.mode_reason)
     if args.preview:
@@ -147,6 +162,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         for u in result.units:
             log(f" {u.state:<8} {u.unit}" + (f" — {u.reason}" if u.reason and u.state != "已完成" else ""))
+        for warning in result.warnings:
+            log(f" ⚠️ {warning}")
         print(json.dumps(result.counts(), ensure_ascii=False))
     return ExitCode.OK
 
@@ -192,6 +209,35 @@ def cmd_parse_report(args: argparse.Namespace) -> int:
     return ExitCode.OK
 
 
+def cmd_repair_report(args: argparse.Namespace) -> int:
+    from .report_repair import repair_unit_report
+    from .workdir import input_path
+
+    result = repair_unit_report(
+        args.unit,
+        source_path=args.source,
+        apply=args.apply,
+        work_root=getattr(args, "work_root", None),
+    )
+    payload = result.to_dict()
+    payload.update({
+        "unit": str(input_path(args.unit)),
+        "applied": result.verified,
+        "mode": "apply" if args.apply else "preview",
+    })
+    if args.json:
+        _json_out(payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False))
+    if result.ok:
+        return ExitCode.OK
+    emit_error(VerifyFailedError(
+        "报告修复候选未通过严格条件，未写入报告",
+        details={"unit": str(args.unit), "diagnostics": result.diagnostics},
+    ))
+    return ExitCode.VERIFY_FAILED
+
+
 def _parse_kv(values: list[str]) -> dict:
     params: dict[str, Any] = {}
     for item in values or []:
@@ -223,6 +269,13 @@ def cmd_calc(args: argparse.Namespace) -> int:
         visible = sorted(set(CALC_REQUIRED_OPS) | set(OPERATIONS))
         raise UnsupportedError(f"未知 calc 子命令：{op}", details={"available": visible})
     params = _parse_kv(args.param)
+    if getattr(args, "subject", None):
+        from .workflow import require_subject_tool
+        config = require_subject_tool(args.subject, "calc")
+        # 学科物理量表只服务于 dimensional（给 quantity 声明做量纲交叉校验，
+        # ADR 0005）；显式传入优先，其他 op 不接受该参数。
+        if internal == "dimensional":
+            params.setdefault("quantities", config.get("quantities") or {})
     result = run_operation(internal, **params)
     if not result.get("code") or not args.show_code:
         result = {k: v for k, v in result.items() if k != "code"}
@@ -234,6 +287,20 @@ def cmd_calc(args: argparse.Namespace) -> int:
     if not result.get("success"):
         raise BusinessError(str(result.get("error") or "calc 执行失败"), code="calc_failed",
                             details={"op": op})
+    return ExitCode.OK
+
+
+def cmd_quantities(args: argparse.Namespace) -> int:
+    from .workflow import list_quantities
+
+    payload = {"ok": True, **list_quantities(args.subject, args.search)}
+    if args.json:
+        _json_out(payload)
+    else:
+        for name, unit in payload["quantities"].items():
+            log(f" {name}: {unit}")
+        log(f" 共 {payload['count']} 条（{payload['subject']}）")
+        print(json.dumps({"ok": True, "count": payload["count"]}, ensure_ascii=False))
     return ExitCode.OK
 
 
@@ -263,15 +330,21 @@ def cmd_build_docx(args: argparse.Namespace) -> int:
     if args.json:
         _json_out(payload)
     else:
+        anomaly = f"，记账异常 {result.over_count}" if result.over_count else ""
+        if result.image_missing_count:
+            anomaly += f"，图片未嵌入 {result.image_missing_count}"
+        if result.comment_formula_fallback_count:
+            anomaly += f"，公式降级 {result.comment_formula_fallback_count}"
         log(f" 标记 {result.marker_count} = 锚点 {result.anchor_count} + 公式兜底 "
             f"{result.formula_fallback_count}，缺失 {result.missing_count}，"
-            f"标题批注 {result.heading_comment_count}")
+            f"标题批注 {result.heading_comment_count}{anomaly}")
         print(json.dumps(payload, ensure_ascii=False, default=str))
     if not payload["ok"]:
         raise BusinessError(
-            "Word 交付未通过复核（缺失/被排除/锚点结构不一致）",
+            "Word 交付未通过复核（缺失/记账异常/被排除/锚点结构不一致）",
             code="docx_incomplete",
             details={"missing_count": result.missing_count,
+                     "over_count": result.over_count,
                      "excluded_units": result.excluded_units,
                      "anchor_structure_ok": result.anchor_structure_ok,
                      "warnings": result.warnings})
@@ -306,6 +379,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("file")
     sp.add_argument("--preview-chars", type=int, default=0, help="节选字符数 0..2000；默认不返回正文")
     sp.set_defaults(func=cmd_inspect_source)
+
+    sp = sub.add_parser("inspect-images", help="按正文顺序列出单元图片引用与实际读取路径")
+    sp.add_argument("--unit", required=True)
+    sp.set_defaults(func=cmd_inspect_images)
 
     sp = sub.add_parser("convert", help="docx / idml / md → _raw.md")
     sp.add_argument("file")
@@ -360,11 +437,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--legacy", action="store_true", help="允许解析未通过校验的历史报告")
     sp.set_defaults(func=cmd_parse_report)
 
+    sp = sub.add_parser("repair-report", help="预览或显式应用报告正文完整性修复")
+    sp.add_argument("--unit", required=True)
+    sp.add_argument("--source")
+    sp.add_argument("--apply", action="store_true", help="原子替换报告并运行完整 verify-unit 复验")
+    sp.set_defaults(func=cmd_repair_report)
+
     sp = sub.add_parser("calc", help="符号计算沙箱（evaluate/solve/formula/dimension/vector/circle/equality）")
     sp.add_argument("op")
     sp.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
     sp.add_argument("--show-code", action="store_true", help="回显生成的代码（默认不回显）")
+    sp.add_argument("--subject", help="学科；提供后按学科配置的工具集白名单校验 calc 是否可用")
     sp.set_defaults(func=cmd_calc)
+
+    sp = sub.add_parser("quantities", help="列出学科物理量表（只读，供量纲声明核对用词）")
+    sp.add_argument("--subject", required=True)
+    sp.add_argument("--search", help="按关键词过滤物理量名或单位表达式")
+    sp.set_defaults(func=cmd_quantities)
 
     sp = sub.add_parser("build-report", help="拼接整卷报告")
     sp.add_argument("paper_dir")
@@ -392,6 +481,9 @@ def build_parser() -> argparse.ArgumentParser:
         sub.choices[name].add_argument("--mode-reason", help="类型判断的简短依据（不超过 500 字符）")
     for name in ("split", "slice"):
         sub.choices[name].add_argument("--rerun", action="store_true", help="开启新轮次，旧报告不计为本轮完成")
+        sub.choices[name].add_argument(
+            "--replace-units", action="store_true",
+            help="单元集变化时把陈旧单元归档到 .superseded/<run_id>/（只移动不删除），并更新本轮单元集")
     sub.choices["split"].add_argument("--adopt-units", action="store_true", help="显式接纳当前磁盘单元集，留痕且不删除产物")
     return p
 

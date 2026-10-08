@@ -24,13 +24,13 @@ def test_anchor_heading_variants(paragraph):
     assert heading.find("w:commentRangeEnd", NS).get(f"{{{W}}}id") == "3"
     assert heading.find("w:r/w:commentReference", NS) is not None
     assert heading.xpath("string(.)") == "单元7"
-    assert len(_split_unit_sections(anchored)) == 1
+    assert list(_split_unit_sections(anchored, ["单元7"])) == ["单元7"]
 
 
 def test_body_text_is_not_mistaken_for_heading():
     text = f'<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>单元7</w:t></w:r></w:p></w:body></w:document>'
     assert _anchor_heading_comments(text, {1: "单元7"}) == text
-    assert _split_unit_sections(text) == []
+    assert _split_unit_sections(text, ["单元7"]) == {}
 
 
 def test_multiple_heading_sections_keep_original_unit_order():
@@ -38,12 +38,18 @@ def test_multiple_heading_sections_keep_original_unit_order():
             '<w:p><w:r><w:t>卷首说明</w:t></w:r></w:p>'
             '<w:p><w:pPr><w:keepNext/><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>第1题</w:t></w:r></w:p>'
             '<w:p><w:r><w:t>第一题正文</w:t></w:r></w:p>'
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>一、选择题</w:t></w:r></w:p>'
+            '<w:p><w:r><w:t>第一题补充</w:t></w:r></w:p>'
             '<w:p w:rsidR="002"><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>单元7</w:t></w:r></w:p>'
             '<w:p><w:r><w:t>第二题正文</w:t></w:r></w:p></w:body></w:document>')
-    sections = _split_unit_sections(text)
-    assert len(sections) == 2
-    assert "第一题正文" in sections[0] and "第二题正文" not in sections[0]
-    assert "第二题正文" in sections[1] and "卷首说明" not in "".join(sections)
+    sections = _split_unit_sections(text, ["第1题", "单元7"])
+    assert list(sections) == ["第1题", "单元7"], "只按单元名切分，且保持出现顺序"
+    assert "第一题正文" in sections["第1题"] and "第二题正文" not in sections["第1题"]
+    # 正文自带的一级标题不是单元边界，必须留在本单元内
+    assert "一、选择题" in sections["第1题"]
+    assert "第一题补充" in sections["第1题"]
+    assert "第二题正文" in sections["单元7"]
+    assert "卷首说明" not in "".join(sections.values())
 
 
 def test_word_without_chinese_font_keeps_formula_visible(tmp_path, monkeypatch):

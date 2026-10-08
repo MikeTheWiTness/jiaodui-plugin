@@ -5,6 +5,8 @@
 """
 from pathlib import Path
 
+import pytest
+
 from jiaodui.split import (SplitResult, lecture_cleaned_text, precheck_split,
                            slice_by_boundaries, split_exam, split_lecture)
 
@@ -83,12 +85,49 @@ class TestSplitExam:
         assert (tmp_path / "out" / "paper" / "第1题" / "images" / "pic.png").exists()
         assert "./images/pic.png" in _text(tmp_path / "out" / "paper" / "第1题" / "第1题.md")
 
+    def test_parentheses_in_material_image_path_survive_split_and_verify(self, tmp_path):
+        from PIL import Image
+        from jiaodui.verify import verify_unit
+
+        raw_path = tmp_path / "练习(1)_raw.md"
+        raw_path.write_text(
+            "1．见图 ![](./练习(1)_images/media/p.png)。\n", encoding="utf-8")
+        media = tmp_path / "练习(1)_images" / "media"
+        media.mkdir(parents=True)
+        Image.new("RGB", (2, 2), "red").save(media / "p.png")
+
+        result = split_exam(str(raw_path), str(tmp_path / "out"), "练习(1)", {})
+
+        unit = Path(result.unit_dirs[0])
+        assert (result.copied, result.missing) == (1, 0)
+        assert (unit / "images" / "p.png").is_file()
+        source = (unit / f"{unit.name}.md").read_text(encoding="utf-8")
+        (unit / "_校对报告.md").write_text(
+            "无问题\n### 标记原文\n" + source + "\n### 修改原因\n无\n", encoding="utf-8")
+        assert verify_unit(unit).ok
+
     def test_missing_image_counted_and_warned(self, tmp_path):
         raw_path = tmp_path / "paper.md"
         raw_path.write_text("1．见下图\n![示意图](./nope.png)\n", encoding="utf-8")
         result = split_exam(str(raw_path), str(tmp_path / "out"), "paper", {})
         assert result.missing == 1
         assert any("图片" in w for w in result.warnings)
+
+    def test_same_target_name_conflict_aborts_split(self, tmp_path):
+        from jiaodui.errors import ContractError
+        raw_path = tmp_path / "paper.md"
+        raw_path.write_text(
+            "1．两张同名图\n![红](./nested/same.png)\n![蓝](./images/same.png)\n",
+            encoding="utf-8",
+        )
+        media = tmp_path / "paper_images" / "media"
+        (media / "nested").mkdir(parents=True)
+        (media / "images").mkdir(parents=True)
+        (media / "nested" / "same.png").write_bytes(b"red")
+        (media / "images" / "same.png").write_bytes(b"blue")
+
+        with pytest.raises(ContractError, match="同名"):
+            split_exam(str(raw_path), str(tmp_path / "out"), "paper", {})
 
     def test_rerun_preserves_existing_reports(self, tmp_path):
         raw = "1．第一题\n2．第二题\n"
@@ -177,6 +216,19 @@ class TestSplitLecture:
         assert result.copied == 1
         assert (tmp_path / "out" / "lec" / "单元1" / "images" / "pic.png").exists()
 
+    def test_transparent_image_white_background_prepared_during_split(self, tmp_path):
+        from PIL import Image
+        raw_path = tmp_path / "lec.md"
+        raw_path.write_text("## 小节\n\n![图](./transparent.png)\n正文\n", encoding="utf-8")
+        media = tmp_path / "lec_images" / "media"
+        media.mkdir(parents=True)
+        Image.new("RGBA", (3, 3), (255, 0, 0, 80)).save(media / "transparent.png")
+        result = split_lecture(str(raw_path), str(tmp_path / "out"), "lec", {})
+        image_dir = tmp_path / "out" / "lec" / "单元1" / "images"
+        assert result.copied == 1
+        assert (image_dir / "transparent.png").is_file()
+        assert list(image_dir.glob("__jiaodui-whitebg-*.png"))
+
     def test_section_mode_cleans_grid_tables_before_split(self, tmp_path):
         """讲义导入清理：pandoc 网格表包裹的 **例N** 必须先清表格再按 section 拆分。
 
@@ -200,9 +252,11 @@ class TestSplitLecture:
         raw_path = tmp_path / "lec.md"
         raw_path.write_text(lec, encoding="utf-8")
         result = split_lecture(str(raw_path), str(tmp_path / "out"), "lec", {})
-        assert len(result.units) >= 3
-        firsts = [u["first_line"] for u in result.units]
-        assert any(f.startswith("**例1**") for f in firsts)
+        # 精确断言而非 >=3：模块标题 1 个 + 两个例题，顺序与契约编号都要锁死
+        assert [u["first_line"] for u in result.units] == [
+            "## 模块一 模型：起振问题", "**例1**（多选）", "**例2**（多选）"]
+        assert [Path(u["file"]).name for u in result.units] == [
+            "单元1.md", "单元2.md", "单元3.md"]
         for u in result.units:
             text = _text(Path(u["file"]))
             assert "|" not in text, "网格表竖线应被清理"
@@ -349,6 +403,10 @@ class TestSliceByBoundaries:
         raw_path.write_text(raw, encoding="utf-8")
 
         cleaned = lecture_cleaned_text(str(raw_path), "lec")
+        # 先钉死清理结果（独立样本），再据此取行号：旧写法直接用被测算出的
+        # cleaned 求 index，清理逻辑错了也看不出来。
+        assert cleaned == ("## 模块一\n\n**例1**（多选）\n题干一\n"
+                           "**例2**（多选）\n题干二")
         lines = cleaned.splitlines()
         i1 = lines.index("**例1**（多选）")
         i2 = lines.index("**例2**（多选）")

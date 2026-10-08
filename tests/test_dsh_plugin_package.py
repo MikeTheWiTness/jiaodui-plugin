@@ -68,6 +68,18 @@ def test_preset_declares_jiaodui_with_full_agent_capabilities():
     assert "tool-subagent" in {p["id"] for p in plugins["delegation"]["config"]}
 
 
+def test_preset_uses_standard_native_tools_and_keeps_parallel_delegation():
+    """校对使用标准工具呈现；PTC 引擎不启用，普通子 agent 仍可并行派发。"""
+    plugins = {p["id"]: p for p in _preset_config()["plugins"]}
+    assert plugins["tool-presentation"]["config"]["mode"] == "native"
+    delegation = {p["id"]: p for p in plugins["delegation"]["config"]}
+    assert delegation["workflow-ptc"]["disabled"] is True
+    assert delegation["tool-subagent"].get("disabled", False) is False
+    assert delegation["tool-subagent"]["config"]["provider"] == "spawn"
+    assert delegation["tool-subagent"]["config"]["backgroundMode"] == "continuable"
+    assert plugins["tool-todo"]["config"]["allowParallelInProgress"] is True
+
+
 def test_preset_mounts_bundled_skill_dir_and_native_tool():
     plugins = {p["id"]: p for p in _preset_config()["plugins"]}
     dirs = plugins["skill-filesystem"]["config"]["customSkillDirs"]

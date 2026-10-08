@@ -30,9 +30,9 @@ EXPECTED_SECTION_PATTERN = (
 )
 
 ALL_KEYS = {
-    "tools", "extensions", "split_mode", "section_pattern", "section_extensions",
-    "wrapped_patterns", "unwrapped_patterns", "exam_question_pattern",
-    "nav_patterns", "subject",
+    "tools", "quantities", "extensions", "split_mode", "section_pattern",
+    "section_extensions", "wrapped_patterns", "unwrapped_patterns",
+    "exam_question_pattern", "nav_patterns", "subject",
 }
 
 
@@ -54,6 +54,7 @@ def test_normalize_fills_all_keys():
     cfg = normalize_subject_config({})
     assert set(cfg) == ALL_KEYS
     assert cfg["tools"] == []
+    assert cfg["quantities"] == {}
     assert cfg["extensions"] == []
     assert cfg["split_mode"] == "section"
     assert cfg["section_pattern"] == ""
@@ -68,7 +69,7 @@ def test_normalize_fills_all_keys():
 def test_normalize_reads_flat_fields():
     cfg = normalize_subject_config({
         "subject": "高中物理",
-        "tools": ["calc", "read-image"],
+        "tools": ["calc", "classics"],
         "extensions": [".docx", ".md"],
         "split_mode": "title",
         "section_pattern": r"^#\s",
@@ -79,7 +80,7 @@ def test_normalize_reads_flat_fields():
         "nav_patterns": ["封面"],
     })
     assert cfg["subject"] == "高中物理"
-    assert cfg["tools"] == ["calc", "read-image"]
+    assert cfg["tools"] == ["calc", "classics"]
     assert cfg["extensions"] == [".docx", ".md"]
     assert cfg["split_mode"] == "title"
     assert cfg["section_pattern"] == r"^#\s"
@@ -156,10 +157,15 @@ def _write_json(path: Path, data) -> Path:
     return path
 
 
-def test_subject_config_path():
-    assert subject_config_path("高中物理") == Path("config") / "subjects" / "高中物理.json"
-    assert subject_config_path("高中物理.json") == Path("config") / "subjects" / "高中物理.json"
-    assert subject_config_path("x", "base") == Path("base") / "x.json"
+def test_subject_config_path_points_at_runtime_source():
+    """R-H01：默认解析到运行时来源（包内 data），不是仓库里的镜像目录。"""
+    from jiaodui.config import resolve_config_dir
+
+    runtime = resolve_config_dir() / "subjects"
+    assert subject_config_path("高中物理") == runtime / "高中物理.json"
+    assert subject_config_path("高中物理.json") == runtime / "高中物理.json"
+    # 显式传目录时，该目录就是配置根，subjects/ 在它下面
+    assert subject_config_path("x", "base") == Path("base") / "subjects" / "x.json"
 
 
 def test_load_subject_config_ok(tmp_path):
@@ -283,3 +289,14 @@ def test_nav_patterns_default_and_custom():
     assert get_nav_patterns(None) == DEFAULT_NAV_PATTERNS
     cfg = normalize_subject_config({"nav_patterns": ["封面"]})
     assert get_nav_patterns(cfg) == ["封面"]
+
+
+def test_tool_whitelist_rejects_unknown_family():
+    """配置声明的工具名必须存在于代码已知工具族：写错要立刻报错而不是静默失效。"""
+    assert normalize_subject_config({"tools": ["calc", "classics"]})["tools"] == ["calc", "classics"]
+    with pytest.raises(ContractError) as exc:
+        normalize_subject_config({"tools": ["不存在的工具"]})
+    message = str(exc.value)
+    assert "tools" in message
+    assert "不存在的工具" in message
+    assert "classics" in message  # 错误信息要给出合法取值

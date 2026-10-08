@@ -38,7 +38,10 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = ["-q", "--tb=short", "-m", "not e2e and not network and not slow"]
+# 不再默认过滤标记：tests/ 里没有任何 e2e/network/slow 标记的用例，
+# 旧表达式空转却让「默认」看起来比「全量」窄（实际 0 deselected）。
+# 保留 markers 注册表，并加 --strict-markers：将来写错标记名会直接报错而不是静默失效。
+addopts = ["-q", "--tb=short", "--strict-markers"]
 markers = [
   "slow: 慢测试",
   "network: 需要网络",

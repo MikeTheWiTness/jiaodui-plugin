@@ -16,11 +16,17 @@
 | 初中英语 | M5 待落地 | 同上 | 无符号计算 | 目标：题号规则 `^(\d+)[.)]`；`wrapped_patterns` 为 `【例题精讲】`、`\d+.`、`【\d+】`，`unwrapped_patterns` 为 `^【例题精讲\d+】` | 例题精讲切分；语法 / 拼写 / 词形 |
 | 小学语文 | M5 待落地 | 同上 | 无符号计算 | 目标：只配 lecture，`wrapped_patterns` 含班型（一本班 / 双一流班 / 清北班 / A班 / A+班 / S班）+ 例 / 练 / 变式 | 先审答案（准确性 / 解析逻辑 / 得分点）再校正文；班型拆分 |
 
-## 二、机器读配置 `config/subjects/<学科>.json`
-每个学科的**工具集白名单、支持扩展名、拆分参数**落在 `config/subjects/<学科>.json`（D23：改工具名不需要动人读长文）。**v1 已创建 `config/subjects/高中物理.json`**，其余 6 科 M5 逐步补齐；上表 M5 行的参数为**目标值**（源自旧仓 `subjects/*/config.json`），落地时改写进新 schema。
+## 二、机器读配置 `jiaodui/data/subjects/<学科>.json`（运行时唯一来源）
+
+每个学科的**工具集白名单、支持扩展名、拆分参数**落在**包内** `jiaodui/data/subjects/<学科>.json`（D23：改工具名不需要动人读长文）。运行时只读这里（`JIAODUI_CONFIG_DIR` 可覆盖指向别的配置目录，用于开发/测试），**不会读会话目录里的同名文件**——工作区放一份 json 不能悄悄改掉工具白名单或拆分口径。
+
+仓库根的 `config/subjects/` 是**人工可读镜像**，便于浏览与评审，**不是运行时来源**：改配置请改包内文件，再 `cp jiaodui/data/subjects/*.json config/subjects/` 同步；两份一致性由 `tests/test_packaging.py` 与 `tests/test_skill_docs.py` 守着。
+
+**v1 已创建 `jiaodui/data/subjects/高中物理.json`**（镜像在 `config/subjects/高中物理.json`），其余 6 科 M5 逐步补齐；上表 M5 行的参数为**目标值**（源自旧仓 `subjects/*/config.json`），落地时改写进新 schema。
 - `subject`：学科名。
-- `tools`：工具集白名单（高中物理为 `["calc"]`）。
-- `extensions`：支持扩展名（高中物理 `.docx / .doc / .md / .idml`）。
+- `tools`：工具集白名单，只允许合法工具族 `calc` / `classics`（高中物理为 `["calc"]`）。配置写了未知工具名会在读取时就报 `contract` 错，不再静默失效；`jiaodui calc --subject <学科>` 按它校验该学科能否使用 calc。
+- `quantities`：学科物理量表 `{物理量名: 单位表达式}`（高中物理 58 条），供 `calc dimension` 给 `{"quantity": …}` 声明做量纲交叉校验；名字未命中只告警不拒绝，按告警增长。量表不进 agent 上下文，用 `jiaodui quantities --subject <学科> [--search 词]` 惰性查。
+- `extensions`：支持扩展名（高中物理 `.docx / .md / .idml`）。旧版二进制 `.doc` **不受支持**：CLI 会明确拒绝并提示先另存为 `.docx`（pandoc 的 OOXML 解析器读不了它）。
 - `split_mode` / `section_pattern` / `section_extensions`：章节切分参数。
 - `wrapped_patterns` / `unwrapped_patterns`：讲义包裹标记（班型、例练）。
 - `exam_question_pattern`：试卷题号规则（高中物理 `^(\d+)．`）。

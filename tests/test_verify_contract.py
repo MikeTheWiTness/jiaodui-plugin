@@ -62,6 +62,49 @@ def _codes(result, severity=None):
     return {i.code for i in issues}
 
 
+def test_duplicate_marker_number_is_rejected():
+    """同一编号标记出现两次 → marker.duplicate-num（该码此前无断言）。"""
+    source = "设a为$O$点，b为1。\n\n第二段c。"
+    report = """一般问题
+### 标记原文
+设【1|a|b】为$O$点，b为1。
+
+第二段【1|c|d】。
+### 修改原因
+1. 参数写错。
+"""
+    r = verify_report_text(report, source)
+    assert not r.ok
+    assert "marker.duplicate-num" in _codes(r, ERROR)
+
+
+def test_original_field_not_locatable_is_rejected():
+    """原文字段对不上、但「改为」对得上（源文此处即改为）→ original.not-locatable。"""
+    source = "设b为$O$点，b为1。"
+    report = """一般问题
+### 标记原文
+设【1|a|b】为$O$点，b为1。
+### 修改原因
+1. 参数写错。
+"""
+    r = verify_report_text(report, source)
+    assert not r.ok
+    assert "original.not-locatable" in _codes(r, ERROR)
+
+
+def test_missing_report_is_rejected(tmp_path):
+    """单元目录没有 _校对报告.md → report.missing（该分支此前无断言）。"""
+    from jiaodui.verify import verify_unit
+
+    unit = tmp_path / "第1题"
+    unit.mkdir()
+    (unit / "第1题.md").write_text("正文。", encoding="utf-8")
+
+    result = verify_unit(unit)
+    assert not result.ok
+    assert "report.missing" in {i.code for i in result.errors}
+
+
 def test_valid_report_accepted():
     r = verify_report_text(VALID, SOURCE)
     assert r.ok, [i.message for i in r.errors]

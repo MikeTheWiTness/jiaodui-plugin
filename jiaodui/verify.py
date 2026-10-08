@@ -487,4 +487,34 @@ def verify_unit(unit_dir: str | Path, source_path: str | Path | None = None) -> 
     src_path = input_path(source_path) if source_path else find_source_md(unit_dir)
     if src_path and src_path.is_file():
         src = src_path.read_text(encoding="utf-8")
-    return verify_report_text(text, src)
+    result = verify_report_text(text, src)
+
+    # 图片资源检查复用同一闸门：只拒绝可确定的缺图/无效引用，
+    # 不以此证明模型理解了题干与图片的语义归属。
+    from .inspect_images import inspect_unit_images
+    from .material import find_material
+    # 图片检查必须与上面的文本检查用同一份源文：显式 --source 时若仍按目录约定名
+    # 重新找源文，闸门会对着一份文本放行、对着另一份文本判图。
+    image_result = inspect_unit_images(
+        unit_dir,
+        source_path=src_path,
+        allow_legacy_transparent=find_material(unit_dir) is None,
+    )
+    for problem in image_result["errors"]:
+        location = None
+        if problem.get("line"):
+            location = f"正文第 {problem['line']} 行"
+        result.issues.append(VerifyIssue(
+            f"images.{problem['code']}", problem["message"], location=location))
+    for warning in image_result["warnings"]:
+        result.issues.append(VerifyIssue(
+            f"images.{warning['code']}", warning["message"], severity=WARNING))
+    result.stats["images"] = {
+        "ok": image_result["ok"],
+        "reference_count": len(image_result["references"]),
+        "extra_count": len(image_result["extra_images"]),
+        "errors": image_result["errors"],
+    }
+    result.stats["error_count"] = len(result.errors)
+    result.stats["warning_count"] = len(result.warnings)
+    return result

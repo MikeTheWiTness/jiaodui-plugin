@@ -501,9 +501,14 @@ class TestEdgeCases:
 class TestCleanMdText:
     """clean_md_text 是 comprehensive_clean 的纯函数入口。"""
 
-    def test_clean_md_text_alias(self):
+    def test_clean_md_text_cleans_grid_table(self):
+        """期望值来自契约样本：分隔行删除、竖线清理、正文保留。
+
+        旧写法断言 clean_md_text == comprehensive_clean，而前者就是后者的直接包装，
+        恒真、无法证伪。
+        """
         raw = "| a | b |\n| --- | --- |\n正文"
-        assert clean_md_text(raw) == comprehensive_clean(raw)
+        assert clean_md_text(raw) == "a  b\n正文"
 
     def test_clean_md_text_preserves_math(self):
         assert clean_md_text(r"$|x|$") == r"$|x|$"

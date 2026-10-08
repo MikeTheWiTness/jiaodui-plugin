@@ -7,11 +7,12 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-NODE = shutil.which("node") or "/Users/chouchou/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin/node"
+# 不写死开发者家目录：只认 PATH 上的 node，找不到就按下面的条件跳过（CI 仍要求必须有）。
+NODE = shutil.which("node")
 
 
 def test_native_tool_behavior(tmp_path):
-    if not Path(NODE).is_file():
+    if not NODE or not Path(NODE).is_file():
         if os.environ.get("CI"):
             pytest.fail("CI 必须安装 Node 并执行插件行为测试")
         pytest.skip("本地缺少 Node")
@@ -71,6 +72,12 @@ await assert.rejects(()=>tool.execute({args:['--help']},{}),/工作区/);
 apply(ctx,{command:'node',timeoutMs:150});
 result=await tool.execute({args:['-e','console.error("started");setInterval(()=>{},1000)']},exec);
 assert.equal(result.exitCode,-1);assert.match(result.stderr,/started/);assert.match(result.stderr,/timeout/);
+// 外部取消必须传播取消语义，不能包装成普通技术失败。
+const cancelController = new AbortController();
+const cancelExec = {...exec, signal: cancelController.signal};
+const cancelPromise = tool.execute({args:['-e','setInterval(()=>{},1000)']},cancelExec);
+setTimeout(()=>cancelController.abort(),20);
+await assert.rejects(cancelPromise,/用户已取消/);
 // reject 后仍读取完整收集结果，并延后读取截断标记。
 ctx.subprocess.spawn=()=>({collected:{stdout:{readFrom(){return {text:'partial',lossy:true}}},stderr:{readFrom(){return {text:'diagnostic',lossy:false}}}},done:Promise.reject(new Error('broken'))});
 result=await tool.execute({args:['--help']},exec);

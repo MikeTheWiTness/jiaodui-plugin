@@ -11,8 +11,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
-V1_COMMANDS = ["check-env", "inspect-source", "convert", "split", "slice", "precheck-split",
-               "status", "verify-report", "parse-report", "calc",
+V1_COMMANDS = ["check-env", "inspect-source", "inspect-images", "convert", "split", "slice", "precheck-split",
+               "status", "verify-report", "parse-report", "repair-report", "calc",
                "build-report", "build-docx"]
 
 
@@ -37,8 +37,8 @@ def test_top_help_lists_all_v1():
         assert cmd in r.stdout
 
 
-def test_structured_error_unknown_file():
-    r = run("convert", "/tmp/不存在的文件.docx", "--json")
+def test_structured_error_unknown_file(tmp_path):
+    r = run("convert", str(tmp_path / "不存在的文件.docx"), "--json")
     assert r.returncode != 0
     payload = json.loads(r.stderr.strip().splitlines()[-1])
     assert payload["ok"] is False
@@ -66,6 +66,19 @@ def test_verify_report_valid_exit_zero(tmp_path):
     r = run("verify-report", "--unit", str(unit), "--json")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["ok"] is True
+
+
+def test_inspect_images_command_returns_ordered_json(tmp_path):
+    unit = tmp_path / "第1题"
+    (unit / "images").mkdir(parents=True)
+    (unit / "第1题.md").write_text("![图](./images/p.png)", encoding="utf-8")
+    from PIL import Image
+    Image.new("RGB", (2, 2), "white").save(unit / "images" / "p.png")
+    r = run("inspect-images", "--unit", str(unit), "--json")
+    assert r.returncode == 0, r.stderr
+    payload = json.loads(r.stdout)
+    assert payload["ok"] is True
+    assert payload["references"][0]["line"] == 1
 
 
 def test_status_json(tmp_path):
@@ -145,6 +158,9 @@ def test_slice_lecture_boundaries_from_preview(tmp_path):
                   "--subject", "高中物理", "--preview")
     assert preview.returncode == 0, preview.stderr
     assert "+---" not in preview.stdout
+    # 预览内容按契约样本钉死：行号取自这里，清理逻辑一变就必须在这里红
+    assert preview.stdout.strip() == ("## 模块一\n\n**例1**（多选）\n题干一\n"
+                                      "**例2**（多选）\n题干二")
     lines = preview.stdout.splitlines()
     i1 = lines.index("**例1**（多选）")
     i2 = lines.index("**例2**（多选）")
@@ -304,8 +320,9 @@ def test_build_docx_nonexistent_dir_emits_stderr_json(tmp_path):
 
 
 def test_build_docx_excluded_emits_stderr_json(tmp_path):
-    import shutil
-    if not (shutil.which("pandoc") or Path("/usr/local/bin/pandoc").is_file()):
+    from jiaodui.convert import find_pandoc
+
+    if find_pandoc() is None:
         import pytest as _pytest
         _pytest.skip("需要 pandoc")
     paper = tmp_path / "卷子"

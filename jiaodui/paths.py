@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .units import is_unit_dir
+
 REPORT_NAME = "_校对报告.md"
 DATA_NAME = "_校对数据.json"
 FAIL_NAME = "_校对失败.md"
@@ -17,15 +19,11 @@ IMAGES_DIR = "images"
 WHOLE_REPORT_DIR = "校对报告"
 WORD_DIR = "校对Word"
 
-_UNIT_RE = re.compile(r"^(第(\d+)题|板块(\d+)|单元(\d+))")
-
-
 def source_md_name(unit_dir_name: str) -> str:
-    """按目录名推出单元源文约定文件名。"""
-    m = _UNIT_RE.match(unit_dir_name)
-    if not m:
+    """按目录名推出单元源文约定文件名（只认精确单元名，见 units.is_unit_dir）。"""
+    if not is_unit_dir(unit_dir_name):
         raise ValueError(f"不是合法的单元目录名：{unit_dir_name}")
-    return f"{m.group(1)}.md"
+    return f"{unit_dir_name}.md"
 
 
 def find_source_md(unit_dir: str | Path) -> Path | None:
@@ -37,7 +35,7 @@ def find_source_md(unit_dir: str | Path) -> Path | None:
     unit_dir = Path(unit_dir)
     candidates = []
     name = unit_dir.name
-    if _UNIT_RE.match(name):
+    if is_unit_dir(name):
         candidates.append(unit_dir / source_md_name(name))
     candidates.extend(sorted(p for p in unit_dir.glob("*.md") if not p.name.startswith("_")))
     for c in candidates:

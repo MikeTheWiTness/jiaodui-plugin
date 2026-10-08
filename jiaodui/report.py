@@ -5,9 +5,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import paths
+from .errors import BusinessError
 from .log import log
 from .units import scan_unit_dirs
-from .verify import verify_report_text
+from .verify import verify_unit
 
 
 @dataclass
@@ -44,8 +45,18 @@ def build_report(paper_dir: str | Path, out_path: str | Path | None = None,
     from .workdir import ensure_inside, input_path
     paper_dir = input_path(paper_dir)
     root, data = material.downstream(paper_dir, legacy_layout=legacy_layout)
+    contract_dir = root / paths.WHOLE_REPORT_DIR
     if out_path is None:
-        out_path = root / paths.WHOLE_REPORT_DIR / f"{paths.safe_name(_base_name(paper_dir))}_整卷报告.md"
+        out_path = contract_dir / f"{paths.safe_name(_base_name(paper_dir))}_整卷报告.md"
+    else:
+        out_path = ensure_inside(out_path)
+        # R-D09：有清单时必须落在契约目录内，文件名可自取。历史布局（无清单、需显式
+        # --legacy-layout）保留 --out 作为兼容出口，否则没有一个可用的契约目录。
+        if data is not None and not out_path.is_relative_to(ensure_inside(contract_dir)):
+            raise BusinessError(
+                "整卷报告只能写到契约目录内",
+                code="out-of-contract",
+                details={"out_path": str(out_path), "contract_dir": str(contract_dir)})
     out_path = ensure_inside(out_path)
     result = BuildReportResult(out_path=None)
     dirs = scan_unit_dirs(paper_dir)
@@ -68,8 +79,9 @@ def build_report(paper_dir: str | Path, out_path: str | Path | None = None,
             sections.append("")
             continue
         body = report.read_text(encoding="utf-8")
-        source = paths.find_source_md(d)
-        vr = verify_report_text(body, source.read_text(encoding="utf-8") if source else None)
+        # 必须用完整闸门（含图片资源），否则 verify-report 判不合格的报告
+        # 会被下游当成合格正文拼进整卷。
+        vr = verify_unit(d)
         if not vr.ok or (data is not None and not material.registered(root, data, d)):
             reason = "；".join(i.message for i in vr.errors[:3]) or "本轮未完成：尚未登记或摘要已改变"
             result.failed.append({"unit": name, "reason": reason})

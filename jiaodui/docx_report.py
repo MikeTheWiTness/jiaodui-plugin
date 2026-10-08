@@ -25,11 +25,14 @@ from xml.sax.saxutils import escape
 from dataclasses import dataclass, field
 from lxml import etree
 
+from . import paths
+from .errors import BusinessError
 from .log import log
+from .image_utils import rewrite_inline_images
 from .markers import (INLINE_MARKER_CAPTURE_RE, MARKER_NOOP,
                       MARKER_RESTORE_NEW, audit_markers)
 from .markers import scan_math_spans as _scan_math_spans
-from .report_parse import parse_reasons
+from .report_parse import parse_reasons, strip_reference_preamble
 
 # \| 是 LaTeX 转义竖线（\left\|…\right\|），整体属于原文字段，不得当分隔符
 _PAT = INLINE_MARKER_CAPTURE_RE
@@ -97,7 +100,10 @@ class DocxBuildResult:
     - marker_count：报告中【…】错误标记总数
     - anchor_count：生成 docx 内实际 commentRangeStart 锚点数（不含标题批注）
     - formula_fallback_count：公式内标记的可见高亮+修改意见兜底数
-    - missing_count：marker_count - anchor_count - formula_fallback_count
+    - missing_count：逐单元 (markers - anchors - fallbacks) 的正向部分之和
+    - over_count：逐单元「锚点+兜底 多于报告标记数」的超出量之和（记账异常，必须为 0）
+    - image_missing_count：单元图片未能嵌入交付的数量（缺图，必须为 0）
+    - comment_formula_fallback_count：批注内公式渲染失败降级为文本的数量（允许，只告警）
     - heading_comment_count：无问题单元的标题批注数（单列，不参与缺失计算）
     - units：每单元 {unit, markers, anchors, fallbacks, missing, heading_comment}
     """
@@ -107,6 +113,11 @@ class DocxBuildResult:
     anchor_count: int = 0
     formula_fallback_count: int = 0
     missing_count: int = 0
+    over_count: int = 0
+    image_missing_count: int = 0
+    """单元图片未能嵌入交付的数量（悬空引用会让 Word 缺图，必须为 0）。"""
+    comment_formula_fallback_count: int = 0
+    """批注内公式渲染失败、降级为文本的数量（可选依赖缺失属允许降级，只计数告警）。"""
     heading_comment_count: int = 0
     units: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -115,10 +126,14 @@ class DocxBuildResult:
     anchor_structure_ok: bool = False
     """生成后复核：commentRangeStart/End/Reference 与 comments.xml 数量是否一致。"""
 
+    failed_out_path: str | None = None
+    """未通过复核时本次产物的另存路径（*.failed.docx）；不进交付路径。"""
+
     @property
     def ok(self) -> bool:
-        """缺失为 0、产物存在、锚点结构完整、且没有单元被排除，才算通过。"""
-        return (self.missing_count == 0 and bool(self.out_path)
+        """缺失为 0、无记账异常、产物存在、锚点结构完整、且没有单元被排除，才算通过。"""
+        return (self.missing_count == 0 and self.over_count == 0
+                and self.image_missing_count == 0 and bool(self.out_path)
                 and os.path.exists(self.out_path)
                 and self.anchor_structure_ok
                 and not self.excluded_units)
@@ -131,7 +146,7 @@ def _report_marker_counts(questions) -> dict:
         marker_idx = part.find("### 标记原文")
         reason_idx = part.find("### 修改原因")
         has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
-        mark_seg = part[marker_idx:reason_idx] if has_sections else part
+        mark_seg = _audit_body(part[marker_idx:reason_idx]) if has_sections else part
         counts[qid] = len(_PAT.findall(mark_seg))
     return counts
 
@@ -141,7 +156,7 @@ def _is_included_unit(part: str) -> bool:
     marker_idx = part.find("### 标记原文")
     reason_idx = part.find("### 修改原因")
     has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
-    mark_seg = part[marker_idx:reason_idx] if has_sections else part
+    mark_seg = _audit_body(part[marker_idx:reason_idx]) if has_sections else part
     if _PAT.search(mark_seg) and not has_sections:
         return False
     return True
@@ -165,25 +180,45 @@ def _is_heading_one(paragraph) -> bool:
     return style is not None and style.get(f"{{{_WORD_NS}}}val") == "Heading1"
 
 
-def _split_unit_sections(doc_xml: str) -> list[str]:
-    """按标题样式切单元，不依赖 pPr 子元素顺序或段落属性。"""
+def _paragraph_text(paragraph) -> str:
+    """段落可见文本（拼接全部 w:t）。
+
+    pandoc 会按字符边界把一个标题拆进多个 run，必须拼接后再比较文本。
+    """
+    return "".join(node.text or "" for node in paragraph.iter(f"{{{_WORD_NS}}}t"))
+
+
+def _split_unit_sections(doc_xml: str, unit_names: list[str]) -> dict[str, str]:
+    """按「一级标题文本等于单元名」切单元，返回 {单元名: XML 片段}。
+
+    只认单元名标题：单元正文自带的一级标题（例如源文的「# 一、选择题」）仍属于
+    上一个单元的内容，不能当边界。旧实现把**任意** Heading1 当作分段起点，再按
+    下标与单元列表对齐，于是正文含一级标题时 per-unit 锚点整体错位——第 2 题会
+    被算成第 1 题的锚点，真实的锚点被记成缺失。
+    """
     if not doc_xml:
-        return []
+        return {}
     root, _ = _word_xml(doc_xml)
     body = root.find("w:body", _WORD)
     if body is None:
         body = root
-    sections: list[str] = []
+    wanted = set(unit_names)
+    sections: dict[str, str] = {}
+    current: str | None = None
     for node in body:
         if node.tag == f"{{{_WORD_NS}}}p" and _is_heading_one(node):
-            sections.append("")
-        if sections:
-            sections[-1] += etree.tostring(node, encoding="unicode", with_tail=False)
+            title = _paragraph_text(node).strip()
+            if title in wanted and title not in sections:
+                current = title
+                sections[current] = ""
+        if current is None:
+            continue
+        sections[current] += etree.tostring(node, encoding="unicode", with_tail=False)
     return sections
 
 
 def _audit_generated_docx(out_path: str | None, included: list[str],
-                          sections: list[str]) -> tuple[dict, set, list[str]]:
+                          sections: dict[str, str]) -> tuple[dict, set, list[str]]:
     """生成后复核：解析 comments.xml 与正文 commentRangeStart，统计实际锚点。
 
     Returns:
@@ -200,14 +235,14 @@ def _audit_generated_docx(out_path: str | None, included: list[str],
         except Exception as e:
             warnings.append(f"复核 docx 失败: {e}")
 
-    if len(sections) != len(included):
+    missing_sections = [qid for qid in included if qid not in sections]
+    if missing_sections:
         warnings.append(
-            f"docx 单元分段数({len(sections)})与应生成单元数({len(included)})不一致，"
-            "缺失判定可能偏保守")
+            f"docx 中找不到以下单元的一级标题：{missing_sections}，其锚点按 0 计")
 
     actual: dict[str, dict] = {}
-    for idx, qid in enumerate(included):
-        sec = sections[idx] if idx < len(sections) else ""
+    for qid in included:
+        sec = sections.get(qid, "")
         heading_end = sec.find("</w:p>")
         heading_part = sec[:heading_end + 6] if heading_end != -1 else ""
         heading_starts = set(re.findall(r'<w:commentRangeStart w:id="(\d+)"', heading_part))
@@ -215,9 +250,13 @@ def _audit_generated_docx(out_path: str | None, included: list[str],
         actual_heading = 1 if (heading_starts & comment_ids) else 0
         marker_ids = {gid for gid in sec_starts if gid in comment_ids}
         marker_ids -= heading_starts
+        # 按标记编号去重计数：同一条兜底重复出现只算一次，源文自带的
+        # 裸「（修改意见：」不再被误计（旧实现数子串，可虚增也可漏计）。
+        fallback_nums = {int(n) for n in _FALLBACK_NOTE_RE.findall(_section_text(sec))}
         actual[qid] = {
             "anchors": len(marker_ids),
-            "fallbacks": sec.count("（修改意见："),
+            "fallbacks": len(fallback_nums),
+            "fallback_numbers": sorted(fallback_nums),
             "heading_comment": actual_heading,
         }
     return actual, comment_ids, warnings
@@ -275,10 +314,22 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
       missing_count != 0 时 ok=False（产物保留，由上层决定是否交付）。
     """
     from . import material
-    from .workdir import ensure_tree, input_path
+    from .workdir import ensure_inside, ensure_tree, input_path
     paper_path = input_path(paper_dir)
+    from . import paths
     root, data = material.downstream(paper_path, legacy_layout=legacy_layout)
-    out_dir = str(ensure_tree(out_dir if out_dir is not None else root / "校对Word"))
+    contract_dir = ensure_tree(root / paths.WORD_DIR)
+    if out_dir is None:
+        out_dir = str(contract_dir)
+    else:
+        requested = ensure_inside(out_dir)
+        # R-D09：有清单时收口到契约目录；历史布局保留 --out-dir 作为兼容出口。
+        if data is not None and not requested.is_relative_to(ensure_inside(contract_dir)):
+            raise BusinessError(
+                "Word 交付只能写到契约目录内",
+                code="out-of-contract",
+                details={"out_dir": str(requested), "contract_dir": str(contract_dir)})
+        out_dir = str(ensure_tree(requested))
     paper_dir = str(paper_path)
     result = DocxBuildResult(out_path=None)
     if not paper_path.is_dir():
@@ -286,20 +337,28 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
         result.warnings.append(f"目录不存在: {paper_dir}")
         return result
 
-    from .verify import verify_report_text  # 局部导入，避免潜在循环依赖
+    from .verify import verify_unit  # 局部导入，避免潜在循环依赖
 
     questions_all = _collect_reports(paper_path)
+    from . import paths
+    from .units import scan_unit_dirs
+
     if data is not None:
-        seen = {qid for qid, _ in questions_all}
-        from . import paths
-        for name in data["unit_set"]:
-            if name not in seen and not paths.is_skip_unit(paper_path / name):
-                result.excluded_units.append({"unit": name, "reason": "本轮尚无校对报告"})
-                result.warnings.append(f"{name}: 尚无校对报告，不可作为整卷交付")
+        expected_units = list(data["unit_set"])
+    else:
+        # 历史布局没有清单：以磁盘上的单元目录为准。旧实现只在有清单时做这一步，
+        # 于是少一份报告的卷会静默地 ok=true 退出。
+        expected_units = [path.name for path in scan_unit_dirs(paper_path)]
+    seen = {qid for qid, _ in questions_all}
+    for name in expected_units:
+        if name not in seen and not paths.is_skip_unit(paper_path / name):
+            result.excluded_units.append({"unit": name, "reason": "本轮尚无校对报告"})
+            result.warnings.append(f"{name}: 尚无校对报告，不可作为整卷交付")
     # 硬约束：下游不得消费未通过 verify-report 的报告。先校验，再排除不合格正文。
     questions = []
     for qid, part in questions_all:
-        verdict = verify_report_text(part, _read_unit_source(paper_path, qid))
+        # 走完整闸门（含图片资源），与 verify-report 同一口径
+        verdict = verify_unit(paper_path / qid)
         if verdict.ok and (data is None or material.registered(root, data, paper_path / qid)):
             questions.append((qid, part))
             continue
@@ -323,10 +382,35 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
         result.missing_count = result.marker_count
         return result
 
-    out_path = generate_combined_docx(paper_dir, out_dir,
-                                      only_units={qid for qid, _ in questions}, legacy_layout=legacy_layout)
+    gen_stats: dict[str, int] = {"image_missing": 0, "comment_formula_fallback": 0}
+    safe_delivery_name = "".join(c for c in paper_path.name if c not in r'\\/:*?"<>|')
+    delivery_path = Path(out_dir) / f"{safe_delivery_name}_校对批注版.docx"
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{safe_delivery_name}_校对批注版-", suffix=".tmp.docx", dir=out_dir)
+    os.close(fd)
+    temporary_path = Path(temporary_name)
+    temporary_path.unlink()
+
+    generated_path = generate_combined_docx(paper_dir, out_dir,
+                                            only_units={qid for qid, _ in questions},
+                                            legacy_layout=legacy_layout, stats=gen_stats,
+                                            output_path=temporary_path)
+    generation_ok = generated_path is not None
+    out_path = str(temporary_path) if temporary_path.is_file() else None
     result.out_path = out_path
-    if out_path is None:
+    result.image_missing_count = gen_stats["image_missing"]
+    result.comment_formula_fallback_count = gen_stats["comment_formula_fallback"]
+    if result.image_missing_count:
+        result.warnings.append(
+            f"{result.image_missing_count} 张单元图片未嵌入交付（Word 缺图），该交付不通过")
+    if result.comment_formula_fallback_count:
+        result.warnings.append(
+            f"{result.comment_formula_fallback_count} 处批注内公式降级为文本"
+            "（可选依赖缺失属允许降级，不影响交付）")
+    if not generation_ok:
+        result.warnings.append("Word 生成器未能完成批注注入")
+    elif out_path is None:
         result.warnings.append("docx 生成失败：无可处理单元或 pandoc 转换失败")
 
     doc_xml = ""
@@ -338,7 +422,7 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
         except Exception as e:
             result.warnings.append(f"复核读取 document.xml 失败: {e}")
 
-    sections = _split_unit_sections(doc_xml)
+    sections = _split_unit_sections(doc_xml, included)
     actual, comment_ids, audit_warnings = _audit_generated_docx(out_path, included, sections)
     result.warnings.extend(audit_warnings)
 
@@ -348,8 +432,17 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
         anchors = unit_actual["anchors"] if unit_actual else 0
         fallbacks = unit_actual["fallbacks"] if unit_actual else 0
         heading_comment = unit_actual["heading_comment"] if unit_actual else 0
-        missing = markers - anchors - fallbacks
-        if missing > 0:
+        accounted = anchors + fallbacks
+        missing = markers - accounted
+        # 逐单元不得为负：负数说明「锚点+兜底」比报告标记还多（源文自带兜底文案、
+        # 或锚点被重复计入）。旧实现直接把它加进全卷之和，会让另一个单元真丢的
+        # 标记被抵消成 missing_count=0 的假通过。
+        if missing < 0:
+            result.over_count += -missing
+            result.warnings.append(
+                f"{qid}: 锚点+兜底({accounted})多于报告标记数({markers})，记账异常，请核对该单元")
+            missing = 0
+        elif missing > 0:
             result.warnings.append(
                 f"{qid}: {missing} 条错误标记既无 Word 批注锚点也无公式可见兜底")
         result.units.append({
@@ -362,8 +455,7 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
     result.anchor_count = sum(u["anchors"] for u in result.units)
     result.formula_fallback_count = sum(u["fallbacks"] for u in result.units)
     result.heading_comment_count = sum(u["heading_comment"] for u in result.units)
-    result.missing_count = (result.marker_count - result.anchor_count
-                            - result.formula_fallback_count)
+    result.missing_count = sum(u["missing"] for u in result.units)
 
     # 全局硬门槛交叉复核：正文三段锚点数量、comments.xml 批注数必须相等，
     # 且等于「marker 锚点 + 无问题标题批注」。
@@ -385,11 +477,28 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
     log(f"🔎 Word 报告复核：标记 {result.marker_count} = 锚点 {result.anchor_count} + "
         f"公式兜底 {result.formula_fallback_count}，缺失 {result.missing_count}，"
         f"无问题标题批注 {result.heading_comment_count}")
+
+    # 只有完整复核通过后才发布；失败产物留在独立诊断路径。
+    if generation_ok and result.ok:
+        os.replace(temporary_path, delivery_path)
+        result.out_path = str(delivery_path)
+    else:
+        failed_path = delivery_path.with_name(f"{delivery_path.stem}.failed.docx")
+        if temporary_path.is_file():
+            os.replace(temporary_path, failed_path)
+            result.failed_out_path = str(failed_path)
+            result.warnings.append(
+                f"本次 Word 未通过复核，产物另存为 {failed_path.name}，未进交付路径")
+        result.out_path = None
+    if temporary_path.exists():
+        temporary_path.unlink()
     return result
 
 
 def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
-                           only_units: set[str] | None = None, *, legacy_layout: bool = False) -> str | None:
+                           only_units: set[str] | None = None, *, legacy_layout: bool = False,
+                           stats: dict | None = None,
+                           output_path: str | Path | None = None) -> str | None:
     """扫描试卷/讲义目录，生成一份带批注的合并 Word 报告。
 
     Args:
@@ -413,10 +522,10 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
 
     questions = _collect_reports(paper_path)
     if data is not None:
-        from .verify import verify_report_text
+        from .verify import verify_unit
         questions = [(qid, part) for qid, part in questions
                      if material.registered(root, data, paper_path / qid)
-                     and verify_report_text(part, _read_unit_source(paper_path, qid)).ok]
+                     and verify_unit(paper_path / qid).ok]
     if only_units is not None:
         questions = [(qid, part) for qid, part in questions if qid in only_units]
     if not questions:
@@ -429,7 +538,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
     out_root = out_root.resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     safe_name = "".join(c for c in paper_path.name if c not in r'\/:*?"<>|')
-    out_path = ensure_inside(out_root / f"{safe_name}_校对批注版.docx")
+    out_path = ensure_inside(output_path) if output_path is not None else ensure_inside(
+        out_root / f"{safe_name}_校对批注版.docx")
 
     work = Path(tempfile.mkdtemp(prefix="_docx_report_"))
     img_root = work / "images"
@@ -465,10 +575,11 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
             else:
                 skipped_clean += 1
                 log(f"   ℹ️ Word 报告：{qid} 无批注，插入单元原文 + 「无问题」批注（锚定标题）")
-                unit_md = paper_path / qid / f"{qid}.md"
-                if unit_md.exists():
-                    content = unit_md.read_text(encoding="utf-8").strip()
-                    content = _rewrite_images(content, paper_path / qid, img_root)
+                # R-B07：与闸门同一个源文入口（不许在这里另写一套契约名判断）
+                content_raw = _read_unit_source(paper_path, qid)
+                if content_raw is not None:
+                    content = content_raw.strip()
+                    content = _rewrite_images(content, paper_path / qid, img_root, stats)
                     content = _preprocess_latex(content)
                     gid = next(gid_iter)
                     if gid in used_ids:
@@ -482,18 +593,11 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
                     all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
                 continue
             reasons = parse_reasons(part[reason_idx:])
-            body = part[marker_idx:reason_idx]
-            body = "\n".join(
-                l for l in body.splitlines()
-                if not (l.strip().startswith("### 标记原文")
-                        or l.strip().startswith("编号：")
-                        or l.strip().startswith("内容："))
-            ).strip()
-            body = _strip_wrapping_fence(body)
+            body = _audit_body(part[marker_idx:reason_idx])
             # 标记真实性审计必须在重写图片引用与 LaTeX 预处理之前做：
             # 审计要把「重建正文」与单元源文逐字比对，而这两步都会改写正文字面
             audits = audit_markers(body, _read_unit_source(paper_path, qid))
-            body = _rewrite_images(body, paper_path / qid, img_root)
+            body = _rewrite_images(body, paper_path / qid, img_root, stats)
             body = _convert_multiline_tables(body)
             # 标记字段先摘出再预处理正文：字段里的 \[ 多为待修改的转义错误，
             # 套用正文的「\[…\] → $…$」还原会打乱字段内 $ 配对（见 _mask_markers）
@@ -559,13 +663,25 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
         md_tmp = work / "_报告_带锚.md"
         md_tmp.write_text(full_md, encoding="utf-8")
 
-        r = subprocess.run(
-            [find_pandoc(), "-f", "markdown-implicit_figures+hard_line_breaks+mark",
-             str(md_tmp), "-o", str(out_path)],
-            capture_output=True, text=True, cwd=str(work),
-            **(dict(creationflags=subprocess.CREATE_NO_WINDOW) if os.name == 'nt' else {}))
+        from .convert import PANDOC_TIMEOUT_SECONDS as _PANDOC_TIMEOUT
+        try:
+            r = subprocess.run(
+                [find_pandoc(), "-f", "markdown-implicit_figures+hard_line_breaks+mark",
+                 str(md_tmp), "-o", str(out_path)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=str(work), timeout=_PANDOC_TIMEOUT,
+                **(dict(creationflags=subprocess.CREATE_NO_WINDOW) if os.name == 'nt' else {}))
+        except subprocess.TimeoutExpired:
+            log(f"❌ Word 报告：pandoc 转换超时（{_PANDOC_TIMEOUT}s），已中止")
+            return None
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"❌ Word 报告：pandoc 调用异常: {e}")
+            return None
         if r.returncode != 0:
             log(f"❌ Word 报告：pandoc 转换失败: {(r.stderr or '')[:300]}")
+            return None
+        if not os.path.isfile(out_path):
+            log(f"❌ Word 报告：pandoc 报告成功但没有产出 Word：{out_path}")
             return None
         # stderr 正常必为 str；打包 exe 实测现场出现过 None，判空防崩
         if r.stderr and r.stderr.strip():
@@ -573,7 +689,7 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
             if fetch_warns:
                 log(f"   ⚠️ Word 报告：{len(fetch_warns)} 张图片未找到（将显示替换文字）")
 
-        _inject_comments(out_path, comments, heading_anchors)
+        _inject_comments(out_path, comments, heading_anchors, stats=stats)
         summary = f"（{len(comments)} 条批注"
         if skipped_clean:
             summary += f"，{skipped_clean} 个单元无批注"
@@ -590,10 +706,12 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
 
 
 def _collect_reports(paper_path: Path):
-    """收集子目录（单元N/第N题/板块N）的 _校对报告.md，按数字排序。"""
+    """只收集合约单元目录中的报告，按数字排序。"""
+    from .units import is_unit_dir
+
     reports = []
     for sub in paper_path.iterdir():
-        if not sub.is_dir():
+        if not sub.is_dir() or not is_unit_dir(sub.name):
             continue
         rep = sub / "_校对报告.md"
         if rep.exists():
@@ -610,30 +728,48 @@ def _collect_reports(paper_path: Path):
 
 
 def _read_unit_source(paper_path: Path, qid: str) -> str | None:
-    """读取单元源文（`单元N/单元N.md`），用于标记真实性审计。
+    """读取单元源文，用于标记真实性审计。
 
-    非本目录布局（源文缺失）时返回 None：审计随即不做源文比对、不猜测。
+    R-D02：**与 status / verify / report / material 共用 `paths.find_source_md`**。
+    旧实现只认契约名 `<单元名>.md`，于是把 `第1题.md` 改名成 `草稿副本.md` 后
+    status 报「已完成」、docx 却读不到源文，两边对"单元源文"各有一套定义。
+
+    源文缺失时返回 None：审计随即不做源文比对、不猜测。
     """
-    unit_md = paper_path / qid / f"{qid}.md"
-    if not unit_md.exists():
+    unit_dir = paper_path / qid
+    source = paths.find_source_md(unit_dir)
+    if source is None:
         return None
     try:
-        return unit_md.read_text(encoding="utf-8")
+        return source.read_text(encoding="utf-8")
     except OSError:
         return None
 
 
-def _rewrite_images(body: str, q_dir: Path, img_root: Path) -> str:
+def _rewrite_images(body: str, q_dir: Path, img_root: Path,
+                    stats: dict | None = None) -> str:
     """图片引用重写：./images/xxx → ./images/{题名}_xxx，复制到合并目录防编号冲突。
 
     外链 https:// 引用是 LLM 幻觉（搜索结果拷贝），转为文字说明，
     避免 pandoc 尝试下载失败产生 fetch 警告。
+
+    本地图片找不到或复制失败会让交付 Word 缺图，必须计入 `stats["image_missing"]`
+    并告警——旧实现 `except OSError: pass` 后照样写出引用，只留一条 pandoc
+    fetch 警告，复核结果里完全看不出来。
     """
     q_img_dir = q_dir / "images"
 
+    def _miss(reason: str) -> None:
+        if stats is not None:
+            stats["image_missing"] = stats.get("image_missing", 0) + 1
+        log(f"   ⚠️ Word 报告：{q_dir.name} 图片未嵌入交付：{reason}")
+
+    from .convert import image_destination
+
     def _repl(m):
-        ref = m.group(2)
+        ref = image_destination(m.group(2)) or ""
         if ref.startswith(("http://", "https://")):
+            log(f"   ⚠️ Word 报告：{q_dir.name} 外链图片引用已转为文字说明 {ref[:60]}")
             return "（配图缺失：外链图片无法嵌入）"
         name = Path(ref).name
         new_name = f"{q_dir.name}_{name}"
@@ -641,14 +777,18 @@ def _rewrite_images(body: str, q_dir: Path, img_root: Path) -> str:
         if src_img.exists():
             try:
                 shutil.copy2(src_img, img_root / new_name)
-            except OSError:
-                pass
+            except OSError as exc:
+                _miss(f"{ref}（复制失败：{exc}）")
+        else:
+            # 只按 basename 找图片：引用在子目录（或图片被移走）时这里必然落空，
+            # 但仍会写出 ./images/{题名}_{名字} 的悬空引用 → 交付 Word 缺图。
+            _miss(f"{ref}（按 {q_img_dir}/ 找不到 {name}）")
         alt = m.group(1)
         if alt.startswith("@@@"):
             alt = "配图"
         return f"![{alt}](./images/{new_name})"
 
-    return re.sub(r"!\[([^]]*)\]\(([^)]+)\)", _repl, body)
+    return rewrite_inline_images(body, _repl)
 
 
 def _convert_multiline_tables(text: str) -> str:
@@ -708,6 +848,24 @@ def _convert_multiline_tables(text: str) -> str:
         out.append(line)
         i += 1
     return "\n".join(out)
+
+
+def _audit_body(section: str) -> str:
+    """报告片段 → 参与标记审计与渲染的正文，与 verify-report 同源。
+
+    门禁与渲染必须清洗出**同一份**正文：verify 会先 strip_reference_preamble 再
+    审计，渲染侧若保留「## 前置参考 / ### 权威原文 / ⚠️」这些行，同一条标记的
+    定位上下文就不同，可能门禁判 OK、渲染判 RESTORE_NEW（或反之），正文与批注
+    与闸门结论脱节。围栏属报告格式违规（门禁会拒），这里再剥一次只为让
+    legacy 直调路径不至于把围栏渲染进 Word。
+    """
+    body = "\n".join(
+        line for line in section.splitlines()
+        if not (line.strip().startswith("### 标记原文")
+                or line.strip().startswith("编号：")
+                or line.strip().startswith("内容："))
+    ).strip()
+    return strip_reference_preamble(_strip_wrapping_fence(body))
 
 
 def _strip_wrapping_fence(text: str) -> str:
@@ -837,7 +995,8 @@ def _normalize_math_dollars(text: str) -> str:
     return "\n".join(lines)
 
 
-def _inject_comments(docx_path: Path, comments: dict, heading_anchors: dict | None = None):
+def _inject_comments(docx_path: Path, comments: dict, heading_anchors: dict | None = None,
+                    stats: dict | None = None):
     """填充 comments.xml、清理无锚点引用、替换图片替换文字。
 
     批注内 `$...$` 公式渲染为 PNG 图片注入（shared/formula_render），
@@ -863,7 +1022,7 @@ def _inject_comments(docx_path: Path, comments: dict, heading_anchors: dict | No
 
     work_dir = Path(tempfile.mkdtemp(prefix="_cmt_img_", dir=str(docx_path.parent)))
     try:
-        comments_xml, images = _build_comments_xml(comments, kept_ids, work_dir)
+        comments_xml, images = _build_comments_xml(comments, kept_ids, work_dir, stats=stats)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
     tmp_path = docx_path.with_name("_tmp.docx")
@@ -907,6 +1066,19 @@ def _ensure_png_content_type(ct_xml: bytes) -> bytes:
 
 _SKIP_ANCHOR_RE = re.compile(r"SKIPANCH(\d+)Z")
 
+_FALLBACK_NOTE_RE = re.compile(r"（标记\s*(\d+)\s*修改意见")
+"""生成后复核按标记编号识别公式兜底文案（与 _textify_skipped_formulas 同源）。"""
+
+
+def _section_text(sec: str) -> str:
+    """段落可见文本：先按段落断行，再剥标签。
+
+    pandoc 会在空格与数字边界把一段文本拆进多个 `<w:t>`（实测兜底文案会被拆成
+    「（标记」+「 1 」+「修改意见：…」），跨 run 直接匹配原始 XML 必然漏计；
+    文本级匹配才是稳的，段间补换行避免跨段误拼。
+    """
+    return re.sub(r"<[^>]+>", "", sec.replace("</w:p>", "</w:p>\n"))
+
 
 def _textify_skipped_formulas(text: str, skipped_anchors: dict) -> str:
     """把含被跳过标记的公式改为转义文本并用 ==...== 高亮，不转微软公式。
@@ -929,9 +1101,13 @@ def _textify_skipped_formulas(text: str, skipped_anchors: dict) -> str:
         def _esc(t):
             return t.replace("\\", "\\\\").replace("$", "\\$").replace("^", "\\^")
 
-        # 先收集修改意见（转义不影响占位符），再还原原文，意见追加在公式文本之后
+        # 先收集修改意见（转义不影响占位符），再还原原文，意见追加在公式文本之后。
+        # 每条兜底都写入标记编号：编号是生成后复核按标记记账的唯一依据；
+        # 旧实现只输出「（修改意见：」，既会被源文自带的同名文字虚增，
+        # 也会在「改为」为空时整条不输出而被漏计。
         notes = "".join(
-            f"（修改意见：{_esc(orig)}→{_esc(new)}）" if new else ""
+            f"（标记 {m.group(1)} 修改意见：{_esc(orig)}→{_esc(new)}）" if new
+            else f"（标记 {m.group(1)} 修改意见：删去「{_esc(orig)}」）"
             for m in _SKIP_ANCHOR_RE.finditer(seg)
             for orig, new in [skipped_anchors[int(m.group(1))]])
         seg = _SKIP_ANCHOR_RE.sub(
@@ -1030,7 +1206,8 @@ def _strip_leaked_openxml(doc_xml: str):
     return doc_xml, sorted(set(leaked), key=int)
 
 
-def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path) -> tuple[str, list]:
+def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path,
+                        stats: dict | None = None) -> tuple[str, list]:
     """构建 comments.xml，批注内 `$...$` 公式渲染为 PNG 图片。
 
     Args:
@@ -1044,12 +1221,15 @@ def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path) -> tuple[
     items = []
     images = []
     pic_id = itertools.count(1)
+    degraded = 0
+    """批注内公式渲染失败、降级为文本的数量（可选依赖缺失属允许降级，但要可见）。"""
 
     def _escape_run(text: str) -> str:
         return f'<w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r>'
 
     def _para_with_formulas(text: str) -> str:
         """文本按 $...$ 切分：公式段渲染图片（失败降级为文本），其余保留文本。"""
+        nonlocal degraded
         parts = re.split(r'(\$[^$]+\$)', text)
         runs = []
         for part in parts:
@@ -1065,6 +1245,7 @@ def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path) -> tuple[
                     images.append((media_name, png_bytes, r_id))
                     runs.append(_inline_image_xml(num, media_name, r_id, png_bytes))
                     continue
+                degraded += 1
             runs.append(_escape_run(part))
         return "".join(runs)
 
@@ -1079,6 +1260,8 @@ def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path) -> tuple[
         items.append(
             f'<w:comment w:id="{gid}" w:author="校对助手" '
             f'w:date="{_comment_timestamp()}">' + "".join(paras) + '</w:comment>')
+    if stats is not None and degraded:
+        stats["comment_formula_fallback"] = stats.get("comment_formula_fallback", 0) + degraded
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             f'<w:comments {_NS}>' + "".join(items) + "</w:comments>"), images
 

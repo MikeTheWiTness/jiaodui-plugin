@@ -7,6 +7,7 @@ core/defaults.py（default_convert_file_to_md 与 md 清理/后处理系列）
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -17,8 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .decor_utils import strip_decor_images, strip_decor_images_from_file
-from .errors import EnvError, NotFoundError, UnsupportedError
+from .errors import BusinessError, EnvError, NotFoundError, UnsupportedError
 from .log import log
+from .paths import safe_name
 from .workdir import ensure_inside, ensure_tree, input_path
 
 __all__ = [
@@ -112,6 +114,24 @@ def find_pandoc() -> str | None:
     return None
 
 
+PANDOC_TIMEOUT_SECONDS = 120
+"""pandoc 子进程超时。
+
+旧实现三处调用都没有 timeout：卡住的 pandoc 会让整条 CLI 永久挂起——没有退出码、
+没有失败留痕，宿主 agent 的轮次就死在那里。同仓 check-env 早就对同一个二进制设了 10s。
+"""
+
+
+def _run_pandoc(cmd: list[str], timeout: int = PANDOC_TIMEOUT_SECONDS):
+    """统一的 pandoc 子进程调用：固定 UTF-8 编码 + 超时。
+
+    text=True 不固定编码时，非 UTF-8 locale 下中文诊断会变乱码，ASCII locale 下
+    甚至直接抛 UnicodeDecodeError。
+    """
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout, **_creation_flags())
+
+
 def check_pandoc() -> bool:
     """检查 pandoc 是否可用，可用时打印版本首行。"""
     pandoc = find_pandoc()
@@ -119,10 +139,8 @@ def check_pandoc() -> bool:
         log("❌ Pandoc 未安装")
         return False
     try:
-        r = subprocess.run(
-            [pandoc, "--version"], capture_output=True, text=True, **_creation_flags()
-        )
-    except (FileNotFoundError, OSError):
+        r = _run_pandoc([pandoc, "--version"], timeout=10)
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
         log("❌ Pandoc 未安装")
         return False
     if r.returncode == 0:
@@ -151,11 +169,21 @@ def convert_with_pandoc(input_path, output_md, img_dir, use_mathjax=False):
         cmd.insert(3, "--mathjax")
     cmd.extend([input_path, "-o", output_md])
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, **_creation_flags())
-        return r.returncode == 0
-    except Exception as e:
+        r = _run_pandoc(cmd)
+    except subprocess.TimeoutExpired:
+        log(f"   Pandoc 转换超时（{PANDOC_TIMEOUT_SECONDS}s），已中止")
+        return False
+    except (OSError, subprocess.SubprocessError) as e:
         log(f"   Pandoc 异常: {e}")
         return False
+    if r.returncode != 0:
+        return False
+    # 只看 returncode 不够：包装脚本/磁盘满/进程被杀都可能 exit 0 却不产文件，
+    # 下游 open() 会抛裸 FileNotFoundError。
+    if not Path(output_md).is_file():
+        log(f"   Pandoc 报告成功但没有产出文件：{output_md}")
+        return False
+    return True
 
 
 def pandoc_to_docx(md_path: str, docx_path: str) -> bool:
@@ -167,12 +195,18 @@ def pandoc_to_docx(md_path: str, docx_path: str) -> bool:
         return False
     cmd = [pandoc, "-f", "markdown", "-t", "docx", str(md_path), "-o", str(docx_path)]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, **_creation_flags())
-    except (FileNotFoundError, OSError) as e:
+        r = _run_pandoc(cmd)
+    except subprocess.TimeoutExpired:
+        log(f"❌ Pandoc 生成 Word 超时（{PANDOC_TIMEOUT_SECONDS}s），已中止")
+        return False
+    except (FileNotFoundError, OSError, subprocess.SubprocessError) as e:
         log(f"❌ Pandoc 生成 Word 异常: {e}")
         return False
     if r.returncode != 0:
         log(f"❌ Pandoc 生成 Word 失败: {(r.stderr or '').strip()}")
+        return False
+    if not Path(docx_path).is_file():
+        log(f"❌ Pandoc 报告成功但没有产出 Word：{docx_path}")
         return False
     return True
 
@@ -309,9 +343,9 @@ def _inject_format_markers(md_text, docx_path):
                 continue
 
             pattern = re.escape(text)
-            matches = list(re.finditer(pattern, result))
-
-            for m in matches:
+            # 惰性遍历：命中第一条可插入的就 break，旧实现先 list() 物化全部匹配，
+            # 在文本重复出现很多次时是纯浪费（O(匹配数) 内存与时间）。
+            for m in re.finditer(pattern, result):
                 start = m.start()
                 end = m.end()
                 before = result[:start]
@@ -417,8 +451,16 @@ def get_intent_problem_markers(config=None):
         if wrapped is None:
             wrapped = config.get("lecture_wrapped_patterns")
         for pat in wrapped or []:
-            if pat not in markers:
-                markers.append(pat)
+            if pat in markers:
+                continue
+            try:
+                re.compile(pat)
+            except re.error:
+                # 学科配置写坏一条正则不该崩掉整条讲义清理链；
+                # 与 config.get_lecture_patterns 的降级口径保持一致。
+                log(f"   ⚠️ 无效的题目标志正则，已跳过：{pat!r}")
+                continue
+            markers.append(pat)
     return markers
 
 
@@ -465,9 +507,11 @@ def comprehensive_clean(md_content):
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = '\n'.join(l.strip() for l in text.split('\n'))
 
-    # Step N: 恢复数学公式
-    for j, block in enumerate(math_blocks):
-        text = text.replace(f'\x00MATH{j}\x00', block)
+    # Step N: 恢复数学公式。逐块 str.replace 是 O(公式数 × 全文长度)，
+    # 改为单遍正则回填（行为等价）。
+    if math_blocks:
+        text = re.sub(r'\x00MATH(\d+)\x00',
+                      lambda m: math_blocks[int(m.group(1))], text)
     return text.strip()
 
 
@@ -586,8 +630,38 @@ def clean_intent_markers(md_content, problem_markers=None):
     # 标签后可跟任意内容（如来源信息 "（2026·山东青岛模拟）"），
     # 对齐 lecture_wrapped_patterns 的 ^\*\*{pattern}\*\*.*$ 规则。
     marker_union = '|'.join(problem_markers)
-    pattern = r'^【出题意图】.*?(?=\*\*(?:' + marker_union + r')\*\*)'
-    cleaned = re.sub(pattern, '', md_content, flags=re.DOTALL | re.MULTILINE)
+    try:
+        marker_re = re.compile(r'\*\*(?:' + marker_union + r')\*\*')
+    except re.error as exc:
+        log(f"   ⚠️ 题目标志正则无效（{exc}），跳过出题意图清理")
+        return md_content.strip()
+
+    # 旧实现用 ^【出题意图】.*?(?=标记) 的惰性回溯：每个起点都要向后扫到某个标记
+    # （没有标记时就扫到文末），k 个起点 × n 长度 = O(n²)。这里改成两次线性扫描
+    # （起点、标记各一遍）+ 区间合并，语义等价。
+    starts = [m.start() for m in re.finditer(r'^【出题意图】', md_content, flags=re.MULTILINE)]
+    marks = [m.start() for m in marker_re.finditer(md_content)]
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for start in starts:
+        while cursor < len(marks) and marks[cursor] <= start:
+            cursor += 1
+        if cursor >= len(marks):
+            break  # 后面没有标记：原正则不匹配，不删
+        spans.append((start, marks[cursor]))
+    merged: list[list[int]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    pieces: list[str] = []
+    last = 0
+    for start, end in merged:
+        pieces.append(md_content[last:start])
+        last = end
+    pieces.append(md_content[last:])
+    cleaned = ''.join(pieces)
     # 清理可能产生的多余空行
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
@@ -671,8 +745,10 @@ def fix_latex_escapes_text(content: str) -> str:
         math_blocks[i] = block
 
     # ===== Phase 5: 还原数学块 =====
-    for i, block in enumerate(math_blocks):
-        content = content.replace(f'\x01MATH{i}\x01', block)
+    # 同 comprehensive_clean：单遍回填代替逐块 replace。
+    if math_blocks:
+        content = re.sub(r'\x01MATH(\d+)\x01',
+                         lambda m: math_blocks[int(m.group(1))], content)
 
     return content
 
@@ -772,10 +848,54 @@ def _get_tag(elem):
     return elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
 
 
+IDML_MAX_ENTRY_BYTES = 32 * 1024 * 1024
+"""单个 IDML 成员解压上限：261KB 的 zip 炸弹可解出 256MB（实测峰值 RSS 1GB），必须有闸门。"""
+IDML_MAX_TOTAL_BYTES = 128 * 1024 * 1024
+IDML_MAX_ENTRIES = 8192
+
+
+def _idml_read_xml(z, name):
+    """读取并解析 IDML 内的 XML 成员，畸形输入统一转成结构化契约错误。
+
+    旧实现直接 z.read + ET.fromstring：缺成员抛 KeyError、非 XML 抛 ParseError、
+    深嵌套抛 RecursionError，全部绕过「稳定退出码 + 一行结构化 JSON」的契约。
+    """
+    infos = z.infolist()
+    if len(infos) > IDML_MAX_ENTRIES:
+        raise BusinessError(f"IDML 成员数过多（{len(infos)}）", code="invalid-source",
+                            details={"entries": len(infos)})
+    total = sum(info.file_size for info in infos)
+    if total > IDML_MAX_TOTAL_BYTES:
+        raise BusinessError(
+            f"IDML 解压总量过大（{total} 字节 > {IDML_MAX_TOTAL_BYTES}），拒绝处理",
+            code="invalid-source", details={"total_bytes": total})
+    if name not in z.namelist():
+        raise BusinessError(f"IDML 缺少必需成员：{name}", code="invalid-source",
+                            details={"member": name})
+    info = z.getinfo(name)
+    if info.file_size > IDML_MAX_ENTRY_BYTES:
+        raise BusinessError(
+            f"IDML 成员过大（{info.file_size} 字节 > {IDML_MAX_ENTRY_BYTES}），拒绝解压",
+            code="invalid-source", details={"member": name, "size": info.file_size})
+    try:
+        raw = z.read(name)
+    except (KeyError, zipfile.BadZipFile, RuntimeError, OSError) as exc:
+        raise BusinessError(f"IDML 成员读取失败：{name}（{exc}）",
+                            code="invalid-source") from exc
+    try:
+        return ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise BusinessError(f"IDML 成员不是合法 XML：{name}（{exc}）",
+                            code="invalid-source") from exc
+
+
 def _iter_all(elem):
-    yield elem
-    for child in elem:
-        yield from _iter_all(child)
+    """前序遍历（显式栈，不递归）：深嵌套畸形 XML 不再触发 RecursionError。"""
+    stack = [elem]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(reversed(list(node)))
 
 
 def _parse_transform(transform_str):
@@ -800,8 +920,7 @@ def _extract_stories(z):
 
     for sf in story_files:
         story_id = sf.replace('Stories/Story_', '').replace('.xml', '')
-        story_xml = z.read(sf)
-        story_root = ET.fromstring(story_xml)
+        story_root = _idml_read_xml(z, sf)
 
         paragraphs = []
         current_chars = []
@@ -838,8 +957,7 @@ def _extract_stories(z):
 
 def _get_spread_order(z):
     """从 designmap 获取 spread 顺序。"""
-    dm_xml = z.read('designmap.xml')
-    dm_root = ET.fromstring(dm_xml)
+    dm_root = _idml_read_xml(z, 'designmap.xml')
 
     spread_files = []
     for elem in _iter_all(dm_root):
@@ -855,35 +973,34 @@ def _get_story_positions(z, spread_files, story_data):
     all_tfs = []
 
     def _iter_with_parent_transform(elem, parent_tx=0.0, parent_ty=0.0):
-        """递归遍历元素，累加父元素的变换。"""
-        tag = _get_tag(elem)
+        """前序遍历并累加父元素变换（显式栈，不递归）。"""
+        stack = [(elem, parent_tx, parent_ty)]
+        while stack:
+            node, base_tx, base_ty = stack.pop()
+            tag = _get_tag(node)
 
-        tx, ty = _parse_transform(elem.get('ItemTransform', ''))
-        abs_tx = parent_tx + tx
-        abs_ty = parent_ty + ty
+            tx, ty = _parse_transform(node.get('ItemTransform', ''))
+            abs_tx = base_tx + tx
+            abs_ty = base_ty + ty
 
-        if tag == 'TextFrame':
-            story_id = elem.get('ParentStory', '')
-            if story_id and story_id in story_data:
-                tf_self = elem.get('Self', '')
-                prev_tf = elem.get('PreviousTextFrame', '')
-                next_tf = elem.get('NextTextFrame', '')
-                yield {
-                    'tf_self': tf_self,
-                    'story_id': story_id,
-                    'prev_tf': prev_tf,
-                    'next_tf': next_tf,
-                    'x': abs_tx,
-                    'y': abs_ty,
-                }
+            if tag == 'TextFrame':
+                story_id = node.get('ParentStory', '')
+                if story_id and story_id in story_data:
+                    yield {
+                        'tf_self': node.get('Self', ''),
+                        'story_id': story_id,
+                        'prev_tf': node.get('PreviousTextFrame', ''),
+                        'next_tf': node.get('NextTextFrame', ''),
+                        'x': abs_tx,
+                        'y': abs_ty,
+                    }
 
-        for child in elem:
-            if isinstance(child.tag, str):
-                yield from _iter_with_parent_transform(child, abs_tx, abs_ty)
+            for child in reversed(list(node)):
+                if isinstance(child.tag, str):
+                    stack.append((child, abs_tx, abs_ty))
 
     for sf in spread_files:
-        sp_xml = z.read(sf)
-        sp_root = ET.fromstring(sp_xml)
+        sp_root = _idml_read_xml(z, sf)
 
         pages = []
         for elem in _iter_all(sp_root):
@@ -1183,8 +1300,10 @@ def extract_idml_to_markdown(idml_path, output_md_path=None):
             total_paras += 1
 
     if output_md_path:
-        output_md_path = str(output_md_path)
-        os.makedirs(os.path.dirname(output_md_path), exist_ok=True)
+        # 无目录部分（如 "only_name.md"）时 os.path.dirname 返回空串，
+        # os.makedirs('') 会抛 FileNotFoundError；写盘也要过工作区边界。
+        output_md_path = ensure_inside(output_md_path)
+        output_md_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_md_path, 'w', encoding='utf-8') as f:
             f.write('\n'.join(md_lines))
 
@@ -1200,10 +1319,66 @@ def extract_idml_to_markdown(idml_path, output_md_path=None):
 # 图片归置与转换主流程
 # ============================================================
 
-_IMG_RE = re.compile(r'!\[(.*?)\]\((.*?)\)')
+_IMG_RE = re.compile(r'!\[([^\]\n]*)\]\(\s*([^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\s*\)')
+"""图片引用；目标字段允许一层括号。
+
+pandoc 在路径含空格/括号时会写出**未用 <> 包裹**的绝对路径
+（如 /private/tmp/x (v2)/a.png），非贪婪的 (.*?) 会在第一个 ) 处截断，
+导致图片既没复制、宿主机绝对路径又留在产物里。
+"""
+
+_TITLE_RE = re.compile(r'''\s+(?:"[^"]*"|'[^']*')$''')
+# 讲义占位图删除时连同 Pandoc 属性块处理；正常图片仍原样保留属性。
+_PANDOC_IMAGE_RE = re.compile(_IMG_RE.pattern + r'(?P<attributes>\{[^{}]*\})?')
 
 
-def _organize_images(content, source_dirs, images_dir, base, warnings):
+def image_destination(raw: str) -> str | None:
+    """从图片引用的目标字段取出纯路径。
+
+    支持 <...> 包裹（路径含空格时的合法写法）与引号标题；**不做空白切分**，
+    否则 pandoc 写出的 /tmp/x (v2)/a.png 会被截断成 /tmp/x。
+    """
+    value = (raw or "").strip()
+    if not value:
+        return None
+    if value.startswith("<"):
+        end = value.find(">")
+        if end <= 1:
+            return None
+        return value[1:end].strip() or None
+    value = _TITLE_RE.sub("", value).strip()
+    return value or None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+# 第 6 讲样例中破图占位图的规范化 RGBA 像素指纹；只自动忽略精确匹配。
+_BROKEN_IMAGE_PLACEHOLDER_SHA256 = "efc464a2d61fea8d111cd125e0365c3cfa42f359c03378f54c0a628ead16c643"
+
+
+def _is_broken_image_placeholder(path: Path) -> bool:
+    """匹配已确认的 Word 缺图占位图像素，不依赖文件元数据或显示尺寸。"""
+    try:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            if image.size != (88, 106):
+                return False
+            rgba = image.convert("RGBA")
+            fingerprint = hashlib.sha256(rgba.tobytes()).hexdigest()
+            return fingerprint == _BROKEN_IMAGE_PLACEHOLDER_SHA256
+    except Exception:
+        return False
+
+
+def _organize_images(content, source_dirs, images_dir, base, warnings, *,
+                     ignore_broken_placeholders: bool = False):
     """把 Markdown 引用的本地图片归置到 {base}_images/media 并重写相对路径。
 
     返回 (新内容, copied, missing)。找不到或复制失败时保留原引用并写入 warnings。
@@ -1213,11 +1388,38 @@ def _organize_images(content, source_dirs, images_dir, base, warnings):
     copied = 0
     missing = 0
     search_dirs = [Path(d) for d in source_dirs]
+    assigned: dict[str, str] = {}
+    """本次转换内已占用的目标名 → 内容摘要，用于识别同名不同图。"""
+    search_roots: list[Path] = []
+    for directory in search_dirs:
+        try:
+            search_roots.append(directory.resolve())
+        except OSError:
+            continue
+
+    def _inside_search_dirs(path: Path) -> bool:
+        """只接受允许的源目录内的图片。
+
+        否则一份构造的 md 可以用绝对路径或 ../../ 把宿主机任意可读文件吸进材料。
+        docx 分支不受影响：pandoc 的 --extract-media 目录本身就是 search_dir。
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return False
+        return any(resolved.is_relative_to(root) for root in search_roots)
+
+    def _digest_or_none(path: Path) -> str | None:
+        try:
+            return _file_sha256(path)
+        except OSError:
+            return None
 
     def repl(m):
         nonlocal copied, missing
         alt = m.group(1)
-        src = m.group(2).strip()
+        src = image_destination(m.group(2))
+        attributes = (m.group("attributes") or "") if ignore_broken_placeholders else ""
         if not src or src.lower().startswith(("http://", "https://", "data:")):
             return m.group(0)
         name = Path(src).name
@@ -1226,8 +1428,10 @@ def _organize_images(content, source_dirs, images_dir, base, warnings):
             return m.group(0)
 
         found = None
-        if Path(src).is_absolute() and Path(src).is_file():
-            found = Path(src)
+        if Path(src).is_absolute():
+            candidate = Path(src)
+            if candidate.is_file() and _inside_search_dirs(candidate):
+                found = candidate
 
         if found is None:
             for sd in search_dirs:
@@ -1238,7 +1442,7 @@ def _organize_images(content, source_dirs, images_dir, base, warnings):
                         break
                     if not src.startswith(("/", "\\")):
                         cand = sd / src
-                        if cand.is_file():
+                        if cand.is_file() and _inside_search_dirs(cand):
                             found = cand
                             break
                 except OSError:
@@ -1246,22 +1450,66 @@ def _organize_images(content, source_dirs, images_dir, base, warnings):
 
         if found is None:
             missing += 1
-            warnings.append(f"图片未找到，保留原引用：{src}")
+            if Path(src).is_absolute() and Path(src).is_file():
+                warnings.append(f"图片在允许的源目录之外，未复制：{src}")
+            else:
+                warnings.append(f"图片未找到，保留原引用：{src}")
             return m.group(0)
 
-        dest = ensure_inside(media_dir / name)
+        digest = _digest_or_none(found)
+        if digest is None:
+            missing += 1
+            warnings.append(f"图片读取失败，保留原引用：{src}")
+            return m.group(0)
+
+        if ignore_broken_placeholders and _is_broken_image_placeholder(found):
+            warnings.append(f"已忽略讲义 DOCX 缺图占位图：{src}")
+            return ""
+
+        # 同名不同图必须各自保留：**只对本次转换内**的同名冲突加内容哈希后缀。
+        # 跨轮同名是同一材料的重转，以源为准覆盖旧图（旧实现两类都直接覆盖，
+        # 于是同一次转换里的第二张会静默吃掉第一张，却仍报 copied=2）。
+        dest_name = name
+        seen = assigned.get(dest_name)
+        if seen is not None and seen != digest:
+            width = 8
+            while True:
+                dest_name = f"{Path(name).stem}_{digest[:width]}{Path(name).suffix}"
+                current = assigned.get(dest_name)
+                if current is None or current == digest:
+                    break
+                width += 4
+        assigned[dest_name] = digest
+        dest = ensure_inside(media_dir / dest_name)
+
+        if dest.exists() and _digest_or_none(dest) == digest:
+            copied += 1
+            return f"![{alt}](./{base}_images/media/{dest_name}){attributes}"
         try:
-            if not dest.exists() or dest.resolve() != found.resolve():
-                shutil.copy2(found, dest)
+            shutil.copy2(found, dest)
         except (OSError, shutil.Error) as e:
             missing += 1
             warnings.append(f"图片复制失败，保留原引用：{src}（{e}）")
             return m.group(0)
 
         copied += 1
-        return f"![{alt}](./{base}_images/media/{name})"
+        return f"![{alt}](./{base}_images/media/{dest_name}){attributes}"
 
-    return _IMG_RE.sub(repl, content), copied, missing
+    # 文本里不可能存在图片引用时直接跳过：未闭合的 "![" 会让正则在 O(n²) 上退化。
+    image_pattern = _PANDOC_IMAGE_RE if ignore_broken_placeholders else _IMG_RE
+    new_content = image_pattern.sub(repl, content) if '](' in content else content
+    # 清理本次转换未再引用的旧图：否则重转后旧图留在材料目录，还会被
+    # material.resources 登记进 conversion.resources。被引用的文件（assigned）一律保留。
+    stale = [path for path in sorted(media_dir.iterdir())
+             if path.is_file() and path.name not in assigned]
+    for path in stale:
+        try:
+            path.unlink()
+        except OSError as exc:
+            warnings.append(f"旧图片清理失败：{path.name}（{exc}）")
+    if stale:
+        warnings.append(f"清理未再引用的旧图片 {len(stale)} 张")
+    return new_content, copied, missing
 
 
 def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, *, mode=None):
@@ -1290,7 +1538,8 @@ def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, *
     with open(raw_md, encoding="utf-8") as f:
         content = f.read()
     content, copied, missing = _organize_images(
-        content, [images_dir / "media", images_dir, raw_md.parent], images_dir, base, warnings
+        content, [images_dir / "media", images_dir, raw_md.parent], images_dir, base, warnings,
+        ignore_broken_placeholders=(mode == "lecture"),
     )
     with open(raw_md, "w", encoding="utf-8") as f:
         f.write(content)
@@ -1358,7 +1607,9 @@ def convert_to_raw(src_path: str, out_dir: str | None = None, base_name: str | N
     use_mathjax = mode == "lecture" if use_mathjax is None else use_mathjax
     out = ensure_tree(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    base = (base_name or src.stem).strip() or src.stem
+    # base 会拼进输出文件名：不消毒时 base_name="../逃逸" 可以把产物写到 out_dir 之外
+    # （仍在工作区内，所以 ensure_inside 拦不住）。CLI 路径本来就会消毒，这里补公开 API。
+    base = safe_name((base_name or src.stem).strip() or src.stem)
 
     raw_md = ensure_inside(out / f"{base}_raw.md")
     images_dir = ensure_tree(out / f"{base}_images")
@@ -1370,7 +1621,13 @@ def convert_to_raw(src_path: str, out_dir: str | None = None, base_name: str | N
         warnings.append(f"目标已存在，按规范名覆盖写入：{raw_md.name}")
 
     ext = src.suffix.lower()
-    if ext in (".docx", ".doc"):
+    if ext == ".doc":
+        # 旧版二进制 .doc 不是 OOXML，pandoc 的 -f docx 必然失败。
+        # 与其让用户拿到一个含糊的 pandoc 报错，不如在这里说清楚怎么处理。
+        raise UnsupportedError(
+            "不支持旧版 .doc 格式：请先用 Word / LibreOffice 另存为 .docx 再转换",
+            details={"ext": ext, "path": str(src)})
+    if ext == ".docx":
         copied, missing = _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, mode=mode)
         source_kind = "docx"
     elif ext in (".md", ".markdown"):

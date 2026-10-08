@@ -1254,6 +1254,95 @@ FORMULA_FALLBACK_REPORT = """# 第1题 校对报告
 2. 正常标记。
 """
 
+FORMULA_FALLBACK_EMPTY_NEW_REPORT = """# 第1题 校对报告
+
+一般问题
+
+### 标记原文
+编号：第1题
+内容：
+安培力做功大小为$\\frac{{B}^{2}{L}^{2}【1|$v$|】x}{R+r}$
+
+### 修改原因
+1. 公式内锚点。
+"""
+
+REPORT_WITH_LITERAL_NOTE = """# 第1题 校对报告
+
+一般问题
+
+### 标记原文
+编号：第1题
+内容：
+此处引用（修改意见：）四字，正常标记【1|甲|乙】。
+
+### 修改原因
+1. 改。
+"""
+
+REPORT_WITH_FAKE_NOTE = """# 第1题 校对报告
+
+一般问题
+
+### 标记原文
+编号：第1题
+内容：
+正文含伪造（标记 9 修改意见：甲→乙）字样，正常标记【1|丙|丁】。
+
+### 修改原因
+1. 改。
+"""
+
+REPORT_WITH_PREAMBLE = """# 第1题 校对报告
+
+一般问题
+
+### 标记原文
+## 前置参考
+### 权威原文
+旧文【9|α|β】
+⚠️ 仅供参考
+---
+
+正文【1|甲|乙】。
+
+### 修改原因
+1. 改。
+"""
+
+REPORT_WITH_FORMULA_COMMENT = """# 第1题 校对报告
+
+一般问题
+
+### 标记原文
+电动势为【1|E|$E_{总}=E_1+E_2$】。
+
+### 修改原因
+1. 补充 $E_{总}$ 的关系。
+"""
+
+NOOP_ONLY_REPORT = """# 第1题 校对报告
+
+轻微问题
+
+### 标记原文
+正常【1|增大|增大】。
+
+### 修改原因
+1. 空操作。
+"""
+
+EMPTY_ORIG_ONLY_REPORT = """# 第1题 校对报告
+
+一般问题
+
+### 标记原文
+正常【1||修正】。
+
+### 修改原因
+1. 空原文。
+"""
+
 NOOP_REPORT = """# 第1题 校对报告
 
 轻微问题
@@ -1278,15 +1367,30 @@ NO_ISSUE_SHORT = """无问题
 
 
 def _source_from_report(text):
-    """从报告反推「重建正文」作为单元源文，使报告能通过 verify-report 闸门。
+    """从报告重建单元源文（fixture 搭建用）。
 
-    仅用于 build_docx 测试的 fixture 搭建；闸门本身的行为由 test_verify_contract 锁定。
+    **刻意不复用被测解析器**：旧实现调 markers.split_marked_body +
+    report_parse.split_sections，于是「源文」按被测解析器的理解生成，
+    build_docx(...).ok is True 退化成「解析器与它自己一致」的同义反复，
+    解析器的 bug 永远不会让「合格必被接受」失败。这里按契约字面独立重建：
+    取「标记原文」小节 -> 去掉前置参考与「编号：/内容：」装饰 -> 标记还原为原文。
     """
-    from jiaodui.markers import split_marked_body
-    from jiaodui.report_parse import split_sections, strip_reference_preamble
+    import re as _re
 
-    _head, marked, _reasons = split_sections(text)
-    return split_marked_body(strip_reference_preamble(marked or ""))
+    text = text.strip().replace("\r\n", "\n").replace("\r", "\n")
+    header = _re.search(r"^###\s*标记原文[^\n]*\n", text, flags=_re.MULTILINE)
+    if header is None:
+        # 缺小节的畸形报告：有的测试就是拿它验证门禁必须拒绝，源文给空串即可
+        return ""
+    rest = text[header.end():]
+    reason_header = _re.search(r"^###\s*修改原因[^\n]*$", rest, flags=_re.MULTILINE)
+    body = rest[:reason_header.start()] if reason_header else rest
+    body = _re.sub(r"##\s*前置参考[^\n]*\n.*?\n---\n", "", body, count=1, flags=_re.DOTALL)
+    body = _re.sub(
+        r"^(?:编号：.*|内容：|###\s*(?:权威原文|字面差异).*|\u26a0\ufe0f.*)$\n?",
+        "", body, flags=_re.MULTILINE)
+    body = _re.sub(r"【\d+\|([^【】]*)\|[^【】]*】", lambda m: m.group(1), body)
+    return body.strip()
 
 
 def _write_unit_report(paper, unit, text):
@@ -1297,6 +1401,55 @@ def _write_unit_report(paper, unit, text):
     if not src.exists():
         src.write_text(_source_from_report(text), encoding="utf-8")
     return d
+
+
+def _plain(xml: str) -> str:
+    """剥掉标签后的可见文本。
+
+    pandoc 会在空格与数字边界把一段文本拆进多个 w:t（实测兜底文案被拆成
+    「（标记」+「 1 」+「修改意见：…」），因此断言必须对文本而不是原始 XML。
+    """
+    import re as _re
+
+    return _re.sub(r"<[^>]+>", "", xml)
+
+
+def test_source_from_report_is_independent_of_product_parsers():
+    """R-F04：fixture 源文必须独立重建，不得调用被测解析器。
+
+    旧实现用 markers.split_marked_body + report_parse.split_sections 反推源文，
+    于是「源文」按被测解析器的理解生成：解析器有 bug 也不会让「合格必被接受」失败。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(_source_from_report)))
+    func = tree.body[0]
+    body = func.body
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]  # 去掉 docstring，只审代码
+    code = "\n".join(ast.unparse(node) for node in body)
+    for forbidden in ("split_marked_body", "split_sections", "strip_reference_preamble", "jiaodui"):
+        assert forbidden not in code, f"fixture 源文不得依赖被测实现：{forbidden}"
+
+
+def test_source_from_report_matches_hand_checked_samples():
+    """独立重建结果与人工核对过的样本一致（样本按契约抄写，不来自代码）。"""
+    assert _source_from_report(REPORT_WITH_MARKS) == (
+        "1．下列关于物理量的说法正确的是（　　）\n\n"
+        "电荷量很小的电荷就是元电荷\n\n"
+        "电量是电荷的多少\n\n"
+        '![@@@testuuid00000000000000000000000001](./images/img1.png)'
+        '{width="1.0in" height="0.8in"}')
+    assert _source_from_report(REPORT_NO_MARKS) == (
+        "2．下列说法正确的是（　　）\n\nA．正确\n\nB．错误")
+    # 前置参考整段剥离（含其中不被门禁计入的旧标记）
+    assert _source_from_report(REPORT_WITH_PREAMBLE) == "正文甲。"
+    # 缺小节的畸形报告：源文为空串，门禁必然拒绝
+    assert _source_from_report("# 无小节\n\n随便写") == ""
 
 
 def _make_illustrated_paper(tmp_path, units):
@@ -1332,6 +1485,185 @@ class TestBuildDocxAudit:
         assert doc.count("<w:commentRangeStart") == doc.count("<w:commentRangeEnd")
         assert doc.count("<w:commentRangeEnd") == doc.count("<w:commentReference")
 
+    def test_inline_code_image_example_does_not_block_delivery(self, tmp_path):
+        from jiaodui.verify import verify_unit
+
+        source = "题干示例 `![图](missing.png)`。"
+        paper = _make_illustrated_paper(tmp_path, {"第1题":
+            "无问题\n### 标记原文\n" + source + "\n### 修改原因\n无\n"})
+        unit = paper / "第1题"
+        (unit / "第1题.md").write_text(source, encoding="utf-8")
+        (unit / "_校对报告.md").write_text(
+            "无问题\n### 标记原文\n" + source + "\n### 修改原因\n无\n", encoding="utf-8")
+
+        assert verify_unit(unit).ok
+        result = build_docx(str(paper), legacy_layout=True)
+
+        assert result.ok, result.warnings
+        assert result.image_missing_count == 0
+
+    def test_non_unit_backup_report_is_ignored(self, tmp_path):
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
+        backup = paper / "第1题_备份"
+        backup.mkdir()
+        (backup / "_校对报告.md").write_text(REPORT_WITH_MARKS, encoding="utf-8")
+
+        result = build_docx(str(paper), legacy_layout=True)
+
+        assert result.ok, result.warnings
+        assert result.excluded_units == []
+        assert [item["unit"] for item in result.units] == ["第1题"]
+
+    def test_render_path_reads_free_form_source(self, tmp_path):
+        """R-B07：渲染侧与闸门共用源文入口——源文是非契约名时也要渲染出正文。
+
+        旧实现在「无问题 → 插入单元原文」分支里自己拼 f"{qid}.md"，源文改名后
+        闸门通过、渲染却静默渲染出空壳（只剩标题 + 无问题）。
+        """
+        paper = tmp_path / "测试试卷"
+        unit = paper / "第1题"
+        (unit / "images").mkdir(parents=True)
+        text = "这是自由命名的源文正文。"
+        (unit / "草稿副本.md").write_text(text, encoding="utf-8")
+        (unit / "_校对报告.md").write_text(
+            f"无问题\n### 标记原文\n{text}\n### 修改原因\n无\n", encoding="utf-8")
+
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+
+        assert res.ok, res.warnings
+        with zipfile.ZipFile(res.out_path) as z:
+            doc = z.read("word/document.xml").decode("utf-8")
+        assert text in re.sub(r"<[^>]+>", "", doc)
+
+    def test_successful_rebuild_leaves_no_backup(self, tmp_path):
+        """R-B06 正方向：通过复核时不留下 .prev 备份或 .failed 产物。"""
+        from pathlib import Path
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
+        out = tmp_path / "out"
+        assert build_docx(str(paper), str(out), legacy_layout=True).ok
+
+        second = build_docx(str(paper), str(out), legacy_layout=True)
+
+        assert second.ok and Path(second.out_path).is_file()
+        assert not list(out.glob("*.prev"))
+        assert not list(out.glob("*.failed.docx"))
+
+    def test_failed_recheck_keeps_old_delivery_and_saves_failed(self, tmp_path, monkeypatch):
+        """R-B06：复核失败时旧交付原样不动，本次产物改名 *.failed.docx 留痕。"""
+        from pathlib import Path
+
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
+        out = tmp_path / "out"
+        first = build_docx(str(paper), str(out), legacy_layout=True)
+        assert first.ok
+        good = Path(first.out_path)
+        before = good.read_bytes()
+
+        # 让复核必定失败：注入锚点配对不一致
+        monkeypatch.setattr(docx_report, "_check_anchor_pairing",
+                            lambda doc_xml, ids: (False, ["注入的不一致"]))
+        second = build_docx(str(paper), str(out), legacy_layout=True)
+
+        assert second.ok is False
+        assert second.out_path is None
+        failed = Path(second.failed_out_path)
+        assert failed.name.endswith(".failed.docx") and failed.is_file()
+        assert good.read_bytes() == before, "旧交付必须原样不动"
+        assert not list(out.glob("*.prev")), "备份文件不得残留"
+
+    def test_comment_injection_failure_preserves_old_delivery(self, tmp_path, monkeypatch):
+        """生成阶段异常也不得把半成品放进正式路径或覆盖旧交付。"""
+        from pathlib import Path
+
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
+        out = tmp_path / "out"
+        first = build_docx(str(paper), str(out), legacy_layout=True)
+        assert first.ok
+        delivery = Path(first.out_path)
+        before = delivery.read_bytes()
+
+        monkeypatch.setattr(docx_report, "_inject_comments",
+                            mock.Mock(side_effect=OSError("注入失败")))
+        failed = build_docx(str(paper), str(out), legacy_layout=True)
+
+        assert failed.ok is False
+        assert failed.out_path is None
+        assert delivery.read_bytes() == before
+        assert failed.failed_out_path and Path(failed.failed_out_path).is_file()
+
+    def test_formula_fallback_injection_failure_is_not_published(self, tmp_path, monkeypatch):
+        """临时 Word 即使兜底记账可过，注入失败仍不得被当作生成成功。"""
+        from pathlib import Path
+
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": FORMULA_FALLBACK_EMPTY_NEW_REPORT})
+        out = tmp_path / "out"
+        monkeypatch.setattr(docx_report, "_inject_comments",
+                            mock.Mock(side_effect=OSError("注入失败")))
+
+        failed = build_docx(str(paper), str(out), legacy_layout=True)
+
+        assert failed.ok is False
+        assert failed.out_path is None
+        assert failed.anchor_count == 0
+        assert failed.formula_fallback_count == 1
+        assert failed.missing_count == 0
+        assert failed.failed_out_path and Path(failed.failed_out_path).is_file()
+        assert not (out / "测试试卷_校对批注版.docx").exists()
+
+    def test_old_delivery_remains_during_recheck(self, tmp_path, monkeypatch):
+        """复核期间正式路径仍指向旧交付，复核通过后才替换。"""
+        from pathlib import Path
+
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
+        out = tmp_path / "out"
+        first = build_docx(str(paper), str(out), legacy_layout=True)
+        assert first.ok
+        delivery = Path(first.out_path)
+        before = delivery.read_bytes()
+        report = paper / "第1题" / "_校对报告.md"
+        report.write_text(report.read_text(encoding="utf-8").replace(
+            "元电荷是最小的电荷量，表述不严谨。", "重新核对后的修改原因。"), encoding="utf-8")
+        original = docx_report._check_anchor_pairing
+        observed = []
+
+        def check_while_old_is_published(doc_xml, comment_ids):
+            observed.append(delivery.read_bytes())
+            return original(doc_xml, comment_ids)
+
+        monkeypatch.setattr(docx_report, "_check_anchor_pairing", check_while_old_is_published)
+        second = build_docx(str(paper), str(out), legacy_layout=True)
+
+        assert observed == [before]
+        assert second.ok and delivery.read_bytes() != before
+
+    def test_first_comment_injection_failure_never_creates_delivery(self, tmp_path, monkeypatch):
+        """首次生成失败时正式交付路径保持不存在，失败产物留作诊断。"""
+        from pathlib import Path
+
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
+        out = tmp_path / "out"
+        monkeypatch.setattr(docx_report, "_inject_comments",
+                            mock.Mock(side_effect=OSError("注入失败")))
+
+        failed = build_docx(str(paper), str(out), legacy_layout=True)
+
+        delivery = out / "测试试卷_校对批注版.docx"
+        assert failed.ok is False
+        assert failed.out_path is None
+        assert not delivery.exists()
+        assert failed.failed_out_path and Path(failed.failed_out_path).is_file()
+
     def test_formula_fallback_counts_as_covered(self, tmp_path):
         paper = _make_illustrated_paper(tmp_path, {"第1题": FORMULA_FALLBACK_REPORT})
         res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
@@ -1343,8 +1675,135 @@ class TestBuildDocxAudit:
         z = zipfile.ZipFile(res.out_path)
         doc = z.read("word/document.xml").decode("utf-8")
         assert '<w:highlight w:val="yellow" />' in doc
-        assert "（修改意见：" in doc
+        assert "（标记 1 修改意见：v→v_0）" in _plain(doc)
         assert "SKIPANCH" not in doc
+        # 逐单元不得出现负数缺失（旧实现允许负数并靠全卷求和抵消）
+        assert all(u["missing"] >= 0 for u in res.units)
+        assert res.over_count == 0
+
+    def test_formula_fallback_with_empty_correction_is_still_counted(self, tmp_path):
+        """「改为」为空时也必须留下可见兜底并按编号计入，否则该标记既无批注也无提示。"""
+        paper = _make_illustrated_paper(tmp_path, {"第1题": FORMULA_FALLBACK_EMPTY_NEW_REPORT})
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.marker_count == 1
+        assert res.anchor_count == 0
+        assert res.formula_fallback_count == 1
+        assert res.missing_count == 0
+        assert res.over_count == 0
+        assert res.ok is True
+        doc = zipfile.ZipFile(res.out_path).read("word/document.xml").decode("utf-8")
+        assert "（标记 1 修改意见：删去「v」）" in _plain(doc)
+        assert "SKIPANCH" not in doc
+
+    def test_literal_note_text_in_source_does_not_inflate_fallbacks(self, tmp_path):
+        """源文自带「（修改意见：」不得被当成公式兜底（旧实现数裸子串会虚增）。"""
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_LITERAL_NOTE})
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.marker_count == 1
+        assert res.anchor_count == 1
+        assert res.formula_fallback_count == 0
+        assert res.missing_count == 0
+        assert res.over_count == 0
+        assert res.ok is True
+
+    def test_fake_numbered_note_is_reported_as_ledger_anomaly(self, tmp_path):
+        """源文伪造带编号的兜底文案：记账异常必须被算出并让交付不通过，而不是靠负数抵消。"""
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_FAKE_NOTE})
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.marker_count == 1
+        assert res.anchor_count == 1
+        assert res.formula_fallback_count == 1
+        assert res.over_count == 1
+        assert res.missing_count == 0, "负数不得抵消成缺失"
+        assert all(u["missing"] >= 0 for u in res.units)
+        assert any("记账异常" in w for w in res.warnings)
+        assert res.ok is False
+
+    def test_content_heading_does_not_shift_unit_accounting(self, tmp_path):
+        """单元正文自带一级标题时，per-unit 锚点不得错位（旧实现按 Heading1 下标对齐）。"""
+        src = "# 一、选择题\n\n题干【1|甲|乙】。"
+        report = "一般问题\n\n### 标记原文\n" + src + "\n\n### 修改原因\n1. 改。\n"
+        paper = _make_illustrated_paper(
+            tmp_path, {"第1题": report, "第2题": REPORT_NO_MARKS})
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        by_unit = {u["unit"]: u for u in res.units}
+        assert by_unit["第1题"]["markers"] == 1
+        assert by_unit["第1题"]["anchors"] == 1, "正文里的 # 一级标题不应把锚点挤到别的单元"
+        assert by_unit["第1题"]["missing"] == 0
+        assert by_unit["第2题"]["missing"] == 0
+        assert res.marker_count == 1
+        assert res.missing_count == 0
+        assert res.over_count == 0
+        assert res.ok is True
+
+    def test_unembedded_local_image_fails_delivery(self, tmp_path):
+        """引用在子目录的单元图片不会被嵌入（只按 basename 找），必须计数并使交付不通过。
+
+        旧实现在 `except OSError: pass` 后照样写出引用，只留一条 pandoc fetch
+        警告，复核结果里完全看不出来，Word 里就是缺图。
+        """
+        paper = tmp_path / "卷子"
+        unit = paper / "第1题"
+        (unit / "images" / "sub").mkdir(parents=True)
+        (unit / "images" / "sub" / "x.png").write_bytes(_1PX_PNG)
+        (unit / "第1题.md").write_text("题干 ![](./images/sub/x.png)\n", encoding="utf-8")
+        (unit / "_校对报告.md").write_text(
+            "无问题\n### 标记原文\n题干 ![](./images/sub/x.png)\n### 修改原因\n无\n",
+            encoding="utf-8")
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.image_missing_count == 1
+        assert any("未嵌入" in w for w in res.warnings)
+        assert res.ok is False
+
+    def test_comment_formula_render_failure_is_counted_not_blocking(self, tmp_path):
+        """批注内公式渲染失败必须计数并告警；matplotlib 是可选依赖，不得因此阻塞交付。"""
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_FORMULA_COMMENT})
+        with mock.patch.object(docx_report, "latex_to_png", lambda *a, **k: False):
+            res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.comment_formula_fallback_count >= 1
+        assert any("降级" in w for w in res.warnings)
+        assert res.image_missing_count == 0
+        assert res.ok is True
+
+    def test_legacy_paper_reports_units_without_report(self, tmp_path):
+        """历史布局没有清单，也要按磁盘单元目录核对：缺一份报告不能静默 ok=true。"""
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})
+        (paper / "第2题").mkdir()
+
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+
+        assert [u["unit"] for u in res.excluded_units] == ["第2题"]
+        assert any("第2题" in w for w in res.warnings)
+        assert res.ok is False
+
+    def test_gate_rejected_marker_kinds_exclude_whole_unit(self, tmp_path):
+        """空原文 / 空操作由门禁判 error → 交付路径是「整单元排除」。
+
+        渲染侧的 keep_comment / render_new 分支只服务未过闸门的 legacy 直调入口
+        （generate_combined_docx）；交付路径走不到它们。这条契约必须被测试钉住，
+        否则文档写的「不生成批注」与实际「整个单元从 Word 消失」会长期分叉。
+        """
+        cases = (("noop", NOOP_ONLY_REPORT), ("empty_orig", EMPTY_ORIG_ONLY_REPORT))
+        for name, report in cases:
+            paper = _make_illustrated_paper(tmp_path / name, {"第1题": report})
+            res = build_docx(str(paper), str(tmp_path / name / "out"), legacy_layout=True)
+            assert [u["unit"] for u in res.excluded_units] == ["第1题"], name
+            assert res.marker_count == 0 and res.anchor_count == 0, name
+            assert res.ok is False, name
+
+    def test_preamble_is_stripped_before_marker_accounting(self, tmp_path):
+        """前置参考段若只在渲染侧保留，标记数与锚点数就会与门禁口径脱节。"""
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_PREAMBLE})
+        res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.marker_count == 1, "前置参考里的标记不计入（门禁同样剥掉）"
+        assert res.anchor_count == 1
+        assert res.missing_count == 0
+        assert res.over_count == 0
+        assert res.ok is True
+        doc = zipfile.ZipFile(res.out_path).read("word/document.xml").decode("utf-8")
+        assert "【9|" not in _plain(doc), "前置参考不得渲染进交付正文"
 
     def test_no_issue_heading_comment_listed_separately(self, tmp_path):
         src7 = "**教师版** 金属棒从$h$高处释放。"

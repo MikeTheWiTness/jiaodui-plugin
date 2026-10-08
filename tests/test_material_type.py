@@ -146,21 +146,44 @@ def test_manual_strategy_copies_referenced_images(tmp_path):
 
 def test_real_lecture_import_split_and_existing_gate(tmp_path):
     from jiaodui.verify import verify_unit
+    from jiaodui.docx_report import build_docx
+    from jiaodui.workflow import parse_unit
     import shutil
+    import zipfile
+    from xml.etree import ElementTree as ET
     repo = Path(__file__).resolve().parents[1]
     fixture = repo / "evaluation/m1"
     from jiaodui.convert import find_pandoc
     if not find_pandoc():
         pytest.skip("需要 Pandoc")
     result = convert_material(fixture / "source/第 6 讲校对测试.docx", mode="lecture")
-    assert result.copied == 8 and result.missing == 0
+    # image1/2/3 是同一破图占位图；保留 image4..8 五张有效图。
+    assert result.copied == 5 and result.missing == 0
     split = split_material(result.raw_md, subject="高中物理")
     assert len(split.unit_dirs) == 5 and split.missing == 0
-    assert split.copied == 7
-    for directory in map(Path, split.unit_dirs):
+    assert split.copied == 5
+    for directory, image_name in zip(map(Path, split.unit_dirs),
+                                     ["image4.png", "image5.png", "image6.png", "image7.png", "image8.png"],
+                                     strict=True):
+        source = (directory / f"{directory.name}.md").read_text(encoding="utf-8")
+        expected = fixture / "units/第 6 讲校对测试" / directory.name / f"{directory.name}.md"
+        assert source == expected.read_text(encoding="utf-8")
+        assert (directory / "images" / image_name).is_file()
         shutil.copy2(fixture / "units/第 6 讲校对测试" / directory.name / "_校对报告.md",
                      directory / "_校对报告.md")
         assert verify_unit(directory).ok
+        parse_unit(directory)
+
+    delivery = build_docx(str(Path(split.unit_dirs[0]).parent))
+    assert delivery.ok, delivery.warnings
+    assert (delivery.marker_count, delivery.anchor_count, delivery.formula_fallback_count) == (28, 28, 0)
+    with zipfile.ZipFile(delivery.out_path) as archive:
+        document = ET.fromstring(archive.read("word/document.xml"))
+        comments = ET.fromstring(archive.read("word/comments.xml"))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    assert len(comments.findall("w:comment", ns)) == 28
+    visible_text = "".join(document.itertext())
+    assert "{width=" not in visible_text and "height=" not in visible_text
 
 
 def test_cli_explicit_type_then_inherited_split(tmp_path):

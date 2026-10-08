@@ -1,7 +1,6 @@
 """确定性端到端流水线：split → verify → status → build-report → build-docx。"""
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,9 @@ from jiaodui.status import COMPLETED, DELIVERED_UNVERIFIED, scan_status
 from jiaodui.verify import verify_unit
 
 REPO = Path(__file__).resolve().parent.parent
-PANDOC = shutil.which("pandoc") or "/usr/local/bin/pandoc"
+from jiaodui.convert import find_pandoc
+
+PANDOC = find_pandoc() or ""  # 空串让下面的 Path(PANDOC).is_file() 为假 → 跳过
 
 RAW = """1．设a为$O$点，求a的值。
 
@@ -23,7 +24,9 @@ RAW = """1．设a为$O$点，求a的值。
 def _split(tmp_path: Path):
     from jiaodui.split import split_exam
 
-    config = load_subject_config(REPO / "config" / "subjects" / "高中物理.json")
+    from jiaodui.workflow import subject_config
+
+    config = subject_config("高中物理")  # R-H01：运行时来源是包内 data，不是仓库镜像
     return split_exam(RAW, str(tmp_path), "卷子", config)
 
 
@@ -89,7 +92,9 @@ def test_split_copies_images_from_convention_dir(tmp_path):
                    encoding="utf-8")
     from jiaodui.split import split_exam
 
-    config = load_subject_config(REPO / "config" / "subjects" / "高中物理.json")
+    from jiaodui.workflow import subject_config
+
+    config = subject_config("高中物理")  # R-H01：运行时来源是包内 data，不是仓库镜像
     res = split_exam(str(raw), str(tmp_path), "卷子", config)
     assert res.copied == 1
     unit = Path(res.unit_dirs[0])
@@ -193,7 +198,11 @@ def test_formula_boundary_phantom_excluded_from_delivery(tmp_path):
     assert [u["unit"] for u in docx.excluded_units] == ["第2题"]
     assert docx.marker_count == docx.anchor_count == 1
     assert docx.missing_count == 0
-    with zipfile.ZipFile(docx.out_path) as archive:
+    # R-B06：有单元被排除 ⇒ 不是可交付产物；本次产物改名留痕，交付路径不放未过复核的 Word
+    assert docx.out_path is None
+    artifact = docx.failed_out_path
+    assert artifact and Path(artifact).name.endswith(".failed.docx")
+    with zipfile.ZipFile(artifact) as archive:
         xml = archive.read("word/document.xml").decode("utf-8")
     assert "<m:t>z</m:t>" not in xml
     assert (invalid_unit / "第2题.md").read_text(encoding="utf-8") == source

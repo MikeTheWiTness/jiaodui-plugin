@@ -5,8 +5,9 @@
 
 - 不再读 `.env`，不再要求 `agent_prompt.json`（那是旧 LLM 链路）；新仓的人读
   学科规范改放 `references/subjects/<学科>.md`，由 agent 侧阅读，Python 侧不碰。
-- 机器读配置统一放 `config/subjects/<学科>.json`，只承载确定性拆分需要的参数：
-  工具集白名单、支持扩展名、拆分参数。
+- 机器读配置**运行时只读包内** `jiaodui/data/subjects/<学科>.json`（`JIAODUI_CONFIG_DIR`
+  可覆盖），只承载确定性拆分需要的参数：工具集白名单、支持扩展名、拆分参数。
+  仓库根的 `config/subjects/` 只是人工可读镜像，改配置请改包内文件再同步（R-H01）。
 - 兼容旧仓的嵌套写法（`lecture_split` / `exam_split`），便于从旧配置平滑迁移；
   顶层扁平键优先。
 """
@@ -38,21 +39,55 @@ DEFAULT_EXAM_QUESTION_PATTERN = r"^(\d+)．"
 # 导航/封面板块的默认标题匹配模式（移植自 shared/split_post_utils.py）
 DEFAULT_NAV_PATTERNS = [r"直击课堂", r"本讲导航"]
 
-# 新仓机器读配置目录（相对仓库根）
-DEFAULT_SUBJECTS_DIR = Path("config") / "subjects"
+# 运行时唯一来源：随包分发的配置目录（JIAODUI_CONFIG_DIR 可覆盖，用于开发/测试）
+PACKAGE_DATA_DIR = Path(__file__).resolve().parent / "data"
+
+# 仓库根下的人工可读镜像：便于浏览与评审，**不是运行时来源**
+MIRROR_SUBJECTS_DIR = Path("config") / "subjects"
+"""改配置请改 `jiaodui/data/subjects/`，再 `cp jiaodui/data/subjects/*.json config/subjects/`。
+
+一致性由 `tests/test_packaging.py::test_package_config_matches_repo_config` 与
+`tests/test_skill_docs.py::test_subject_config_copies_are_identical` 守着。
+"""
+
+# 工具集白名单里的合法工具族（PRD D13：工具面只留 calc / classics）。
+# 只列族名，不含 operation 名——配置写错的工具名必须在这里就被拒绝，
+# 而不是等到运行期静默失效。
+KNOWN_TOOL_FAMILIES = ("calc", "classics")
 
 _MISSING = object()
 
 
-def subject_config_path(subject: str, config_root: str | Path | None = None) -> Path:
-    """把学科名解析为 `config/subjects/<学科>.json` 路径。
+def resolve_config_dir() -> Path:
+    """运行时候选配置目录：显式覆盖优先，否则用**包内 data/**。
 
-    若 `config_root` 省略，则相对当前工作目录的 `config/subjects`；调用方也可
-    传入仓库根或任意配置目录。
+    刻意**不读会话目录里的配置**：工作区放一份同名 json 不能悄悄改掉工具白名单
+    或拆分口径。这也是 R-H01 定的单一来源。
     """
-    root = Path(config_root) if config_root is not None else DEFAULT_SUBJECTS_DIR
+    import os
+
+    override = os.environ.get("JIAODUI_CONFIG_DIR")
+    if override:
+        from .workdir import input_path
+
+        return input_path(override)
+    return PACKAGE_DATA_DIR
+
+
+def subjects_dir(config_root: str | Path | None = None) -> Path:
+    """学科配置目录：默认解析到运行时来源，传 `config_root` 时才用指定目录。"""
+    root = Path(config_root) if config_root is not None else resolve_config_dir()
+    return root / "subjects"
+
+
+def subject_config_path(subject: str, config_root: str | Path | None = None) -> Path:
+    """把学科名解析为 `<配置目录>/subjects/<学科>.json` 路径。
+
+    省略 `config_root` 时解析到**运行时来源**（包内 `jiaodui/data`，可被
+    `JIAODUI_CONFIG_DIR` 覆盖）；传目录时用它作配置根。
+    """
     name = subject if subject.endswith(".json") else f"{subject}.json"
-    return root / name
+    return subjects_dir(config_root) / name
 
 
 def _field_error(source: str | None, field: str | None, detail: str) -> ContractError:
@@ -117,6 +152,12 @@ def _normalize(raw: dict, source: str | None = None) -> dict:
         raise _field_error(source, None, "必须是 JSON 对象")
 
     tools = _str_list(raw, "tools", ("tools", "tool_whitelist"), None, source)
+    unknown_tools = [name for name in tools if name not in KNOWN_TOOL_FAMILIES]
+    if unknown_tools:
+        raise _field_error(
+            source, "tools",
+            f"含未知工具族 {unknown_tools}，只允许 {list(KNOWN_TOOL_FAMILIES)}",
+        )
     extensions = _str_list(raw, "extensions",
                            ("extensions", "supported_extensions", "file_extensions"),
                            None, source)
@@ -140,9 +181,18 @@ def _normalize(raw: dict, source: str | None = None) -> dict:
     if not nav_patterns:
         nav_patterns = list(DEFAULT_NAV_PATTERNS)
     subject = _str(raw, "subject", ("subject", "name"), None, source, "")
+    quantities = raw.get("quantities") or {}
+    if (not isinstance(quantities, dict) or any(
+            not isinstance(k, str) or not k.strip()
+            or not isinstance(v, str) or not v.strip()
+            for k, v in quantities.items())):
+        raise _field_error(
+            source, "quantities",
+            "必须是 {物理量名: 单位表达式} 的字符串映射，如 {'质量': 'kilogram'}")
 
     return {
         "tools": tools,
+        "quantities": quantities,
         "extensions": extensions,
         "split_mode": split_mode,
         "section_pattern": section_pattern,
@@ -187,7 +237,8 @@ def load_subject_config(path: str | Path) -> dict:
         p = p / "config.json"
     if not p.is_file():
         raise ContractError(
-            f"学科配置不存在（{p}）：请检查 config/subjects/<学科>.json",
+            f"学科配置不存在（{p}）：运行时来源是包内 jiaodui/data/subjects/<学科>.json，"
+            "可用 JIAODUI_CONFIG_DIR 覆盖指向别的配置目录",
             location=str(p),
             details={"field": "path"},
         )

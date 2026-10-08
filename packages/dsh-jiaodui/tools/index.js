@@ -17,13 +17,20 @@ export const inject = ['tools', 'subprocess']
 
 const DESCRIPTION = [
   '运行 jiaodui 确定性校对 CLI，参数原样透传，返回退出码与标准输出 / 错误。',
-  '常用：check-env；inspect-source <源文件>（默认仅结构，--preview-chars 2000 才返回有限正文）；',
-  'convert <源文件> --mode exam|lecture；split <raw_md> --subject 高中物理 [--mode exam|lecture]；',
-  '用户已指定讲义/试卷时直接采用并跳过类型识别；未指定时先查 Word 嵌套表格，仍不明确再有限预览或询问。',
-  'precheck-split <目录>；status <卷目录>；verify-report --unit <单元目录>；calc <op> --param k=v；',
-  'parse-report --unit <单元目录> 登记本轮交付；build-report <卷目录>；build-docx <卷目录>。',
+  '命令顺序、入口判断与硬门槛一律以随包 skill 的 SKILL.md 为准，本描述不重复流程策略。',
+  '命令速查：check-env / inspect-source / inspect-images / convert / split / precheck-split / slice /',
+  'status / verify-report / parse-report / repair-report [--apply] / calc / quantities / build-report / build-docx。',
   '校对判断不要放进这里：它是确定性工具，不会调用任何模型。',
 ].join(' ')
+
+/** realpathSync 对不存在的路径抛原始 ENOENT，会绕过相邻的中文校验分支；统一转成结构化错误。 */
+function realpathOrThrow(target, label) {
+  try {
+    return realpathSync(target)
+  } catch {
+    throw new Error('jiaodui: ' + label + '不存在或不可访问：' + target)
+  }
+}
 
 /** 仓库内 venv 的 CLI；包被复制进 profile（而非 file: 链接回仓库）时回退到 PATH 上的 jiaodui。 */
 function defaultCommand() {
@@ -75,7 +82,7 @@ export function apply(ctx, config = {}) {
         args: {
           type: 'array',
           items: { type: 'string' },
-          description: 'jiaodui 之后的完整参数，按 CLI 原样写成数组，例如 ["status", "<卷目录>"] 或 ["calc", "evaluate", "--param", "expr=1/2+1/3"]。',
+          description: 'jiaodui 之后的完整参数，按 CLI 原样写成数组，例如 ["status", "<卷目录>"] 或 ["calc", "evaluate", "--param", "expression=1/2+1/3"]。',
         },
         cwd: {
           type: 'string',
@@ -109,12 +116,12 @@ export function apply(ctx, config = {}) {
       }
       // 可选服务通过 get 查询；Cordis 会拒绝直接读取未声明 inject 的属性。
       const policy = ctx.get('sandboxPolicy')
-      const cwd = realpathSync(policy?.resolve({ session })?.workspaceRoot ?? headerCwd)
-      if (args?.cwd && (!isAbsolute(args.cwd) || realpathSync(args.cwd) !== cwd)) throw new Error('jiaodui: cwd 必须等于当前会话工作区绝对路径')
+      const cwd = realpathOrThrow(policy?.resolve({ session })?.workspaceRoot ?? headerCwd, '当前会话工作区')
+      if (args?.cwd && (!isAbsolute(args.cwd) || realpathOrThrow(args.cwd, 'cwd') !== cwd)) throw new Error('jiaodui: cwd 必须等于当前会话工作区绝对路径')
       for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '--work-root' || argv[i].startsWith('--work-root=')) {
           const root = argv[i] === '--work-root' ? argv[++i] : argv[i].slice('--work-root='.length)
-          if (!root || !isAbsolute(root) || realpathSync(root) !== cwd) throw new Error('jiaodui: --work-root 必须等于当前会话工作区')
+          if (!root || !isAbsolute(root) || realpathOrThrow(root, '--work-root') !== cwd) throw new Error('jiaodui: --work-root 必须等于当前会话工作区')
         }
       }
       let executable
@@ -128,9 +135,15 @@ export function apply(ctx, config = {}) {
         }
       }
       if (!executable) throw new Error('jiaodui: 未找到 CLI，请使用 Python 3.12 的 pipx install <jiaodui wheel>，并安装 pandoc；可用 python3 -m jiaodui 诊断安装')
+      if (exec?.signal?.aborted) {
+        const cancelled = new Error('jiaodui: 用户已取消')
+        cancelled.name = 'AbortError'
+        throw cancelled
+      }
+      const timeoutSignal = AbortSignal.timeout(timeoutMs)
       const signals = []
       if (exec?.signal) signals.push(exec.signal)
-      signals.push(AbortSignal.timeout(timeoutMs))
+      signals.push(timeoutSignal)
       const handle = ctx.subprocess.spawn({
         argv: [executable, ...argv],
         cwd,
@@ -146,6 +159,11 @@ export function apply(ctx, config = {}) {
 
       try {
         const outcome = await handle.done
+        if (exec?.signal?.aborted) {
+          const cancelled = new Error('jiaodui: 用户已取消')
+          cancelled.name = 'AbortError'
+          throw cancelled
+        }
         const stdout = readText(handle.collected.stdout)
         const stderr = readText(handle.collected.stderr)
         return {
@@ -155,6 +173,11 @@ export function apply(ctx, config = {}) {
           truncated: stdout.lossy || stderr.lossy,
         }
       } catch (error) {
+        if (exec?.signal?.aborted) {
+          const cancelled = new Error('jiaodui: 用户已取消')
+          cancelled.name = 'AbortError'
+          throw cancelled
+        }
         const stdout = readText(handle.collected.stdout)
         const stderr = readText(handle.collected.stderr)
         return {

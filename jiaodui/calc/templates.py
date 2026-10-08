@@ -1,8 +1,12 @@
 import json
 from string import Template
+from .dimensional import (CHECK_CONSISTENCY, CONVERT, GET_DIMENSIONS,
+                           QUANTITY_CHECK, READING_HELPERS, normalize_unit_definitions)
 
 _SAFE_IMPORTS = """\
+import io
 import json
+import tokenize
 from sympy import Symbol, symbols, expand, simplify, sqrt, pi, oo, I
 from sympy import sin, cos, tan, log, exp, factorial, Rational
 from sympy import Matrix, Piecewise, solveset, solve, Eq, limit, diff, integrate
@@ -25,8 +29,26 @@ _MATH_GLOBALS = {n: v for n, v in globals().items() if n in (
     'ceiling', 'factorial', 'E', 'Symbol', 'symbols', 'Matrix', 'Piecewise', 'Point', 'Line',
     'Circle', 'intersection')}
 
-def _safe_sympify(expr_str, local_dict=None):
-    return parse_expr(expr_str, local_dict=local_dict, global_dict=_MATH_GLOBALS, transformations=_transforms)
+def _normalize_symbol_tokens(expr_str, local_dict=None):
+    # 只把独立的 Python 关键字符号 lambda 映射到安全临时名。
+    local = dict(local_dict or {})
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(str(expr_str)).readline))
+    except (tokenize.TokenError, IndentationError):
+        return str(expr_str), local
+    normalized = []
+    for token in tokens:
+        if token.type == tokenize.NAME and token.string == 'lambda':
+            token = tokenize.TokenInfo(token.type, '__jiaodui_lambda__', token.start,
+                                       token.end, token.line)
+        normalized.append(token)
+    local['__jiaodui_lambda__'] = Symbol('lambda')
+    return tokenize.untokenize(normalized), local
+
+def _safe_sympify(expr_str, local_dict=None, global_dict=None):
+    normalized, local = _normalize_symbol_tokens(expr_str, local_dict)
+    return parse_expr(normalized, local_dict=local, global_dict=global_dict or _MATH_GLOBALS,
+                      transformations=_transforms)
 """
 
 _SERIALIZER = """
@@ -95,6 +117,10 @@ _DIM_BODY = (
     + "from sympy.physics.units.systems.si import dimsys_SI\n"
     + "from itertools import product\n"
     + "\n"
+    + "# 仅表示当前读数赋值不自洽，非法声明和不支持表达式仍用原异常。\n"
+    + "class _DimensionMismatch(ValueError):\n"
+    + "    pass\n"
+    + "\n"
     + "# 单位语境只用于解析单位字符串（单位名/缩写），绝不注入数学表达式\n"
     + "units_ctx = {n: v for n, v in globals().items() if isinstance(v, (Quantity, PhysicalConstant))}\n"
     + "\n"
@@ -159,12 +185,12 @@ _DIM_BODY = (
     + "        vs = [_vec(a, sym_vec) for a in e.args]\n"
     + "        for v in vs[1:]:\n"
     + "            if not _vec_equal(vs[0], v):\n"
-    + "                raise ValueError('加法项量纲不一致，无法合并')\n"
+    + "                raise _DimensionMismatch('加法项量纲不一致，无法合并')\n"
     + "        return dict(vs[0])\n"
     + "    if e.is_Function:\n"
     + "        for a in e.args:\n"
     + "            if not _vec_equal(_vec(a, sym_vec), {}):\n"
-    + "                raise ValueError('数学函数（如 sin/cos/exp）的参数必须无量纲')\n"
+    + "                raise _DimensionMismatch('数学函数（如 sin/cos/exp）的参数必须无量纲')\n"
     + "        return {}\n"
     + "    raise ValueError('不支持的量纲表达式节点: ' + type(e).__name__ + '(' + str(e) + ')')\n"
     + "\n"
@@ -173,8 +199,7 @@ _DIM_BODY = (
     + "        return {}\n"
     + "    return _vec(_parse_unit(str(u)), {})\n"
     + "\n"
-    + "def _parse_symbol_defs(unit_defs):\n"
-    + "    return {s: (list(v) if isinstance(v, list) else [v]) for s, v in unit_defs.items()}\n"
+    + READING_HELPERS
 )
 
 _TEMPLATES: dict[str, Template] = {
@@ -459,100 +484,25 @@ def build_code(operation: str, **params) -> str:
     operation = params.get("dim_operation", params.get("operation", "check_consistency"))
     target_units = params.get("target_units", "")
     unit_defs = params.get("unit_definitions", {}) or {}
-    unit_defs_json = json_repr(unit_defs)
+    unit_defs_json = json_repr(normalize_unit_definitions(unit_defs))
+    quantities_json = json_repr(params.get("quantities") or {})
 
     expression_str = params.get("expression", "")
     # get_dimensions / convert 只取等号右端（左端为目标量，量纲来源在右侧）
     dim_expr_str = expression_str.rsplit("=", 1)[-1].strip() if "=" in expression_str else expression_str
     
     if operation == "check_consistency":
-        operation_code = (
-            "_unit_defs = $unit_defs_json\n"
-            "_cands = _parse_symbol_defs(_unit_defs)\n"
-            "_lr = $expression_str.rsplit('=', 1)\n"
-            "_left = _safe_sympify(_lr[0].strip(), local_dict=_LOCALS)\n"
-            "_right = _safe_sympify(_lr[1].strip(), local_dict=_LOCALS) if len(_lr) > 1 else None\n"
-            "_syms = set(str(s) for s in _left.free_symbols)\n"
-            "if _right is not None:\n"
-            "    _syms |= set(str(s) for s in _right.free_symbols)\n"
-            "_missing = sorted(s for s in _syms if s not in _unit_defs)\n"
-            "if _missing:\n"
-            "    raise ValueError('以下符号未声明单位，请在 unit_definitions 中补齐: ' + repr(_missing) + '（纯数学量请声明为 dimensionless）')\n"
-            "_keys = sorted(_cands.keys())\n"
-            "_n = 1\n"
-            "for s in _keys:\n"
-            "    _n *= len(_cands[s])\n"
-            "if _n > 128:\n"
-            "    raise ValueError('歧义候选组合过多 (' + str(_n) + ' > 128)，请减少候选单位')\n"
-            "_matched = None\n"
-            "_lv = _rv = None\n"
-            "_tried = 0\n"
-            "for _combo in product(*[_cands[s] for s in _keys]):\n"
-            "    _tried += 1\n"
-            "    _sym_vec = {}\n"
-            "    for s, u in zip(_keys, _combo):\n"
-            "        _sym_vec[s] = _decl_vec(u)\n"
-            "    _lv = _vec_norm(_vec(_left, _sym_vec))\n"
-            "    _rv = _vec_norm(_vec(_right, _sym_vec)) if _right is not None else {}\n"
-            "    if _vec_equal(_lv, _rv):\n"
-            "        _matched = {s: u for s, u in zip(_keys, _combo)}\n"
-            "        break\n"
-            "if _matched is not None:\n"
-            "    result = {'consistent': True, 'left_dimensions': _vec_str(_lv), 'right_dimensions': _vec_str(_rv), 'matched_combination': _matched, 'tried_combinations': _tried}\n"
-            "else:\n"
-            "    result = {'consistent': False, 'left_dimensions': _vec_str(_lv) if _lv is not None else '', 'right_dimensions': _vec_str(_rv) if _rv is not None else '', 'matched_combination': None, 'tried_combinations': _tried}\n"
-        )
+        operation_code = CHECK_CONSISTENCY
     elif operation == "get_dimensions":
-        operation_code = (
-            "_unit_defs = $unit_defs_json\n"
-            "_cands = _parse_symbol_defs(_unit_defs)\n"
-            "_lr = $expression_str.rsplit('=', 1)\n"
-            "_left_syms = []\n"
-            "if len(_lr) > 1:\n"
-            "    _le = _safe_sympify(_lr[0].strip(), local_dict=_LOCALS)\n"
-            "    _left_syms = sorted(str(s) for s in _le.free_symbols)\n"
-            "_expr = _safe_sympify(_lr[-1].strip(), local_dict=_LOCALS)\n"
-            "_syms = sorted(set(str(s) for s in _expr.free_symbols) | set(_left_syms))\n"
-            "_missing = [s for s in _syms if s not in _unit_defs]\n"
-            "if _missing:\n"
-            "    raise ValueError('以下符号未声明单位，请在 unit_definitions 中补齐: ' + repr(_missing) + '（纯数学量请声明为 dimensionless）')\n"
-            "_out = {}\n"
-            "_c = {}\n"
-            "for s in _syms:\n"
-            "    if s in _left_syms and s not in _expr.free_symbols:\n"
-            "        continue\n"
-            "    _vecs = [_vec_str(_vec_norm(_decl_vec(u))) for u in _cands[s]]\n"
-            "    _out[s] = _vecs if len(_vecs) > 1 else _vecs[0]\n"
-            "    _c[s] = _decl_vec(_cands[s][0])\n"
-            "_overall = _vec_str(_vec_norm(_vec(_expr, _c)))\n"
-            "for s in _left_syms:\n"
-            "    _out[s] = _overall\n"
-            "result = {'dimensions': _out, 'expression': _overall}\n"
-        )
+        operation_code = GET_DIMENSIONS
     elif operation == "convert":
-        operation_code = (
-            "_unit_defs = $unit_defs_json\n"
-            "_expr = parse_expr($dim_expression_str, local_dict=units_ctx, transformations=_transforms)\n"
-            "_bad = sorted(str(x) for x in _expr.free_symbols)\n"
-            "if _bad:\n"
-            "    _missing = [s for s in _bad if s not in _unit_defs]\n"
-            "    if _missing:\n"
-            "        raise ValueError('以下符号未声明单位，请在 unit_definitions 中补齐: ' + repr(_missing))\n"
-            "    _src = {}\n"
-            "    for s in _bad:\n"
-            "        u = _unit_defs[s]\n"
-            "        u = u[0] if isinstance(u, list) else u\n"
-            "        _src[Symbol(s)] = _parse_unit(str(u))\n"
-            "    _expr = _expr.subs(_src)\n"
-            "_target = parse_expr($target_units, local_dict=units_ctx, transformations=_transforms)\n"
-            "_tb = sorted(str(x) for x in _target.free_symbols)\n"
-            "if _tb:\n"
-            "    raise ValueError('目标单位含未识别符号: ' + repr(_tb))\n"
-            "_converted = convert_to(_expr, _target)\n"
-            "result = float((_converted / _target).evalf())\n"
-        )
+        operation_code = CONVERT
     else:
         operation_code = "\nresult = 'unsupported operation'\n"
+
+    quantity_check_code = (QUANTITY_CHECK.replace("$unit_defs_json", unit_defs_json)
+                           .replace("$quantities_json", quantities_json))
+    operation_code = operation_code.replace("$quantity_check_code", quantity_check_code)
 
     # SolveEquationTool domain 过滤：real 域剔除复数根
     domain = str(params.get("domain", "real")).lower()
@@ -666,6 +616,7 @@ def build_code(operation: str, **params) -> str:
         formula_str=formula_str,
         solve_for=solve_for,
         unit_defs_json=unit_defs_json,
+        quantities_json=quantities_json,
         operation_code=operation_code,
         target_units=json_repr(target_units),
         vec_a=json_repr(vec_a),
@@ -685,6 +636,8 @@ def build_code(operation: str, **params) -> str:
     ).replace(
         # safe_substitute 不递归处理替换值内的占位符，这里二次替换 dimensional 分支的嵌入值
         "$unit_defs_json", unit_defs_json,
+    ).replace(
+        "$quantities_json", quantities_json,
     ).replace(
         "$expression_str", json_repr(params.get("expression", "")),
     ).replace(

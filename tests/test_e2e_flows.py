@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from jiaodui.convert import find_pandoc
+
 ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
@@ -55,8 +57,8 @@ LECTURE_GRID = ("## 模块一\n\n"
                 "| 题干二            |\n"
                 "+------------------+\n")
 
-PANDOC = shutil.which("pandoc") or (
-    "/usr/local/bin/pandoc" if Path("/usr/local/bin/pandoc").is_file() else None)
+# 用产品自己的发现逻辑（含 JIAODUI_PANDOC 覆盖），不写死 /usr/local/bin。
+PANDOC = find_pandoc()
 NEEDS_PANDOC = pytest.mark.skipif(PANDOC is None, reason="pandoc 不可用")
 
 
@@ -123,6 +125,9 @@ def test_flow_smart_slice_matches_cleaned_lines(tmp_path):
     preview = run("slice", "--raw", str(raw), "--mode", "lecture",
                   "--subject", "高中物理", "--preview")
     assert preview.returncode == 0, preview.stderr
+    # 预览内容按契约样本钉死：切片行号取自这里，清理逻辑一变就必须在这里红
+    assert preview.stdout.strip() == ("## 模块一\n\n**例1**（多选）\n题干一\n"
+                                      "**例2**（多选）\n题干二")
     lines = preview.stdout.splitlines()
     i1 = lines.index("**例1**（多选）")
     i2 = lines.index("**例2**（多选）")

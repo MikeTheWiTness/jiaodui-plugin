@@ -1,5 +1,7 @@
 # 实施清单
 
+2026-10 报告完整性程序化重建：新增 `jiaodui repair-report --unit <dir> [--apply]`（确定性核心 `jiaodui/report_repair.py`）。它只从单元源文重建 `### 标记原文`，把原报告的完整标记插回源文逐字唯一命中的位置；字段找不到、命中多处、乱序、重叠、编号/语法/原因/严重度无效或图片检查失败一律拒绝，`--apply` 前先验候选文本与图片、再原子替换并要求完整 verify-unit 复验，失败恢复原报告。修复不判断校对意见正确性、不改源文、不自动登记；`verify-report` 仍是唯一闸门。回归见 `tests/test_report_repair.py`、`tests/test_skill_docs.py`。
+
 2026-09-30 固定视觉探针：skill/bundle 随包提供 SVG、透明 PNG 和白底 PNG，默认直接读白底 PNG，无需从教材取图；同会话同模型/工具配置成功后复用。入口补充 DSH `read_image(file_path=...)` 和参数错误有限修正，区分调用失败与视觉能力未确认。具体步骤及仅供主 agent 的验收答案见 `skills/jiaodui/references/vision-probe.md`；实际材料透明图仍按需白底处理。
 
 2026-09-30 入口补齐：用户指定讲义/试卷优先；未知类型先只读检查 Word 嵌套表格，必要时有限预览或询问。核对旧仓后补齐类型驱动转换参数、原始 Markdown 导入保真和人工/整篇拆分入口。见 [ADR 0003](adr/0003-material-type-entry.md) 与 [迁移核对](ENTRY_MIGRATION.md)。校对与交付链共用；DSH 真机由用户验证。

@@ -464,11 +464,14 @@ class TestFileLevelWrapper:
     """文件级 fix_latex_escapes 包装，与文本级结果一致"""
 
     def test_file_wrapper_matches_text(self):
-        r"""$x_1$ 文件级与文本级结果一致，且下标已还原"""
+        r"""文件级包装的产物等于契约样本 $x_1$（定界符与下标都已还原）。
+
+        旧写法断言 out == fix_latex_escapes_text(src)，而 _run_fix_file 内部就是
+        调它，恒真、无法证伪。
+        """
         src = r'\$x\_1\$'
         out = _run_fix_file(src)
-        assert out == fix_latex_escapes_text(src)
-        assert '$x_1$' in out
+        assert out == '$x_1$'
 
     def test_file_wrapper_empty(self):
         """空文件往返为空"""

@@ -12,6 +12,7 @@ dist/
 .mypy_cache/
 
 # Runtime artifacts（产物不入仓）
+/校对/
 output/
 校对报告/
 校对Word/

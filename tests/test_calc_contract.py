@@ -8,6 +8,8 @@ OPERATIONS 元数据、run_operation 参数校验、code 字段保留（issue 05
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from jiaodui.calc import OPERATIONS, execute_code, run_operation
@@ -32,6 +34,37 @@ def test_formula_solve_current_I():
     assert r["success"] is True
     assert r["result"] is not None
     assert "B" in r["result"] and "v" in r["result"]
+
+
+def test_lambda_is_a_symbol_in_expression_and_substitution():
+    r = run_operation(
+        "evaluate", expression="lambda*x + lambda2", substitutions={"lambda": 3, "x": 4, "lambda2": 5}
+    )
+    assert r["success"] is True
+    assert r["result"] == 17
+
+
+def test_lambda_symbol_works_in_solve_and_formula_target():
+    solved = run_operation("solve", equations=["lambda + x - 5"], variables=["lambda"])
+    assert solved["success"] is True
+    assert solved["result"] == [{"lambda": "5 - x"}]
+
+    formula = run_operation("formula", formula="y = lambda*x", solve_for="lambda", substitutions={"y": 6, "x": 2})
+    assert formula["success"] is True
+    assert formula["result"] == 3
+
+
+def test_evaluate_rejects_top_level_equation_with_actionable_message():
+    r = run_operation("evaluate", expression="x = 1")
+    assert r["success"] is False
+    assert "evaluate 不接受顶层等式" in r["error"]
+    assert "solve" in r["error"] and "formula" in r["error"] and "equality" in r["error"]
+
+
+def test_evaluate_rejects_multiple_top_level_equations_without_syntax_error():
+    r = run_operation("evaluate", expression="x = y = 1")
+    assert r["success"] is False
+    assert "evaluate 不接受顶层等式" in r["error"]
 
 
 def test_formula_solve_F_with_values():
@@ -168,6 +201,13 @@ def test_type_error_is_readable():
     assert "expression" in r["error"]
 
 
+def test_unknown_parameter_is_rejected_instead_of_silently_dropped():
+    r = run_operation("evaluate", expression="1+1", expresion="ignored")
+    assert r["success"] is False
+    assert "未知参数" in r["error"]
+    assert "expresion" in r["error"]
+
+
 def test_list_element_type_error_is_readable():
     r = run_operation("vector_ops", vector_operation="dot", vec_a=[1, "x"], vec_b=[1, 0])
     assert r["success"] is False
@@ -194,3 +234,37 @@ def test_dangerous_code_blocked_by_safety():
     assert r["success"] is False
     assert "Dangerous operation blocked" in r["error"]
     assert r["code"]
+
+
+@pytest.mark.parametrize("snippet", [
+    "import os",
+    "from os import getcwd",
+    "__import__('os')",
+    "os.system('ls')",
+    "subprocess.run(['ls'])",
+    "open('/etc/passwd')",
+    "exec('x = 1')",
+    "eval('1+1')",
+    "[].__class__.__bases__[0].__subclasses__()",
+    "getattr(__builtins__, 'eval')('1')",
+    "__builtins__['eval']('1')",
+    "chr(101)+chr(118)+chr(97)+chr(108)",
+])
+def test_dangerous_snippets_blocked(snippet):
+    """safety 的 30+ 条模式此前只覆盖 1 条：这里按绕过手法逐类取样。"""
+    r = execute_code(snippet)
+    assert r["success"] is False, f"应被拦截：{snippet}"
+    assert "Dangerous operation blocked" in r["error"]
+
+
+@pytest.mark.parametrize("expression", [
+    "1 + 1",
+    "2*3 - 1",
+    "3**2 + 1",
+    "10 / 4",
+])
+def test_benign_expressions_allowed(expression):
+    """正常表达式不得被安全模式误伤（走公开算符入口，与真实调用同一条安全链）。"""
+    r = run_operation("evaluate", expression=expression)
+    assert r["success"] is True, r.get("error")
+    assert r["error"] is None

@@ -20,11 +20,12 @@
 
 ## 它做了什么
 
-- **agent preset「校对」（id `jiaodui`）**：自带完整 plugins 列表（与内置 `ptc` preset 同构，
+- **agent preset「校对」（id `jiaodui`）**：自带完整 plugins 列表（以内置 `standard` preset 为底座，工具呈现为 `native`，
   含 bash / fs / subagent / todo / web / present / goal / plan / compaction），外加：
   - `skill-filesystem` 的 `customSkillDirs` 指向本包 `skills/`，所以 jiaodui skill
     只在这个 preset 的会话里可见（DSH 的 skill 发现按 preset 分层）；
   - `./tools/index.js` 注册原生工具 `jiaodui`。
+  工具直接接收 JSON 参数，不要求生成 `run_code` 程序。普通 `subagent` / `subagent_fork` 与并行派发保留，PTC workflow 引擎保持禁用。
 - **原生工具 `jiaodui`**：参数 `args: string[]` 原样透传给 CLI（如
   `["verify-report", "--unit", "<单元目录>"]`），返回 `exitCode / stdout / stderr / truncated`。
   它走宿主平面的 `ctx.subprocess`（子进程服务会清洗环境变量），不是 bash。
@@ -61,7 +62,7 @@ Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要
 
 1. 安装后确认 bundle 在「插件」页列出、行 `preset-jiaodui` 激活。
 2. **新开**一个会话，在 agent preset 里选「校对」（或在「设置 → 通用」把它设为之后会话的默认）。
-3. 验证 skill：会话的 skill 目录里应出现 `jiaodui`；加载它返回 SKILL.md 正文。
+3. 验证模式与 skill：重新加载组合包后新开「校对」会话，工具目录应直接包含 `read`、`write`、`jiaodui`、`subagent` 等；不再仅暴露 `run_code`。会话的 skill 目录里应出现 `jiaodui`；加载它返回 SKILL.md 正文。已有会话不作为模式切换成功的证明；若新会话仍仅暴露 `run_code`，先重启 DSH 以重新加载 preset。
 4. 验证工具：让 agent 调用 `jiaodui` 工具，例如 `args: ["check-env"]`，应看到退出码与输出。
 5. 视觉门槛使用随包 `skills/jiaodui/assets/vision-probe.png`，不依赖待校对文件有没有图片，不需要现场绘图。按 skill 的 `references/vision-probe.md` 派发不带答案的观察任务；DSH `read_image` 使用 `file_path`，应先核对工具 schema。同一会话和模型/工具配置通过一次即可复用。
 
@@ -79,17 +80,17 @@ Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要
 若包被**复制**进 profile（而非 `file:` 链接回仓库），该路径不存在，就回退 `jiaodui`，
 此时须安装 wheel 并让 PATH 包含 pipx bin，或显式给 `command`。
 
-每次调用从会话读取工作区 W，并同时设置 cwd 与 `JIAODUI_WORK_ROOT`；会话缺少工作区时拒绝执行。产物默认位于 `W/校对/<材料名>/`，不会随源文件位置或宿主进程 cwd 改变。标准输出和错误在进程结束后收集，超时仍保留已收集诊断。
+每次调用从会话读取工作区 W，并同时设置 cwd 与 `JIAODUI_WORK_ROOT`；会话缺少工作区时拒绝执行。产物默认位于 `W/校对/<材料名>/`，不会随源文件位置或宿主进程 cwd 改变。标准输出和错误在进程结束后收集，超时仍保留已收集诊断；外部用户取消传播取消语义，不包装为普通技术失败，也不触发主 agent 重派。普通调用只传 `args`（及必要的 cwd 兼容字段），不要主动填写权限升级字段。
 
 ## 讲义与试卷
 
 skill 优先采用用户指定类型；未指定时调用 `inspect-source` 读取 Word 嵌套表格统计，正文大量重复嵌套按讲义处理，证据不足再有限预览或询问。判断完成后 `convert --mode lecture|exam` 执行对应导入，`split` 沿用类型；未知类型不会默认成试卷。两类材料共用单元校对、校验登记和报告生成。
 
-`inspect-source` 默认不返回正文，显式 `--preview-chars` 最大 2000。识别工具只返回结构事实；类型来源通过 `--mode-origin user|structure|preview|confirmed` 与简短 `--mode-reason` 留在材料记录。人工标记/整篇拆分使用 `split --strategy manual|none`，智能拆分仍由宿主判断边界后调用 `slice`。
+`inspect-source` 默认不返回正文，显式 `--preview-chars` 上限为 2,000 个字符（不是行数）；`slice --preview` 输出清理后的正文，边界清单使用行号。`inspect-images --unit <单元目录> --json` 按正文顺序返回图片引用、原图和实际读取图。识别工具只返回结构事实；类型来源通过 `--mode-origin user|structure|preview|confirmed` 与简短 `--mode-reason` 留在材料记录。人工标记/整篇拆分使用 `split --strategy manual|none`，智能拆分仍由宿主判断边界后调用 `slice`。
 
 ## 已知限制
 
-- preset 的 plugins 列表是内置 `ptc` preset 的副本：DSH 的 preset 不提供继承，
+- preset 的公共 plugins 列表以内置 `standard` preset 为参考：DSH 的 preset 不提供继承，
   公共能力行变更时需要同步。这是「薄适配」当前最脆的一处。
 - 只声明高中物理（skill 的学科矩阵里其余 6 科仍为 M5 待落地）。未落地学科不得回退套用物理流程。
 - 已通过打包契约、原生工具行为测试及仓库外 wheel 的确定性链路验证；

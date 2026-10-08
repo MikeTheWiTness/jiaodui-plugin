@@ -25,7 +25,7 @@
   ```
 - `.venv` 也可指向仓库内已验证的独立环境（本机为 `.venv-cli`）；插件仍从 `.venv/bin/jiaodui` 自动发现 CLI。旧 DSH 环境只作备份，不参与测试或运行。
 - 外部依赖 `pandoc`（docx↔md）；路径可用 `JIAODUI_PANDOC` 覆盖。
-- 测试：`.venv/bin/python -m pytest -q`；全量测试用 `.venv/bin/python -m pytest -o addopts='' -q -rs`（取消默认标记过滤）。CLI 子进程测试用 `sys.executable`，确保与测试进程使用同一环境；pip 安装优先清华源。
+- 测试：`.venv/bin/python -m pytest -q`；CI 口径用 `.venv/bin/python -m pytest -o addopts='' -q -rs`（清空 addopts，用于确认默认参数没有隐藏差异）。默认已不做标记过滤（tests/ 里没有 e2e/network/slow 用例），并开启 `--strict-markers`：写错标记名会直接报错。CLI 子进程测试用 `sys.executable`，确保与测试进程使用同一环境；pip 安装优先清华源。
 
 ## 分层与禁令
 
@@ -35,7 +35,7 @@
 
 ## 契约（硬约束，改流程不改契约）
 
-- 产物默认位于当前工作区 `校对/<材料名>/`，允许 `source/`、`raw/`（`<材料名>_raw.md`、`<材料名>_images/media/`）、`units/<材料名>/`、`_校对记录.json`、`校对报告/`、`校对Word/`。单元内只允许：`第N题.md`、`单元N.md`、`images/`、`_校对报告.md`、`_校对数据.json`、`_校对失败.md`及既有跳过标记。禁止自由命名的 attempt / 副本文件；报告只保存当前交付，轮次与执行摘要进入记录。写入必须校验真实路径位于工作区内，见 ADR 0002。
+- 产物默认位于当前工作区 `校对/<材料名>/`，允许 `source/`、`raw/`（`<材料名>_raw.md`、`<材料名>_images/media/`）、`units/<材料名>/`、`_校对记录.json`、`校对报告/`、`校对Word/`。单元内只允许：`第N题.md`、`单元N.md`、`images/`、`_校对报告.md`、`_校对数据.json`、`_校对失败.md`及既有跳过标记。禁止自由命名的 attempt / 副本文件；报告只保存当前交付，轮次与执行摘要进入记录。变更单元集用 `split` / `slice --replace-units`：陈旧单元整体移入单元根目录下的 `.superseded/<run_id>/`（只移动不删除；归档名不是契约单元名，扫描与集合核对都会忽略它），并在轮次 action 中记录前后路径。写入必须校验真实路径位于工作区内，见 ADR 0002。
 - `verify-report` 是模型产出与下游之间的唯一闸门；新报告不通过即不算完成。历史报告可 `--legacy` 读取转换，但不得冒充新契约已完成。
 - `build-report` / `parse-report` / `build-docx` 必须复核当前状态，拒绝消费未通过的报告。
 - 状态只由磁盘产物推导（`status`），不依赖会话内存；新布局完成还须匹配当前轮次的交付登记、报告与单元输入摘要，旧失败记录不使有效的本轮完成状态回退。

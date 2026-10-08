@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .errors import BusinessError
-from .paths import find_source_md, is_skip_unit, report_path, safe_name
+from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
 from .workdir import ensure_inside, input_path
 
@@ -114,6 +114,10 @@ def validate(root: Path, data: dict) -> dict:
                 or not isinstance(record.get("unit"), str) or not isinstance(record.get("recorded_at"), str)
                 or not isinstance(record.get("report_sha256"), str)
                 or not re.fullmatch(r"[0-9a-f]{64}", record["report_sha256"])
+                # data_sha256 可缺省（升级前的旧记录），给了就必须是合法摘要
+                or ("data_sha256" in record and (
+                    not isinstance(record["data_sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", record["data_sha256"])))
                 or not isinstance(record.get("inputs"), dict)):
             _invalid("单元交付登记无效", root)
         input_record(record["inputs"])
@@ -235,7 +239,9 @@ def check_units(root: Path, data: dict) -> Path:
         raise BusinessError("材料单元集合与磁盘不一致", code="unit-set-mismatch",
                             details={"material_dir": str(root), "run_id": data["current_run_id"],
                                      "extra_units": sorted(actual - expected),
-                                     "missing_units": sorted(expected - actual), "scannable": scannable})
+                                     "missing_units": sorted(expected - actual), "scannable": scannable,
+                                     "hint": "如需变更单元集，请用 split / slice --replace-units："
+                                             "陈旧单元会归档到单元根目录的 .superseded/<run_id>/，只移动不删除"})
     return paper
 
 
@@ -243,10 +249,23 @@ def registered(root: Path, data: dict, unit: Path) -> bool:
     report = report_path(unit)
     if not report.is_file() or unit_inputs(root, unit) != data["unit_inputs"].get(unit.name):
         return False
+    # R-D06：_校对数据.json 是交付的一部分。删掉或改动它都不能再算「本轮完成」，
+    # 否则下游（build-report / build-docx）会消费一份与报告不再对应的结构化结果。
+    data_file = data_path(unit)
+    if not data_file.is_file():
+        return False
     digest = sha256(report)
-    return any(r["unit"] == unit.name and r["run_id"] == data["current_run_id"]
-               and r["report_sha256"] == digest and r["inputs"] == data["unit_inputs"][unit.name]
-               for r in data["unit_records"])
+    data_digest = sha256(data_file)
+    for record in data["unit_records"]:
+        if (record["unit"] != unit.name or record["run_id"] != data["current_run_id"]
+                or record["report_sha256"] != digest
+                or record["inputs"] != data["unit_inputs"][unit.name]):
+            continue
+        # 升级前写入的旧记录没有该字段：退化为「存在性」；新记录要求逐字节一致
+        recorded = record.get("data_sha256")
+        if recorded is None or recorded == data_digest:
+            return True
+    return False
 
 
 def register(root: Path, unit: Path, text: str, expected_run_id: str) -> None:
@@ -260,10 +279,17 @@ def register(root: Path, unit: Path, text: str, expected_run_id: str) -> None:
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         if sha256(report_path(unit)) != digest:
             raise BusinessError("登记前报告已改变，请重新校验", code="report-changed")
+        data_file = data_path(unit)
+        if not data_file.is_file():
+            # parse-report 先落 _校对数据.json 再登记；缺了说明调用顺序被打乱
+            raise BusinessError("登记前缺少 _校对数据.json，请重新运行 parse-report",
+                                code="data-missing")
+        data_digest = sha256(data_file)
         data["unit_records"] = [r for r in data["unit_records"]
                                 if not (r["unit"] == unit.name and r["run_id"] == data["current_run_id"])]
         data["unit_records"].append({"unit": unit.name, "run_id": data["current_run_id"],
-                                     "report_sha256": digest, "recorded_at": now(),
+                                     "report_sha256": digest, "data_sha256": data_digest,
+                                     "recorded_at": now(),
                                      "inputs": data["unit_inputs"][unit.name]})
         from .verify import verify_unit
         complete = all(is_skip_unit(paper / n) or (registered(root, data, paper / n) and verify_unit(paper / n).ok)

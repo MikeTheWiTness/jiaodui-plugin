@@ -9,11 +9,13 @@ shared/split_post_utils.py 的导航标记逻辑，按新契约改写：
 - 重跑只补齐源文与图片，绝不覆盖/删除单元目录内已有的 `_校对报告.md`、
   `_校对数据.json`、`_校对失败.md`。
 - 图片源目录沿用 `{raw_md 所在目录}/{base_name}_images/media`。
+- 可选 `before_write` 在完整单元名列表确定后、任何写盘之前执行，供材料流程核对集合。
 """
 from __future__ import annotations
 
 import re
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from .config import (get_compiled_title_patterns, get_exam_question_pattern,
 from .decor_utils import strip_decor_images
 from .errors import ContractError
 from .image_utils import ImageCopyResult, copy_md_images
+from .inspect_images import prepare_white_backgrounds
 from .log import log
 from .paths import IMAGES_DIR, SKIP_MARKER_FILE, find_source_md
 from .units import scan_unit_dirs
@@ -121,6 +124,7 @@ class SplitResult:
     units: list[dict] = field(default_factory=list)
     copied: int = 0
     missing: int = 0
+    conflicts: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -268,6 +272,19 @@ def _write_unit(target_root: Path, unit_name: str, content: str,
         img_result = copy_md_images(content, [src_media], img_dir)
     else:
         img_result = ImageCopyResult(content=content)
+    if img_result.conflicts:
+        raise ContractError(
+            "图片同名内容冲突，拆分已停止，不生成可交付单元",
+            details={"unit": unit_name, "conflicts": img_result.conflicts},
+        )
+    # 白底图在材料输入摘要登记前生成，原透明图始终保留。
+    prepared = prepare_white_backgrounds(img_dir)
+    prepare_errors = [item for item in prepared if item.get("error") or not item.get("white_background")]
+    if prepare_errors:
+        raise ContractError(
+            "透明图片白底准备失败，拆分已停止",
+            details={"unit": unit_name, "images": prepare_errors},
+        )
     md_path = ensure_inside(unit_dir / f"{unit_name}.md")
     md_path.write_text(img_result.content, encoding="utf-8")
     return unit_dir, md_path, img_result
@@ -281,6 +298,9 @@ def _record(result: SplitResult, unit_dir: Path, md_path: Path,
     result.unit_dirs.append(str(unit_dir))
     result.copied += img_result.copied
     result.missing += img_result.missing
+    result.conflicts += img_result.conflicts
+    if img_result.conflicts:
+        result.warnings.append(f"{unit_dir.name}：图片同名内容冲突，已拒绝覆盖 {img_result.conflicts} 次")
     result.units.append({
         "name": unit_dir.name,
         "title": title,
@@ -417,7 +437,8 @@ def parse_end_answers(answer_lines: list[str]) -> dict[int, dict]:
     return result
 
 
-def split_exam(raw_md: str, output_root: str, base_name: str, config: dict) -> SplitResult:
+def split_exam(raw_md: str, output_root: str, base_name: str, config: dict,
+               *, before_write: Callable[[list[str]], None] | None = None) -> SplitResult:
     """试卷模式：按题目起始行切成 `第N题/第N题.md`，附 `images/`。
 
     答案两模式自动判定：inline（题干块内已有 【答案】/【详解】）原样保留；
@@ -439,6 +460,8 @@ def split_exam(raw_md: str, output_root: str, base_name: str, config: dict) -> S
     result = SplitResult()
     if not content.strip():
         result.warnings.append("源文为空，未识别到任何题目")
+        if before_write is not None:
+            before_write([])
         return result
 
     qs = get_exam_question_pattern(config)
@@ -449,8 +472,12 @@ def split_exam(raw_md: str, output_root: str, base_name: str, config: dict) -> S
     blocks = _collect_blocks(main_lines, qs)
     if not blocks:
         result.warnings.append("未识别到任何题目")
+        if before_write is not None:
+            before_write([])
         return result
 
+    if before_write is not None:
+        before_write([f"第{idx}题" for idx in range(1, len(blocks) + 1)])
     end_answers = parse_end_answers(ans_lines) if answer_mode == "end" else None
     target_root = ensure_tree(Path(output_root) / base_name)
     target_root.mkdir(parents=True, exist_ok=True)
@@ -614,7 +641,8 @@ def _drop_title_only_units(units):
 
 
 def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
-                  *, clean: bool = True) -> SplitResult:
+                  *, clean: bool = True,
+                  before_write: Callable[[list[str]], None] | None = None) -> SplitResult:
     """讲义模式：按 section/title 规则切成 `单元N/单元N.md`，附 `images/`。
 
     行为契约（移植自 default_split_lecture）：
@@ -640,6 +668,8 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
     result = SplitResult()
     if not content.strip():
         result.warnings.append("源文为空，未识别到任何单元")
+        if before_write is not None:
+            before_write([])
         return result
 
     split_mode = get_lecture_split_mode(config)
@@ -654,6 +684,8 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
 
     if not raw_sections:
         result.warnings.append("未识别到任何单元")
+        if before_write is not None:
+            before_write([])
         return result
 
     all_units = []
@@ -668,8 +700,12 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
 
     if not all_units:
         result.warnings.append("未识别到任何单元（内容可能全是纯标题壳）")
+        if before_write is not None:
+            before_write([])
         return result
 
+    if before_write is not None:
+        before_write([f"单元{idx}" for idx in range(1, len(all_units) + 1)])
     target_root = ensure_tree(Path(output_root) / base_name)
     target_root.mkdir(parents=True, exist_ok=True)
     if src_media is not None and not src_media.exists():
@@ -690,7 +726,8 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
 # ─── 边界切片（智能拆分用） ─────────────────────────────────
 
 def split_by_strategy(raw_md: str, output_root: str, base_name: str, config: dict,
-                      *, mode: str, strategy: str, clean: bool = True) -> SplitResult:
+                      *, mode: str, strategy: str, clean: bool = True,
+                      before_write: Callable[[list[str]], None] | None = None) -> SplitResult:
     """人工标记与整篇导入共用既有清理和写盘，不调用模型、不另造产物名。"""
     from .errors import UsageError
     if strategy not in {"manual", "none"} or mode not in {"lecture", "exam"}:
@@ -702,7 +739,7 @@ def split_by_strategy(raw_md: str, output_root: str, base_name: str, config: dic
     boundaries = [{"text": unit["content"]} for unit in units]
     # 正文已经清理，禁止在写盘阶段再次清理导致边界变化。
     return slice_by_boundaries(raw_md, boundaries, output_root, base_name, mode,
-                               clean=False, config=config)
+                               clean=False, config=config, before_write=before_write)
 
 _CONTRACT_UNIT_NAME_RE = re.compile(r"^(第\d+题|板块\d+|单元\d+)$")
 
@@ -737,7 +774,8 @@ def _slice_lines(lines: list[str], start_line, end_line) -> str:
 def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
                         base_name: str, mode: str = "exam",
                         *, clean: bool = True,
-                        config: dict | None = None) -> SplitResult:
+                        config: dict | None = None,
+                        before_write: Callable[[list[str]], None] | None = None) -> SplitResult:
     """按边界清单确定性切片（智能拆分用）。
 
     boundaries 兼容两种写法：
@@ -762,11 +800,11 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
     result = SplitResult()
     if not boundaries:
         result.warnings.append("边界清单为空")
+        if before_write is not None:
+            before_write([])
         return result
 
-    target_root = ensure_tree(Path(output_root) / base_name)
-    target_root.mkdir(parents=True, exist_ok=True)
-
+    planned = []
     for idx, boundary in enumerate(boundaries, start=1):
         if not isinstance(boundary, dict):
             result.warnings.append(f"第 {idx} 条边界不是对象，已跳过")
@@ -778,9 +816,17 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
             unit_content = _slice_lines(lines, boundary.get("start_line"),
                                         boundary.get("end_line"))
         unit_name = _boundary_unit_name(name, idx, mode)
+        planned.append((unit_name, unit_content, name or unit_name))
+
+    # 一次解析后先核对计划，避免先覆盖旧源文、再因集合不一致而拒绝。
+    if before_write is not None:
+        before_write([unit_name for unit_name, _, _ in planned])
+    target_root = ensure_tree(Path(output_root) / base_name)
+    target_root.mkdir(parents=True, exist_ok=True)
+    for unit_name, unit_content, title in planned:
         unit_dir, md_path, img_result = _write_unit(
             target_root, unit_name, unit_content, src_media)
-        _record(result, unit_dir, md_path, name or unit_name, img_result)
+        _record(result, unit_dir, md_path, title, img_result)
 
     if result.missing:
         result.warnings.append(f"有 {result.missing} 张图片未找到")
@@ -880,7 +926,11 @@ def mark_navigation_units(output_root: str, base_name: str,
         except OSError:
             continue
         if nav_re.search(first_line):
-            (sub_dir / SKIP_MARKER_FILE).touch()
+            # 写盘也要过工作区边界：这条路径当前 CLI 不可达，但接回编排时
+            # 它就是唯一没校验的写入口。
+            from .workdir import ensure_inside
+
+            ensure_inside(sub_dir / SKIP_MARKER_FILE).touch()
             marked += 1
     return marked
 

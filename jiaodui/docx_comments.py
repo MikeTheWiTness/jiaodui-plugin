@@ -331,6 +331,11 @@ def replace_comment_placeholders(md_text, comments_dict, anchors):
     逐个替换为 <批注 id=N><原>anchor</原><改>content</改></批注>。
     anchor 取自 extract_comment_anchors（docx 提取）；id 不在 anchors 或
     comments_dict 的占位符（空锚点/无 Range 点批注）移除、不插标记，与现状一致。
+
+    **已知局限（R-B09，计划 §4 列为待定）**：本函数无法区分「注入的占位符」与
+    「正文里本来就写着的 CMTEND{N}Z 字面量」——后者会被一并替换。当前**没有生产
+    调用方**（交付路径走 `_inject_comments` 的 openxml 注入），等编排接回这条链时
+    再一并修（例如注入时用带随机前缀的令牌）。
     """
     if not md_text:
         return md_text

@@ -1,32 +1,33 @@
-"""单元目录的识别与排序（单一源）。
+"""单元目录的识别与排序（**单一源**，供识别层与清单层共用）。
 
-移植自旧仓 core/unit_detect.py，并按新契约扩展：
-- 试卷模式：第N题（含 第1题_备份 等变体）
-- 讲义模式：单元N、板块N
+按 2026-10 决策（REMEDIATION §3 决策 2 / R-D08）：**只接受精确名**
+`第N题` / `板块N` / `单元N`。变体名（`第1题_备份`、`第1题(文言文)`）一律不认——
+旧实现识别层前缀匹配、清单层 fullmatch，`--adopt-units` 因此会接纳不了自己认出来的目录。
+
+历史目录若含变体名，需要人工作为「非单元」处理（重命名或移出单元根目录）。
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-# 前缀锚定（非 fullmatch）：保留「第1题_备份」「第1题(文言文)」等合法变体，
-# 拒绝「试题」「错题本」等任意含「题」的误报
-_UNIT_DIR_RE = re.compile(r"^(第(\d+)题|板块(\d+)|单元(\d+))")
+# 精确匹配：fullmatch 语义，识别层与清单层（material.check_units）共用这一份
+UNIT_DIR_RE = re.compile(r"^(?:第(?P<exam>\d+)题|板块(?P<board>\d+)|单元(?P<unit>\d+))$")
 
 
 def is_unit_dir(name: str) -> bool:
     """判断目录名是否为校对单元目录（接受纯目录名，不判断是否为目录）。"""
-    return bool(_UNIT_DIR_RE.match(name))
+    return UNIT_DIR_RE.fullmatch(name) is not None
 
 
 def unit_number(name: str) -> int | None:
-    """从单元目录名解析编号；无法解析返回 None。"""
-    m = _UNIT_DIR_RE.match(name)
+    """从单元目录名解析编号；无法解析（含变体名）返回 None。"""
+    m = UNIT_DIR_RE.fullmatch(name)
     if not m:
         return None
-    for g in m.groups()[1:]:
-        if g is not None:
-            return int(g)
+    for value in m.groupdict().values():
+        if value is not None:
+            return int(value)
     return None
 
 
