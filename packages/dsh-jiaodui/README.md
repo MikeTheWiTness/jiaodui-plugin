@@ -20,7 +20,7 @@
 
 ## 它做了什么
 
-- **agent preset「校对」（id `jiaodui`）**：自带完整 plugins 列表（以内置 `standard` preset 为底座，工具呈现为 `native`），保留 bash / filesystem / skill / spawn 子代理 / todo / present / compaction 与 jiaodui CLI；显式关闭 web、goal、plan、fork。
+- **agent preset「校对」（id `jiaodui`）**：显式维护完整 plugins 列表；DSH preset 不提供 standard 继承。工具呈现为 `native`，保留 bash / filesystem / skill / spawn 子代理 / todo / present / compaction 与旧 jiaodui CLI；显式关闭 web、goal、plan、fork。
   - `tool-fs` 保留 `read`、`read_image`（宿主 attachments 可用时）与旧报告所需 `write` / `edit`；不挂载新的报告提交工具。
   - `skill-filesystem` 只从本包 `skills/` custom 目录加载，不读取默认 skill roots。
   - spawn 子代理限制 `maxDepth: 1`，工具目录 allowlist 为 `skill/read/read_image/write/edit/jiaodui`。宿主 `toolFilter` 不能据此视作严格权限隔离；待第 7 章依赖/子权限实验后再收紧。

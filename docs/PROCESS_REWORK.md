@@ -6,7 +6,7 @@ M2 定位建议与 M3 结构化提交/依赖审查是单独实验，留在 `feat
 
 ## Preset 边界
 
-preset 保留宿主真实 `read_image`、旧报告 `write/edit` 和 `jiaodui` CLI；关闭 web、goal、plan 与 fork，限制一层 spawn，skill 只从组合包 custom 目录发现。随包子代理工具过滤名单为 `skill/read/read_image/write/edit/jiaodui`，这是当前宿主工具目录配置，不声称实现了严格子权限。依据 `.worktrees/host-inspection/tool-fs.js`：`read_image` 参数为 `file_path`，且由 filesystem 工具在 attachments 可用时注册；`skill-filesystem.js` 的 `includeDefaultRoots` 默认 true，故本 preset 显式关闭默认根；`tool-subagent.js` 支持 `toolFilter` 与 `maxDepth`，但只将 filter 转交子代理请求，不能据此证明底层能力/权限边界已收紧。需待第 7 章实验后再评估严格子权限。
+preset 保留宿主真实 `read_image`、旧报告 `write/edit` 和 `jiaodui` CLI；关闭 web、goal、plan 与 fork，限制一层 spawn，skill 只从组合包 custom 目录发现。随包子代理工具过滤名单为 `skill/read/read_image/write/edit/jiaodui`，这是当前宿主工具目录配置，不声称实现了严格子权限。依据 `.worktrees/host-inspection/tool-fs.js`：`read_image` 参数为 `file_path`，且由 filesystem 工具在 attachments 可用时注册；`skill-filesystem.js` 的 `includeDefaultRoots` 默认 true，故本 preset 显式关闭默认根；`tool-subagent.js` 支持 `toolFilter` 与 `maxDepth`，但只将 filter 转交子代理请求，不能据此证明底层能力/权限边界已收紧。需待第7章实验和新会话验收后再评估严格子权限。
 
 ## 尚未完成
 

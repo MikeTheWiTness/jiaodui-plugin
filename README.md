@@ -3,6 +3,8 @@
 K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，确定性交给 Python**。
 
 - 需求与契约：[docs/PRD.html](docs/PRD.html)
+- 校对流程改造记录：[docs/PROCESS_REWORK.md](docs/PROCESS_REWORK.md)
+- 第7章结构化报告主链（实验分支，不部署）：`feature/structured-report-pipeline`；独立worktree位于本地 `.worktrees/structured-report/`
 - 执行顺序与完成判据：[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 - M5 架构决策：[ADR-0001：多学科入口与逐科落地](docs/adr/0001-m5-subject-entry-and-rollout.md)
 - 交付闸门：[ADR-0004：闸门单一实现（含图片资源）](docs/adr/0004-gate-single-implementation.md)
@@ -15,13 +17,11 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)
 - DSH 插件包（M7 换壳的首次尝试）：[packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md)
 
-## 当前状态：M1（高中物理端到端竖切已跑通）
+## 当前状态：main兼容旧报告链；第7章主链仍为隔离实验
 
-M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已在**当前代码**上完成高中物理一条真实竖切：
-`convert → split（含完整讲义导入清理）→ 5 个单元子 agent 校对 → verify-report → build-report → build-docx`。
-真机结果：5/5 单元通过校验（28 条标记）；Word 复核 **标记 28 = 锚点 28 + 公式兜底 0，缺失 0**，
-28 条批注均带修改原因；不合格报告被排除出汇总与交付（反向验证退出码 4 / 6）。
-样本、单元源文与报告冻结在 [evaluation/m1](evaluation/m1/README.md)，可还原后独立复现。详见 [docs/M1.md](docs/M1.md) §9。
+`main`保留既有Markdown报告主链，只增加显式执行策略、按单元恢复预算/阶段事件和整卷`complete`判据。第7章中的task/unit位置索引、结构化建议/全文报告、自查与父复核均在本地`feature/structured-report-pipeline` worktree实验，未进main、未安装。
+
+本机desktop profile的`dsh-jiaodui`是指向仓库根`packages/dsh-jiaodui`的软链，因此仓库根保持main，避免宿主重载默认拾取实验主链。DSH新会话catalog、隔离和安装验收尚未完成。
 
 已实现的核心与入口命令：
 
