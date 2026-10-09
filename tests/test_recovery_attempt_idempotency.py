@@ -50,8 +50,11 @@ def test_same_attempt_is_idempotent_and_does_not_charge_again(tmp_path, monkeypa
 
     first = material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
                                              attempt_id="a1", error_code="usage")
+    manifest = root / material.MANIFEST
+    before = manifest.read_bytes()
     replay = material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
                                               attempt_id="a1", error_code="usage")
+    assert manifest.read_bytes() == before, "重放不得写盘"
 
     assert first["allowed"] is True and first.get("idempotent") is not True
     assert replay["idempotent"] is True
@@ -59,12 +62,11 @@ def test_same_attempt_is_idempotent_and_does_not_charge_again(tmp_path, monkeypa
     assert replay["used"] == first["used"] == 1
     assert replay["remaining"] == first["remaining"] == 1
     assert _ledger(root, unit_id)["call_correction"]["used"] == 1, "重放不得再扣"
+    # 重放是**真·无操作**：不写盘、不追加事件（采纳 main 的语义——否则被反复重试的
+    # 调用会让清单无界增长；审计需求由 attempt 索引与返回值的 idempotent=true 满足）
     events = material.load(root)["runs"][-1]["recovery_events"]
-    # 重放事件忠实记录原结论（allowed 沿用、replay=true），所以「真正的授权记账」
-    # 必须排除 replay；额度是否被重复扣由上面的账本断言单独把关。
-    assert [event.get("replay") for event in events] == [None, True]
-    assert sum(1 for event in events if event["allowed"] and not event.get("replay")) == 1
-    assert all(event["attempt_id"] == "a1" for event in events)
+    assert len(events) == 1 and events[0]["attempt_id"] == "a1"
+    assert events[0].get("replay") is None
 
 
 def test_same_attempt_with_different_fingerprint_is_rejected(tmp_path, monkeypatch):

@@ -501,14 +501,9 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
                  "error_code": error_code, "attempt_id": attempt_id,
                  "fingerprint": fingerprint}
         if decision["replay"]:
-            recorded = decision["result"] or {}
-            event.update({"charged": recorded.get("charged", [category]),
-                          "blocked_category": recorded.get("blocked_category"),
-                          "replay": True, "allowed": recorded.get("allowed"),
-                          "used": recorded.get("used"), "budget": recorded.get("budget")})
-            run.setdefault("recovery_events", []).append(event)
-            write(root, data)
-            return {**recorded, "idempotent": True}
+            # 真·无操作：不追加事件、不写盘（采纳 main 的语义）。否则被反复重试的同
+            # 一 attempt 会让清单无界增长；审计需求由 attempt 索引与 idempotent=true 满足。
+            return {**(decision["result"] or {}), "idempotent": True}
         unit_state = run.setdefault("recovery", {}).setdefault(unit_id, {})
         result = charge(unit_state, category, fingerprint)
         attempts[attempt_id] = {"fingerprint": fingerprint, "category": category,

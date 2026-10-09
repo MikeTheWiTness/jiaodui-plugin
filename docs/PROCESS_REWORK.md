@@ -409,6 +409,17 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 
 **口径**：分支双口径 **1130 passed / 0 failed / 5 skipped / 4 subtests**（本批 +2 例）。
 
+## Phase 2 合并中采纳 main 的第五处更优语义：幂等重放不写盘（在分支上实现）
+
+映射 main 测试时暴露的分歧：分支的 B3 实现把重放记一条 `replay=true` 事件（**会写盘**），而 main 的幂等是**真·无操作**（字节级不变）。
+
+判断：**采纳 main**。理由是写盘的重放有两个坏处——被反复重试的同一 attempt 会让清单**无界增长**；而重放并不改变任何状态，审计需求已由 attempt 索引与返回值 `idempotent=true` 满足。
+
+- 实现：`record_recovery_attempt` 的重放分支直接返回 `{**原结果, "idempotent": True}`，**不追加事件、不写盘**。
+- 红→绿：`test_same_attempt_is_idempotent_and_does_not_charge_again` 增加「重放后清单字节不变」与「事件仍只有原一条、无 replay 标记」两条断言（改前红）。
+
+**口径**：分支双口径 **1130 passed / 0 failed / 5 skipped / 4 subtests**。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
