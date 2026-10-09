@@ -2146,3 +2146,58 @@ def test_build_report_marks_submitted_but_unreviewed_unit(tmp_path, monkeypatch)
     assert [item["unit"] for item in result.unreviewed] == [unit_name]
     assert result.failed == []
     assert os.path.isfile(result.out_path)
+
+
+@PANDOC_REQUIRED
+def test_build_docx_keeps_table_and_anchor_when_marker_spans_a_row(tmp_path, monkeypatch):
+    """标记的字段是一整条表格行时：Word 必须保住表格与锚点（回归 P6转义边界合成 的失败）。
+
+    实测根因：锚点 raw 被注入到表格行首后，该行不再是 pipe table 行，表格丢了表头，
+    pandoc 塌表并丢掉 raw，锚点数少一个 → docx_incomplete。修法是注入后把含锚点的
+    pipe table 重排成 grid table（pandoc 在 grid table 单元格里保留 openxml raw）。
+    """
+    source = ("机械波练习\n\n已知数据表：\n\n| t/s | 0.1 | 0.2 | 0.3 |\n"
+              "|---|---|---|\n| y/cm | 4 | 0 | -4 |\n\n第2问：说明时刻差与周期的关系。\n")
+    paper, unit_name = _v2_material(tmp_path, monkeypatch, source,
+                                    phrase="| t/s | 0.1 | 0.2 | 0.3 |",
+                                    replacement="| t/s | 0.125 | 0.25 | 0.375 |")
+
+    result = build_docx(str(paper))
+
+    assert result.ok, (result.excluded_units, result.warnings)
+    assert result.marker_count == result.anchor_count == 1, result.to_dict()
+    assert result.missing_count == 0
+    with zipfile.ZipFile(result.out_path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    assert document.count("<w:tbl>") == 1, "表格必须还在"
+    visible, commented = _word_text(result.out_path)
+    for token in ("t/s", "0.1", "0.2", "0.3", "y/cm", "4", "0", "-4"):
+        assert token in visible, f"表格单元格丢失：{token}"
+    assert "0.125" in commented, "「改为」内容应进批注"
+
+
+def test_gridify_marked_tables_only_rewrites_tables_with_anchors():
+    """定向单测：只重排含锚点的 pipe table，且不碰已有 grid table。
+
+    这条守的是「零爆半径」与「不二次重排」两条：没有锚点的表格必须逐字保留
+    （否则既有 Word 版式会变），已经是 grid table 的块（multiline table 的产物）
+    必须原样放行（它的边框行不匹配 pipe 行，重排会把表格拆坏）。
+    """
+    from jiaodui.docx_report import _gridify_marked_tables
+
+    plain = "| a | b |\n|---|---|\n| c | d |"
+    assert _gridify_marked_tables(plain) == plain, "无锚点的表格必须逐字保留"
+
+    start = '`<w:commentRangeStart w:id="1"/>`{=openxml}'
+    end = ('`<w:commentRangeEnd w:id="1"/>'
+           '<w:r><w:commentReference w:id="1"/></w:r>`{=openxml}')
+    marked = (f"已知数据表：\n\n   {start}| t/s | 0.1 | 0.2 |{end}\n"
+              "   |---|---|---|\n   | y/cm | 4 | 0 |\n\n后文。")
+    out = _gridify_marked_tables(marked)
+    assert "|---|---|---|" not in out, "分隔行应被 grid table 边框取代"
+    assert out.count("+---") >= 3 and "<w:commentRangeStart" in out
+    assert all(token in out for token in ("t/s", "0.1", "0.2", "y/cm", "4", "0"))
+    assert "已知数据表：" in out and "后文。" in out, "表格外的文字不得被吞"
+
+    grid = f"+---+---+\n| {start}a | b |\n+---+---+\n| c | d |\n+---+---+"
+    assert _gridify_marked_tables(grid) == grid, "已是 grid table 的块不得二次重排"

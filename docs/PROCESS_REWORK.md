@@ -237,7 +237,20 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 口径：双口径 **1112 passed / 0 failed / 5 skipped / 4 subtests**（本批改断言与文档，未新增用例数）。
 
-**仍未做（下一批）**：core 侧把注入前的 pipe table 转 grid table（`_convert_multiline_tables` 的同类兜底，注释早已写明「pandoc 的 multiline table 单元格会丢弃 openxml raw；grid table 正常」，只是未覆盖 pipe table）。回归样本就是这次的 `P6转义边界合成`：目标 `marker_count=2, anchor_count=2`。
+## P6 修复：含锚点的 pipe table → grid table（已完成）
+
+**修法**：新增 `_gridify_marked_tables(text)`，在**锚点注入之后**（`_textify_skipped_formulas` 之后）把**含锚点 raw 的 pipe table 整块重排为 grid table**。
+
+- 为什么放在注入之后：注入前单元格文字还没定型（列宽算不准），而 grid table 的 `+---+` 边框必须与 `|` 精确对齐。
+- 为什么只重排含锚点的块：没有锚点的表格逐字保留 ⇒ 零爆半径，既有 Word 版式不变。
+- 锚点落在哪：行首锚点并入第一个单元格、行尾锚点并入最后一个单元格、单元格内锚点留在本格 —— 这样「标记字段是一整行长」时，锚点跨单元格成立（pandoc 在 grid table 里保留 openxml raw）。
+- 加了一条守卫：块的相邻行是 grid 边框时**跳过**。因为 `_convert_multiline_tables` 在注入前已把 multiline table 转成 grid table，若 marker 落在那类表里，二次重排会把边框留在外面、把表格拆坏。
+
+**先红后绿**：`tests/test_docx_report.py::test_build_docx_keeps_table_and_anchor_when_marker_spans_a_row` —— 修复前 `marker_count=1, anchor_count=0, missing_count=1`（复现真机的 `docx_incomplete`），修复后通过。另加定向单测 `test_gridify_marked_tables_only_rewrites_tables_with_anchors`，锁「无锚点表格逐字保留」与「已是 grid table 不二次重排」两条。
+
+**真机验收（用失败的那份材料）**：`校对/P6转义边界合成/units/P6转义边界合成` 重跑 `build-docx` → exit 0，`marker_count=2, anchor_count=2, missing_count=0, anchor_structure_ok=true`，交付 `校对Word/P6转义边界合成_校对批注版.docx`（`.failed.docx` 按契约保留）。docx 内 `w:tbl` 1 个、`commentRangeStart` 2 个；可见文本由修复前的 `t/s0.1y/cm40`（单元格丢失）变为 `t/s0.10.20.3y/cm40-4`（两行四列全在）。
+
+口径：双口径均 **1114 passed / 0 failed / 5 skipped / 4 subtests**（1114+5=1119=collect）。
 
 ## 安全复核
 

@@ -665,6 +665,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
 
             unit_body = _MARKER_SLOT_RE.sub(_anchor_markup, body)
             unit_body = _textify_skipped_formulas(unit_body, skipped_anchors)
+            # 必须排在锚点注入与公式兜底之后：此时单元格文字已定型，列宽才算得准
+            unit_body = _gridify_marked_tables(unit_body)
             all_bodies.append(f"# {qid}\n\n{unit_body}\n\n{_PAGE_BREAK}")
 
         if not all_bodies:
@@ -801,6 +803,95 @@ def _rewrite_images(body: str, q_dir: Path, img_root: Path,
         return f"![{alt}](./images/{new_name})"
 
     return rewrite_inline_images(body, _repl)
+
+
+_ANCHOR_RAW_RE = re.compile(r"`[^`]*<w:commentRange(?:Start|End)[^`]*`\{=openxml\}")
+"""锚点 openxml raw 的反引号码段（`<w:commentRangeStart .../>`{=openxml}）。"""
+
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+_GRID_BORDER_RE = re.compile(r"^\s*\+[-=+]+\+\s*$")
+"""grid table 的边框行；用于识别「这块已经是 grid table」。"""
+_TABLE_RULE_CELL_RE = re.compile(r"^:?-{2,}:?$")
+
+
+def _pipe_row(line: str) -> list[str] | None:
+    """一行（锚点 raw 已摘掉）是 pipe table 行时返回单元格，分隔行返回空列表。
+
+    返回 None 表示这行不属于表格。分隔行用空列表区分，调用方丢弃。
+    """
+    if not _TABLE_ROW_RE.match(line):
+        return None
+    cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip()[1:-1])]
+    if cells and all(_TABLE_RULE_CELL_RE.match(cell) for cell in cells if cell):
+        return []
+    return cells
+
+
+def _gridify_marked_tables(text: str) -> str:
+    """含锚点 raw 的 pipe table → grid table。
+
+    pandoc 的 pipe table 要求表头行紧邻分隔行；当标记字段本身就是一整条表格行时，
+    注入的 openxml raw 会顶到行首，该行不再是表格行 ⇒ 表格塌掉并丢掉 raw（锚点数
+    少一个）⇒ build-docx 判 docx_incomplete。grid table 按 `+---+` 定列，单元格内的
+    openxml raw 能保留（跨单元格锚点也成立），所以在这里把整块重排。
+
+    只重排**含锚点 raw** 的表格块；没有锚点的表格原样保留，避免改变既有 Word 版式。
+    必须在锚点注入之后调用：此时单元格文字已定型，列宽才能算准。
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    index = 0
+    total = len(lines)
+    while index < total:
+        if _pipe_row(_ANCHOR_RAW_RE.sub("", lines[index])) is None:
+            out.append(lines[index])
+            index += 1
+            continue
+        end = index
+        while end < total and _pipe_row(_ANCHOR_RAW_RE.sub("", lines[end])) is not None:
+            end += 1
+        block = lines[index:end]
+        neighbour_before = out[-1] if out else ""
+        neighbour_after = lines[end] if end < total else ""
+        already_grid = bool(_GRID_BORDER_RE.match(neighbour_before)
+                            or _GRID_BORDER_RE.match(neighbour_after))
+        if already_grid or not any(_ANCHOR_RAW_RE.search(line) for line in block):
+            # 已经是 grid table（_convert_multiline_tables 的产物）不得二次重排：
+            # 它的边框行不匹配 pipe 行，重排会把边框留在外面、表格拆坏。
+            out.extend(block)
+            index = end
+            continue
+        rows: list[list[str]] = []
+        for line in block:
+            cells = _pipe_row(_ANCHOR_RAW_RE.sub("", line))
+            if not cells:  # None 或分隔行
+                continue
+            for match in _ANCHOR_RAW_RE.finditer(line):
+                before = len(re.findall(r"(?<!\\)\|", line[:match.start()]))
+                if before == 0:                     # 行首锚点：并入第一个单元格
+                    cells[0] = match.group(0) + cells[0]
+                elif before >= len(cells) + 1:      # 行尾锚点：并入最后一个单元格
+                    cells[-1] = cells[-1] + match.group(0)
+                else:                               # 单元格内锚点：留在本单元格
+                    cells[before - 1] = cells[before - 1] + match.group(0)
+            rows.append(cells)
+        if not rows:
+            out.extend(block)
+            index = end
+            continue
+        width = max(len(row) for row in rows)
+        rows = [row + [""] * (width - len(row)) for row in rows]
+        widths = [max(len(row[column]) for row in rows) for column in range(width)]
+
+        def border(character: str = "-") -> str:
+            return "+" + "+".join(character * (item + 2) for item in widths) + "+"
+
+        out.append(border())
+        for row in rows:
+            out.append("| " + " | ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) + " |")
+            out.append(border())
+        index = end
+    return "\n".join(out)
 
 
 def _convert_multiline_tables(text: str) -> str:
