@@ -167,6 +167,28 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 口径：本批只加文档与宿主准备，未改 `jiaodui/` 代码；双口径仍为 **1112 passed / 0 failed / 5 skipped / 4 subtests**。
 
+## P7决策材料：合并/切换结论（已完成决策备忘，待证据齐备后拍板）
+
+**本轮最重要的发现**：main 回退的正是分支的基线提交。`c7fa622` = `Revert "feat(workflow): add structured unit submission pipeline"`，reverts `4c82e24`——而 `4c82e24` 就是本分支的起点。所以 main 与分支不是「都往前跑需要合并」，而是 **main 主动回退结构化流水线、改在旧主链上加策略（`dde758d`/`04f0c78`），分支把结构化流水线继续做深**。
+
+量化事实（新增 `docs/P7-MERGE-DECISION.md` 记录全部可复现命令）：
+
+- 分叉点→main：48 files, +1451 / −2659；main 删掉 4 个核心模块（`report_suggestions.py`/`unit_delivery.py`/`source_index.py`/`unit_reader.py`）与 6 个测试文件，新增 3 个兼容/策略测试。
+- 试合并冲突面（`git merge-tree --write-tree`，不动工作树）：**25 处（19 content + 6 modify/delete）**，覆盖所有分支碰过的核心模块、插件、两份 SKILL/手册与 6 个测试文件。
+- **两条线各自独立实现了「按单元预算 + 恢复记录」**：main 是纯模块 `execution_policy.py`（120 行，`BUDGETS`/`new_policy`/`spend`/`validate_attempt`）；分支是 `material.py` 内嵌 + 本批的 `error_classification.py`（169 行）。这是唯一真正的架构冲突。
+- 报告形态不可互通：main 的 `markers.py` 无 v2/转义概念；分支的程序生成报告链在 main 上已被删除。
+- 两处殊途同归（不是分歧）：中性中止传播（main `c1c24b9` ≈ 分支 `tools/index.js:419-422`）、入口 ≤8192 码点（main `cc1c21f` ≈ 分支 SKILL.md 8164 码点 + 长度回归）。
+
+**结论与推荐**：三条路径（A 保持隔离 / B 主题移植 / C 切换主线）已逐项列代价。推荐 **A + 现在就写 B 清单**，并在 P2 通过、P6 两个单元真实校对完成后重开备忘做最终判断——因为分支的核心主张正是 main 回退的东西，推翻该判断需要真实会话证据，而 P2/P6 就是取证的实验；B 清单里的三项（错误码分类、并发压测、逐条件诊断）不依赖结构化架构，无论 C 是否成立都值得进 main。**在策略模型归属（`execution_policy.py` vs 分支 `material.py`）定下来之前，不要动任何冲突文件**。
+
+## P2交接：本会话是 standard preset，无法就地验收
+
+用户已重启 DSH（profile 三处切换仍指向 worktree 包），但**本会话是 standard preset**（证据：本会话工具目录里没有 `jiaodui_*` 原生工具、但有 bash；分支 preset 会把整个 shell 移除）。preset 在会话创建时确定且工具目录按会话固定（请求缓存稳定），所以 P2/P6 的真机验收必须换到「校对」preset 的会话。
+
+新增 `docs/NEXT-SESSION-BRIEF.md`：自包含交接（会话设置、任务一 8 条验收的重点四条、任务二两个单元的 task/unit id 与要求、禁止事项、做完后写哪里），使新会话不需要上一个会话的上下文即可开工。
+
+口径：本批只加文档，未改 `jiaodui/` 代码；双口径仍为 **1112 passed / 0 failed / 5 skipped / 4 subtests**。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
