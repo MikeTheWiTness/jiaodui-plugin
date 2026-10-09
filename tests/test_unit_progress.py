@@ -152,3 +152,51 @@ def test_dispatch_plan_rejects_bad_window_and_is_read_only(tmp_path, monkeypatch
     before = hashlib.sha256(manifest.read_bytes()).hexdigest()
     material.dispatch_plan(task_id, window=8)
     assert hashlib.sha256(manifest.read_bytes()).hexdigest() == before
+
+
+# ---- Phase 2 合并：采纳 main 的两条更优语义 ----
+
+def test_build_report_payload_exposes_ok_independently_of_complete(tmp_path, monkeypatch):
+    """`ok` = 诊断文件已生成；`complete` = 所有必需单元通过或显式跳过（两者独立）。
+
+    main 的 `BuildReportResult.to_dict()` 有 `ok`，分支只有 CLI 补；契约（AGENTS）把
+    `ok` 定义为对外字段，所以补进 dataclass，同时保留分支更严谨的 complete 规则
+    （考虑 unreviewed；main 的 `not failed` 是粗近似）。
+    """
+    from jiaodui.report import build_report
+
+    paper = tmp_path / "卷子"
+    unit = paper / "第1题"
+    unit.mkdir(parents=True)
+    (unit / "第1题.md").write_text("设a为$O$点。", encoding="utf-8")
+    (unit / "_校对报告.md").write_text("不合规报告", encoding="utf-8")
+
+    result = build_report(paper, out_path=tmp_path / "out.md", legacy_layout=True)
+    payload = result.to_dict()
+
+    assert payload["ok"] is True, "诊断文件已生成"
+    assert payload["complete"] is False, "单元未通过校验"
+
+
+def test_unit_event_rejects_late_event_from_previous_run(tmp_path, monkeypatch):
+    """迟到的阶段事件不得写进新轮次（采纳 main 的 expected_run_id CAS）。"""
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    manifest = material.load(root)
+    stale_run = manifest["current_run_id"]
+
+    with material.locked(root):
+        data = material.load(root)
+        material.new_run(data, data["params"], data["resources"])
+        material.write(root, data)
+
+    material.set_execution_policy(root, "automatic")
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1",
+                                   expected_run_id=stale_run)
+    assert error.value.code == "run-changed"
+    assert material.load(root)["runs"][-1].get("unit_events", {}) == {}, "迟到事件不得落盘"
+
+    fresh = material.load(root)["current_run_id"]
+    event = material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1",
+                                       expected_run_id=fresh)
+    assert event["phase"] == "read"

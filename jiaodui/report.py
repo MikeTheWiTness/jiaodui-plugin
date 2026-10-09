@@ -24,6 +24,8 @@ class BuildReportResult:
     def to_dict(self) -> dict:
         return {
             "out_path": self.out_path,
+            # ok 只表示「诊断文件已生成」，与 complete 解耦（契约字段，来自 main）
+            "ok": self.out_path is not None,
             "complete": self.complete,
             "unreviewed": self.unreviewed,
             "included": self.included,

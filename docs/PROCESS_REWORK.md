@@ -374,6 +374,24 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 **Phase 1 状态**：B1 ✅（纯策略模块 + 连带扣费）、B2 ✅（旧清单可读/未授权/保守迁移）、B3 ✅（`attempt_id` 幂等）、B4 ✅（文档归位验证）。分支口径 **1126 passed / 0 failed / 5 skipped / 4 subtests**（双口径）。
 下一步是 Phase 2：从 main 建 `integration/structured-into-main`，按 §6 + §6.1 裁决 28 处冲突与 19 处静默变更，裁决后立刻跑全量并做真机冒烟。
 
+## Phase 2 合并中采纳 main 的两处更优语义（在分支上实现）
+
+合并试跑后发现 main 有两条语义比分支好，按「保留 main 更优的地方」的目标**在分支上实现**（分支是开发线），再拉进合并树。
+
+**① `BuildReportResult.to_dict()` 暴露 `ok`**
+
+- main 有 `ok`（`out_path is not None`），分支只有 CLI 补；契约（AGENTS）把 `ok` 定义为对外字段（"ok 仅表示诊断文件已生成"）→ 补进 dataclass。
+- 同时**保留分支更严谨的 `complete`**：分支按「所有必需单元通过或显式跳过」计算并考虑 `unreviewed`，main 的 `not self.failed` 是粗近似（会漏掉"已提交但未父复核"的单元）。
+- 红→绿：新增 `test_build_report_payload_exposes_ok_independently_of_complete`（断言 `ok=True` 而 `complete=False`，锁两者解耦）。
+
+**② `unit-event` 的轮次 CAS**
+
+- main 的 `record_unit_event` 有 `expected_run_id`，能防「迟到的阶段事件写进新轮次」；分支没有这个防护（直接 append 到 `runs[-1]`）→ 采纳为**可选**参数（不破坏既有调用）。
+- 四处同步：core（`material.record_unit_event` 加 CAS）、CLI（`unit-event --expected-run-id`）、插件 schema/argv（`jiaodui_unit_event` 增属性）、手册两份副本；Node 行为测试加断言（属性存在 + argv 顺序）。
+- 红→绿：新增 `test_unit_event_rejects_late_event_from_previous_run`（旧轮次 id → `run-changed` 且**不落盘**；新轮次 id → 正常记录）。
+
+**口径**：分支双口径 **1128 passed / 0 failed / 5 skipped / 4 subtests**（本批 +2 例）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。

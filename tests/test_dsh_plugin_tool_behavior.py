@@ -113,6 +113,12 @@ assert.deepEqual(requests.at(-1).argv.slice(1),['--json','precheck-split','/tmp/
 await prepare.execute({operation:'execution-policy',path:'/tmp/mat',execution_mode:'automatic',origin:'user'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','execution-policy','/tmp/mat','--mode','automatic','--origin','user']);
 // P5b：心跳查询必须只读，且 stale 阈值可按次调整
+// 合并后采纳 main 的轮次 CAS：unit-event 必须能传 expected_run_id
+const unitEvent=registered.get('jiaodui_unit_event');
+assert.equal(unitEvent.parameters.additionalProperties,false);
+assert.ok(unitEvent.parameters.properties.expected_run_id,'unit-event 缺 expected_run_id');
+await unitEvent.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),phase:'read',attempt_id:'t1',expected_run_id:'r'.repeat(32)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-event','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--phase','read','--attempt-id','t1','--expected-run-id','r'.repeat(32)]);
 const progress=registered.get('jiaodui_unit_progress');
 assert.equal(progress.parameters.additionalProperties,false);
 assert.deepEqual(progress.parameters.required,['task_id']);

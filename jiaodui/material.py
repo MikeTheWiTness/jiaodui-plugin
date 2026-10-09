@@ -524,8 +524,13 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
 
 def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str,
                       agent_id: str | None = None, cancel_initiator: str | None = None,
-                      cancel_reason: str | None = None) -> dict:
-    """记录可恢复阶段事件与明确来源的取消，不从错误文本猜测。"""
+                      cancel_reason: str | None = None,
+                      expected_run_id: str | None = None) -> dict:
+    """记录可恢复阶段事件与明确来源的取消，不从错误文本猜测。
+
+    `expected_run_id` 是 CAS 防护（采纳 main）：与当前轮次不一致即 `run-changed`，
+    避免迟到的阶段事件被写进新轮次。
+    """
     phases = {"prepared", "read", "images", "calculated", "proposed", "self_checked",
               "verified", "registered", "parent_reviewed", "deliverable"}
     if phase not in phases or not isinstance(attempt_id, str) or not attempt_id:
@@ -542,6 +547,10 @@ def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str
     with locked(root):
         data = load(root)
         run = data["runs"][-1]
+        if expected_run_id is not None and expected_run_id != run["run_id"]:
+            raise BusinessError("阶段事件只能记入调用方预期的轮次", code="run-changed",
+                                details={"expected_run_id": expected_run_id,
+                                         "run_id": run["run_id"]})
         event = {"at": now(), "unit_id": unit_id, "phase": phase,
                  "attempt_id": attempt_id, "agent_id": agent_id}
         run.setdefault("unit_events", {}).setdefault(unit_id, []).append(event)

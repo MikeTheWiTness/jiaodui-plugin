@@ -233,12 +233,17 @@ function registerStructuredTools(ctx, cliTool) {
         'self_checked', 'verified', 'registered', 'parent_reviewed', 'deliverable'] },
       cancel_initiator: { type: 'string', enum: ['user', 'parent', 'host'] },
       cancel_reason: { type: 'string', enum: ['user_cancel', 'technical_timeout', 'superseded'] },
+      expected_run_id: {
+        type: 'string',
+        description: 'CAS 防护：与当前轮次不一致即 run-changed，避免迟到事件写进新轮次（可选）。',
+      },
     },
   }, args => ['unit-event', '--task-id', args.task_id, '--unit-id', args.unit_id,
     '--phase', args.phase, '--attempt-id', args.attempt_id,
     ...(args.agent_id ? ['--agent-id', args.agent_id] : []),
     ...(args.cancel_initiator ? ['--cancel-initiator', args.cancel_initiator] : []),
-    ...(args.cancel_reason ? ['--cancel-reason', args.cancel_reason] : [])])
+    ...(args.cancel_reason ? ['--cancel-reason', args.cancel_reason] : []),
+    ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : [])])
 
   register('jiaodui_unit_review', '父代理按当前snapshot接受或退回结构化建议。', {
     type: 'object', additionalProperties: false,
