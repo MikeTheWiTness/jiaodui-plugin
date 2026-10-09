@@ -3,8 +3,14 @@
 # 它声明一个 `jiaodui` agent preset，并在 preset 的 plugins 里：
 #   1. 把随包的 skills/ 目录挂进 skill-filesystem（只对该 preset 生效）；
 #   2. 挂载 ./tools/index.js，注册 jiaodui 原生工具（argv 透传 CLI）。
-# 本preset按校对流程显式维护能力列表；无通用shell和fs聚合工具。
-# 宿主是否仍注入默认skill、以及父子工具是否可分别过滤，需真机验证。
+# 能力分层（真机验收后确定，见 docs/PROCESS_REWORK.md「P2 真机验收」）：
+#   父 agent：保留通用操作性——shell（按平台 bash/pwsh）与只读搜索 fs-search。
+#     理由是实测出来的：无 shell 的会话能复现 Word 锚点丢失、能收窄到条件，却因为
+#     没有任何读 docx 内部 XML 的通道而无法定位根因，只能交接。
+#   子 agent：工具目录仍是封闭的 20 项（见 delegation 的 toolFilter），无 shell、无
+#     write/edit——「模型不写报告、只交结构化提案」这条硬约束的落点在这里。
+# 注意：shell 里不要用 `python -m jiaodui`。editable 安装的查找器排在 PathFinder 之后，
+# cwd 决定导入哪条线的 core；确定性操作一律走原生 jiaodui_* 工具，shell 只用于观察与修复。
 #
 # 安装后可在「设置 → 通用 → agent preset」把默认 preset 换成「校对」，
 # 或在新会话里选择它。行 id preset-jiaodui 可被 profile patch 按 id 覆盖。
@@ -30,9 +36,19 @@
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
               maxBytes: 65536
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
           # 聚合fs暂保留：宿主read_image来自该插件。细粒度读写过滤尚待宿主支持。
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
           - id: skill-filesystem

@@ -8,6 +8,13 @@
 
 拆分后的 `task_id` 和 `unit_ids` 由 CLI 返回并保存在材料清单中。单元子代理使用这两个 ID，不拼接材料或单元长路径来调用结构化工具。ID随材料搬移保留，查找范围仍限于当前工作区。
 
+## shell 与原生工具的边界
+
+- 确定性操作（读取、计算、提交、恢复记账、复核、交付）**一律走原生 `jiaodui_*` 工具**：这些工具自带工作区校验，类别、预算与闸门都由 core 决定。
+- shell（bash / pwsh）只用于**观察与修复**：解 docx 看内部 XML、核对文件与摘要、跑一次性诊断脚本、定位失败根因。父 agent 有 shell，**子 agent 没有**——子 agent 只能通过 `unit-submit` 交结构化提案，这是「模型不写报告」的落点。
+- **不要在 shell 里用 `python -m jiaodui`**：editable 安装的元路径查找器排在 `PathFinder` 之后，cwd 决定导入哪条线的 core（实测：会话工作区是主仓时会读到主仓的 `jiaodui`，行为完全不同）。确需在 shell 调 CLI 时用已安装的控制台脚本 `jiaodui`；带 `--work-root` 的写入命令仍必须传对工作区。
+- shell 里的写入同样受约束：产物只落 `校对/<材料名>/`、不改源文件、失败留痕用契约文件名，不新建自由命名的 attempt / 副本。
+
 ## 入口和准备
 
 正常路径调用结构化工具 `jiaodui_task_prepare`（`operation` 取 `check-env` / `inspect-source` / `convert` / `split` / `precheck-split` / `status` / `execution-policy`），参数按名传入，不再手拼命令行。

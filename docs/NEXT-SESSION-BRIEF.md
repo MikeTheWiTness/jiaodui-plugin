@@ -6,7 +6,8 @@
 
 - preset = **校对**（`preset-jiaodui`，由 `packages/dsh-jiaodui/cordis.patch.yml` 声明）
 - 工作区应是 `/Users/chouchou/开发/JiaoDuiAgentSkill`（材料在 `校对/`）
-- 这个 preset **没有 shell**（`tool-bash` / `tool-pwsh` / `fs-search` 都被移除），父代理用 `jiaodui_*` 原生工具；这是设计，不是故障
+- 父 agent **有 shell**（`tool-bash` / `tool-pwsh` 按平台）与只读搜索，用于观察与修复；**子 agent 没有 shell/write/edit**，只能交结构化提案
+- 但确定性操作仍一律走 `jiaodui_*` 原生工具；**不要在 shell 里用 `python -m jiaodui`**（cwd 决定导入哪条线的 core，实测会读到主仓那份）
 - 插件用的 CLI 是 `/.worktrees/structured-report/.venv/bin/jiaodui`（分支 core），判别器：`jiaodui --json dispatch-plan --task-id <task>` 可用即证明跑的是分支
 
 ## 任务一：P2 验收（按 `docs/P2-ACCEPTANCE.md` 的 8 条逐条做）

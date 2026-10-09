@@ -37,8 +37,8 @@ skill 也会挂主仓那份。所以 P2 必须让 profile 解析到 worktree 包
 ## 验收项
 
 1. **父 catalog**
-   - 应可见：`jiaodui_task_prepare`、`jiaodui_delivery`、`jiaodui_unit_progress`、`jiaodui_dispatch_plan`、通用 `jiaodui`
-   - 不应可见：`bash`、`pwsh`、`fs_search`
+   - 应可见：`jiaodui_task_prepare`、`jiaodui_delivery`、`jiaodui_unit_progress`、`jiaodui_dispatch_plan`、通用 `jiaodui`，**以及 shell（bash / pwsh 按平台）与只读搜索 `fs_search`**
+   - 变更记录（2026-10-09，真机验收后）：初版预设移除了父侧 shell，实测代价是「能复现 Word 锚点丢失、能收窄到条件，却没有任何读 docx 内部 XML 的通道，根因查不下去、只能交接」。现改为**父侧恢复 shell + 只读搜索，子侧仍封闭**；理由与证据见 `PROCESS_REWORK.md` 的 Word 根因复核一节。
 2. **子 catalog**（派一个子 agent，看它拿到什么）
    - 应为 `cordis.patch.yml` 里 `toolFilter.allow` 的 20 项：`skill`、`read`、`read_image`、
      `jiaodui_unit_read/locate/snapshot/submit/event/recovery`、`jiaodui_calc_*`

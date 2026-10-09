@@ -67,8 +67,18 @@ def test_preset_declares_jiaodui_with_minimal_agent_capabilities():
     for required in ("persona", "tool-skill", "tool-todo", "jiaodui-tools", "delegation"):
         assert required in plugins, f"preset 缺少校对能力：{required}"
     assert plugins["tool-fs"]["name"] == "@deepseek-ai/dsh-tool-fs"
-    for removed in ("tool-bash", "tool-pwsh", "tool-fs-search",
-                    "command-goal", "tool-goal"):
+    # 父 agent 必须有通用操作性。实测代价见 PROCESS_REWORK：无 shell 的会话能复现
+    # Word 锚点丢失、能收窄到「标记落在表格行内」，却因为没有解 docx 内部 XML 的通道
+    # 而无法定位根因，只能交接给另一个会话。子 agent 侧仍必须封闭（见下一个用例），
+    # 「模型不写报告」这条约束的落点在子 agent 的工具目录，不在父 agent 少一把 shell。
+    for tool_id in ("tool-bash", "tool-pwsh"):
+        assert tool_id in plugins, f"父侧缺少 shell：{tool_id}"
+        expr = plugins[tool_id].get("disabled")
+        assert isinstance(expr, str) and "process.platform" in expr, f"{tool_id} 需按平台显式开关"
+    assert plugins["tool-bash"]["disabled"] != plugins["tool-pwsh"]["disabled"], "bash/pwsh 必须平台互补"
+    assert plugins["tool-fs-search"]["name"] == "@deepseek-ai/dsh-tool-fs-search"
+    assert plugins["tool-fs-search"].get("disabled", False) is False, "父侧只读搜索应启用"
+    for removed in ("command-goal", "tool-goal"):
         assert removed not in plugins or plugins[removed].get("disabled", False), f"preset 不应启用：{removed}"
     assert plugins.get("tool-web", {}).get("disabled", False) is True
     delegation = {p["id"]: p for p in plugins["delegation"]["config"]}

@@ -214,6 +214,31 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 口径：本批只加文档，未改 `jiaodui/` 代码；双口径仍为 **1112 passed / 0 failed / 5 skipped / 4 subtests**。
 
+## P2 修正：父侧恢复 shell 与只读搜索（子侧保持封闭）
+
+**触发**：P2 真机验收暴露的能力缺口。上一会话在「校对」preset 里复现了 Word 锚点丢失、把条件收窄到「标记落在表格行内 / 字段含转义」，但**没有任何读 docx 内部 XML 的通道**（`read` 对 docx 直接报 `binary file`，插件也未暴露解压/跑代码的工具），只能停在「根因待复核」并交接。同一个根因，在有 shell 的会话里（解 XML + pandoc 三层最小对照）一次定位完成。
+
+**决策**（用户提出，经证据确认）：
+
+| 侧 | 工具面 | 理由 |
+|---|---|---|
+| 父 agent | **恢复** `tool-bash` / `tool-pwsh`（按平台互补开关）+ `tool-fs-search`（只读搜索）；保留全部 `jiaodui_*` 原生工具 | 这个 preset 存在的意义就是最大限度利用 agent 的操作能力；长尾问题（环境、格式、根因定位）必须有观察通道 |
+| 子 agent | **不变**：仍是封闭的 20 项，无 shell、无 `write`/`edit` | 「模型不写报告、只交结构化提案」这条硬约束的落点在这里。子 agent 一旦有 shell/write，就能直接写 `_校对报告.md`，`verify-report` 闸门形同虚设 |
+
+**为什么父侧加 shell 不削弱该约束**：父侧本来就挂 `tool-fs`（含写入类工具），也就是说它今天已经能写文件；缺 shell 只是阻断了**观察与组合操作**，并没有阻止改文件。约束真正依赖的是闸门（`verify-report` / 父复核 / `build-docx` 复核当前状态），而不是「父 agent 少一把 shell」。
+
+**顺带发现的自相矛盾**：`SKILL.md` 第 33 行本来就写着「经 bash 调用写入命令（convert / split / slice 非 preview / parse-report / build-report / build-docx / repair-report --apply）必须传 `--work-root <W>`」——这是旧主链留下的措辞，在「无 shell」的预设下是**死文本**。恢复 shell 后它重新生效，也说明原设计里的能力清单与 skill 文本本身就不自洽。
+
+**配套加固（防两条线混用）**：手册新增「shell 与原生工具的边界」一节——确定性操作一律走原生工具；shell 只用于观察与修复；**禁止在 shell 里用 `python -m jiaodui`**（editable 查找器排在 `PathFinder` 之后，cwd 决定导入哪条线的 core，实测会话工作区是主仓时会读到主仓那份 `jiaodui`）；确需调 CLI 用控制台脚本并传对 `--work-root`。preset 头部注释同步写明分层与这条禁忌。
+
+**测试**（红→绿）：`tests/test_dsh_plugin_package.py` 的父侧断言由「不得启用 `tool-bash`/`tool-pwsh`/`tool-fs-search`」改为「必须启用 + bash/pwsh 平台互补 + fs-search 启用」；**子侧断言保持不变**（`assert not child_tools & {"jiaodui", "write", "edit", "bash", …}`）——即"父开子不开"这件事被同时钉住，将来任一侧被误改都会红。
+
+**文档同步**：`P2-ACCEPTANCE.md` 第 1 条由「不应可见 bash」反转为「应可见 shell 与只读搜索」并记录变更理由；`NEXT-SESSION-BRIEF.md` 同步为「父有 shell、子没有」+ 禁用 `python -m jiaodui` 的告诫。
+
+口径：双口径 **1112 passed / 0 failed / 5 skipped / 4 subtests**（本批改断言与文档，未新增用例数）。
+
+**仍未做（下一批）**：core 侧把注入前的 pipe table 转 grid table（`_convert_multiline_tables` 的同类兜底，注释早已写明「pandoc 的 multiline table 单元格会丢弃 openxml raw；grid table 正常」，只是未覆盖 pipe table）。回归样本就是这次的 `P6转义边界合成`：目标 `marker_count=2, anchor_count=2`。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
