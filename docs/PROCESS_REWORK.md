@@ -134,6 +134,30 @@
 
 测试与口径：本批新增 **9 例**（`tests/test_docx_report.py` collect 92 → 101；全量 1108 → 1117）。双口径执行均 **1112 passed / 0 failed / 5 skipped / 4 subtests**（1112 + 5 = 1117 = collect 总数，自洽；5 个 skip 仍是工作树路径相关的旧语料/回归样本）。
 
+## P2准备：worktree 可独立安装 + profile 已切分支包（待重启验收）
+
+PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，再用原生工具跑最小真实校对」**，因此本轮把宿主侧准备做完，验收需重启 DSH 后在新会话执行。
+
+**发现并解决的硬阻塞**：`packages/dsh-jiaodui/tools/index.js:36-45` 的 `defaultCommand()` 按**包自身位置**找 CLI（`<包>/../../../.venv/bin/jiaodui`，并要求 `<包>/../../../jiaodui/cli.py` 存在），而 worktree 没有 `.venv`；更关键的是，即使有，若走的是主仓 `.venv-cli`，控制台脚本会 import 到**主仓**的 core。因此：
+
+- 给 worktree 建独立 venv：`/Users/chouchou/.pyenv/versions/3.12.13/bin/python3.12 -m venv .venv` + `pip install -e '.[dev,render]' build`（清华源）；`.venv` 已被 `.gitignore` 覆盖，不进版本库。装完 `import jiaodui` → worktree。
+- **判别器验证**：从 `cwd=主仓` 调 `<worktree>/.venv/bin/jiaodui --json dispatch-plan …` 成功（`dispatch-plan` 是分支独有命令；主仓 CLI 同命令 exit 2）。说明插件用控制台脚本时一定会跑分支 core。
+- **一个必须记住的坑**：setuptools 的 editable 元路径查找器排在 `PathFinder` 之后，所以 `python -c` / `python -m jiaodui` 在 `cwd=主仓` 时会读到**主仓**的 `jiaodui`（实测 `jiaodui.__path__` 指向主仓）。控制台脚本的 `sys.path[0]` 是脚本目录而非 cwd，因此不受影响——**不要让插件改走 `python -m`**。
+
+**profile 切换（三处必须一致，否则启动时 frozen install 对不上）**：
+- `~/.dsh/profiles/desktop/package.json` 的 `dsh-jiaodui` 链接 → worktree 包；
+- `pnpm-lock.yaml` 的 specifier 与 version 两条链接记录 → worktree 包；
+- `node_modules/dsh-jiaodui` 软链 → worktree 包。
+- 备份：`package.json.bak-p2-20261009-224655`、`pnpm-lock.yaml.bak-p2-20261009-224655`（回滚命令见 `docs/P2-ACCEPTANCE.md`）。
+- 自检：`createRequire(profile/package.json).resolve('dsh-jiaodui/package.json')` → worktree 包；skill 目录解析到 worktree `skills/`；插件 CLI 解析到 worktree `.venv/bin/jiaodui`。
+- 另查：profile 自己的 `cordis.patch.yml` **没有**覆盖 `preset-jiaodui`，所以分支 preset 原样生效；但 `agent-preset-registry` 的默认是 `standard`，新会话必须手动选「校对」。
+
+**分支插件在 Node 下的加载面**：`apply/inject/name` 三键导出，桩 ctx 下注册 26 个工具；插件相关测试 24 例全绿。
+
+新增 `docs/P2-ACCEPTANCE.md`：前置状态、会话设置、8 条验收项（父/子 catalog、skill 挂载、`read_image` 实读、零 shell 真实校对、停止语义、CLI 判别器、噪音）、以及一条命令的回滚。
+
+口径：本批只加文档与宿主准备，未改 `jiaodui/` 代码；双口径仍为 **1112 passed / 0 failed / 5 skipped / 4 subtests**。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
@@ -148,6 +172,6 @@
 
 ## 未完成与交付限制
 
-- 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**；**P6 第 2 项（两个失败单元根因 + 回归）已完成**，**P6 确定性链路验收已完成**（P3 转义边界走完 Word + Word-v2 端到端结构计数 + 整卷 `complete` 三态）；余下 P6 一块按用户 6C 决定执行——最小真实校对 1–2 个单元（图片证据型 + 转义边界型，需用户授权范围）。再往后是实际安装方式与新会话父子 catalog（P2）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
+- 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**；**P6 第 2 项（两个失败单元根因 + 回归）已完成**，**P6 确定性链路验收已完成**（P3 转义边界走完 Word + Word-v2 端到端结构计数 + 整卷 `complete` 三态）；余下 P6 一块按用户 6C 决定执行——最小真实校对 1–2 个单元（图片证据型 + 转义边界型，需用户授权范围）。P2 的宿主准备已完成（worktree venv + profile 三处切换 + 验收清单），**待用户重启 DSH 后在新会话按 `docs/P2-ACCEPTANCE.md` 验收**；验收通过后再跑 P6 余下的最小真实校对（改用原生工具面）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。
