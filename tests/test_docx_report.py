@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import os
 import re
 import shutil
@@ -14,7 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 
-from jiaodui.docx_report import (DocxBuildResult, build_docx, find_pandoc,
+from jiaodui.docx_report import (DocxBuildResult, _is_included_unit,
+                                 _report_marker_counts, build_docx, find_pandoc,
                                  generate_combined_docx)
 from jiaodui.formula_render import matplotlib_available
 from jiaodui.formula_render import _CJK_FONT
@@ -1912,3 +1914,235 @@ def test_anchor_pairing_detects_extra_end_and_reference():
     ok, problems = _check_anchor_pairing(doc, {"1"})
     assert not ok
     assert any("999" in p for p in problems)
+
+
+# ---- P6：移植归档分支的 Word-v2 端到端回归（archive/structured-pipeline-safety 6e89d0d） ----
+# 归档那版跑在 4c82e24：v2 报告不需要父复核，直接 legacy_layout 生成即可。
+# 本分支的 M4 闸门要求「当前版本已 accepted」且已登记，因此 v2 必须走完整链
+# （提交 → 登记 → 父复核接受 → build_docx），否则会被正确排除。这里按新契约重写。
+
+def _v2_proposal(source: str, task_id: str, unit_id: str, run_id: str,
+                 *, phrase: str = "木板", replacement: str = "木块") -> dict:
+    from jiaodui.source_index import query_locations
+
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    location = query_locations(source, digest, phrase)[0]
+    return {
+        "schema_version": 2, "task_id": task_id, "unit_id": unit_id, "run_id": run_id,
+        "source_sha256": digest, "body_sha256": digest, "proposal_revision": 1,
+        "summary": "一般问题",
+        "corrections": [{
+            "id": "c1", "location_id": location["location_id"],
+            "expected_original": location["original"], "replacement": replacement,
+            "reason": "对象名称需统一。", "category": "term",
+            "severity": "一般问题", "evidence_ids": ["e1"],
+        }],
+        "evidence": {
+            "assumptions": [{"id": "e1", "text": "术语应统一。", "source_locations": []}],
+            "symbols": [],
+            "images": {"status": "not_applicable", "reason": "无配图"},
+            "calculations": {"status": "not_applicable", "reason": "无数值核验"},
+        },
+        "self_check": {"status": "passed",
+                       "checks": ["real_issue", "replacement_semantics", "related_coverage",
+                                  "scope_and_uncertainty", "severity"], "unresolved": []},
+    }
+
+
+def _v2_material(tmp_path, monkeypatch, source: str, *, phrase: str = "木板",
+                 replacement: str = "木块", review: bool = True, units: int = 1):
+    """走完整 v2 链：convert → split → 执行模式 → unit-submit 登记 →（可选）父复核接受。"""
+    from pathlib import Path as _Path
+
+    from jiaodui import material
+    from jiaodui.review import record_parent_review
+    from jiaodui.unit_delivery import commit_unit_submission, read_unit_snapshot
+    from jiaodui.workflow import convert_material, split_material
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    src = tmp_path / "lesson.md"
+    src.write_text(source, encoding="utf-8")
+    converted = convert_material(src, material_name="Word端到端", mode="lecture")
+    # clean=False：讲义清理会去表格竖线，本组用例要保留源文字面的 `|`
+    split = split_material(converted.raw_md, subject="高中物理", mode="lecture",
+                           strategy="none", clean=False)
+    if units > 1:
+        template = _Path(split.unit_dirs[0])
+        for index in range(2, units + 1):
+            target = template.parent / f"单元{index}"
+            target.mkdir()
+            (target / f"单元{index}.md").write_text(
+                (template / f"{template.name}.md").read_text(encoding="utf-8"), encoding="utf-8")
+        split_material(converted.raw_md, subject="高中物理", mode="lecture", adopt_units=True)
+    root = workspace / "校对" / "Word端到端"
+    material.set_execution_policy(root, "automatic")
+    data = material.load(root)
+    unit = _Path(split.unit_dirs[0])
+    unit_id = data["unit_ids"][unit.name]
+    text = (unit / f"{unit.name}.md").read_text(encoding="utf-8")
+    proposal = _v2_proposal(text, data["task_id"], unit_id, data["current_run_id"],
+                            phrase=phrase, replacement=replacement)
+    snapshot = read_unit_snapshot(data["task_id"], unit_id)
+    commit_unit_submission(data["task_id"], unit_id, proposal, snapshot["snapshot_sha256"])
+    if review:
+        after = read_unit_snapshot(data["task_id"], unit_id)
+        record_parent_review(data["task_id"], unit_id,
+                             expected_snapshot_sha256=after["snapshot_sha256"],
+                             decision="accepted", reviewer_id="parent-test")
+    paper = root / data["paths"]["paper"]
+    return paper, unit.name
+
+
+def test_report_marker_count_handles_v2_body_heading_and_legacy_report():
+    """计数必须以共用分节解析为准：正文里自带「### 修改原因」也不能截断标记。"""
+    from jiaodui.report_suggestions import render_suggestions
+
+    source = "前文\n### 修改原因\n编号：木板\n"
+    proposal = _v2_proposal(source, "a" * 32, "b" * 32, "run-1")
+    v2 = render_suggestions(source, proposal, expected_task_id="a" * 32,
+                            expected_unit_id="b" * 32, expected_run_id="run-1").text
+    legacy = ("一般问题\n### 标记原文\n编号：第1题\n内容：\n前文【1|木板|木块】\n"
+              "### 修改原因\n1. 术语。\n")
+
+    assert _report_marker_counts([("v2", v2)]) == {"v2": 1}
+    assert _is_included_unit(v2)
+    assert _report_marker_counts([("legacy", legacy)]) == {"legacy": 1}
+    assert _is_included_unit(legacy)
+
+
+def _word_text(path) -> tuple[str, str]:
+    """返回 (正文可见文本, 批注文本)，用于端到端断言。"""
+    with zipfile.ZipFile(path) as archive:
+        document = ET.fromstring(archive.read("word/document.xml"))
+        comments = ET.fromstring(archive.read("word/comments.xml"))
+    namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    visible = "".join(node.text or "" for node in document.findall(".//w:t", namespace))
+    commented = "".join(node.text or "" for node in comments.findall(".//w:t", namespace))
+    return visible, commented
+
+
+@PANDOC_REQUIRED
+@pytest.mark.parametrize("valid_reasons", [True, False])
+def test_build_docx_legacy_requires_reasons_and_strips_decorations(tmp_path, valid_reasons):
+    """旧报告仍走兼容清理：装饰行不得进正文；缺原因则整单元排除、不出 docx。"""
+    paper = tmp_path / f"卷子-legacy-{valid_reasons}"
+    unit = paper / "第1题"
+    unit.mkdir(parents=True)
+    report = ("一般问题\n### 标记原文\n编号：第1题\n内容：\n"
+              "前文【1|木板|木块】\n### 修改原因\n1. 术语。\n")
+    if not valid_reasons:
+        report = report.replace("1. 术语。", "无")
+    (unit / "第1题.md").write_text("前文木板\n", encoding="utf-8")
+    (unit / "_校对报告.md").write_text(report, encoding="utf-8")
+
+    result = build_docx(str(paper), legacy_layout=True)
+
+    if not valid_reasons:
+        assert not result.ok
+        assert [entry["unit"] for entry in result.excluded_units] == ["第1题"]
+        assert result.out_path is None
+        assert not list(tmp_path.rglob("*_校对批注版.docx"))
+        return
+    assert result.ok
+    assert result.marker_count == result.anchor_count == 1
+    assert result.heading_comment_count == result.missing_count == result.over_count == 0
+    visible, commented = _word_text(result.out_path)
+    assert "木板" in visible and "木块" in commented and "术语。" in commented
+    assert "编号：" not in visible and "内容：" not in visible
+
+
+@PANDOC_REQUIRED
+def test_build_docx_accepts_v2_after_submit_and_parent_review(tmp_path, monkeypatch):
+    """v2 走完整链后才可交付 Word，且正文字面（分节标题与「编号：」）原样保留。"""
+    source = "前文\n### 修改原因\n编号：木板\n"
+    paper, unit_name = _v2_material(tmp_path, monkeypatch, source)
+
+    result = build_docx(str(paper))
+
+    assert result.ok
+    assert result.marker_count == result.anchor_count == 1
+    assert result.heading_comment_count == result.missing_count == result.over_count == 0
+    visible, commented = _word_text(result.out_path)
+    assert "木板" in visible and "木块" in commented and "对象名称需统一。" in commented
+    assert "修改原因" in visible and "编号：木板" in visible
+    assert "jiaodui-body" not in visible
+    assert len([name for name in zipfile.ZipFile(result.out_path).namelist()
+                if name == "word/comments.xml"]) == 1
+
+
+@PANDOC_REQUIRED
+def test_build_docx_excludes_v2_without_current_review(tmp_path, monkeypatch):
+    """未获当前版本父复核接受的 v2 单元必须被排除，不得进入 Word。"""
+    source = "前文\n### 修改原因\n编号：木板\n"
+    paper, unit_name = _v2_material(tmp_path, monkeypatch, source, review=False)
+
+    result = build_docx(str(paper))
+
+    assert not result.ok
+    assert [entry["unit"] for entry in result.excluded_units] == [unit_name]
+    assert "父代理复核" in result.excluded_units[0]["reason"]
+    assert result.out_path is None
+    assert not list(tmp_path.rglob("*_校对批注版.docx"))
+
+
+@PANDOC_REQUIRED
+def test_build_docx_unescapes_v2_marker_fields_without_leaking_backslashes(tmp_path, monkeypatch):
+    """P3 转义边界走完 Word：原文含竖线与标记括号时，正文与批注都必须是反转义后的内容。"""
+    paper, unit_name = _v2_material(tmp_path, monkeypatch, "甲|乙与【注】尾。",
+                                    phrase="甲|乙", replacement="甲或乙")
+    report = (paper / unit_name / "_校对报告.md").read_text(encoding="utf-8")
+    assert r"甲\|乙" in report, "写入侧必须转义竖线"
+
+    result = build_docx(str(paper))
+
+    assert result.ok
+    assert result.marker_count == result.anchor_count == 1
+    visible, commented = _word_text(result.out_path)
+    assert "甲|乙" in visible, "正文必须还原为源文字面（含竖线）"
+    assert "甲或乙" in commented, "批注必须是反转义后的「改为」内容"
+    assert "\\|" not in visible and "\\|" not in commented, "转义反斜杠不得泄漏到 Word"
+    assert "【注】" in visible
+
+
+def test_build_report_is_complete_only_when_every_unit_passed(tmp_path, monkeypatch):
+    """确定性链路验收：整卷 complete 只在所有必需单元通过时成立。"""
+    from jiaodui.report import build_report
+
+    paper, unit_name = _v2_material(tmp_path, monkeypatch, "前文\n编号：木板\n")
+
+    done = build_report(str(paper))
+    assert done.complete is True
+    assert done.failed == [] and done.unreviewed == []
+    assert os.path.isfile(done.out_path)
+    body = open(done.out_path, encoding="utf-8").read()
+    assert f"## {unit_name}" in body and "【1|木板|木块】" in body
+
+
+def test_build_report_marks_missing_unit_as_failed(tmp_path, monkeypatch):
+    """确定性链路验收：还有单元没交时 complete 为假，缺报告的单元记 failed。"""
+    from jiaodui.report import build_report
+
+    paper, unit_name = _v2_material(tmp_path, monkeypatch, "前文\n编号：木板\n", units=2)
+
+    result = build_report(str(paper))
+
+    assert result.complete is False
+    assert [item["unit"] for item in result.included] == [unit_name]
+    assert [item["unit"] for item in result.failed] == ["单元2"]
+    assert os.path.isfile(result.out_path), "ok 仍表示诊断文件已生成"
+
+
+def test_build_report_marks_submitted_but_unreviewed_unit(tmp_path, monkeypatch):
+    """确定性链路验收：提交了但没有当前版本父复核的单元记 unreviewed，整卷不算完成。"""
+    from jiaodui.report import build_report
+
+    paper, unit_name = _v2_material(tmp_path, monkeypatch, "前文\n编号：木板\n", review=False)
+
+    result = build_report(str(paper))
+
+    assert result.complete is False
+    assert [item["unit"] for item in result.unreviewed] == [unit_name]
+    assert result.failed == []
+    assert os.path.isfile(result.out_path)

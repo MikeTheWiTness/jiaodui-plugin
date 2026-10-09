@@ -114,6 +114,26 @@
 
 口径：双口径全量 **1103 passed / 0 failed / 5 skipped**（P6 第 2 项前 1100 + 5 skip）。
 
+## P6确定性链路验收：Word-v2 端到端 + 整卷 complete（第 1/3 项，已完成）
+
+计划 §0 记录「`6e89d0d` 的 Word-v2 端到端回归在实验分支缺失」，本批移植并按新契约重写。
+
+**为什么不能照搬**：归档那版跑在 `4c82e24`，当时 v2 报告不需要父复核，`build_docx(..., legacy_layout=True)` 直接生成即可。本分支的 M4 闸门（`docx_report.py:370-378`）要求 v2 单元**已登记且当前版本父复核 accepted**，`legacy_layout=True` 时没有清单（`data is None`）→ `current_review=False` → 单元被正确排除。照搬会得到「结构化建议尚无当前版本的父代理复核」的假失败。因此重写为完整链：`convert → split → execution-policy → unit-submit（登记）→ unit-review（accepted）→ build-docx`。
+
+**新增用例（`tests/test_docx_report.py`，9 例）**
+- `test_report_marker_count_handles_v2_body_heading_and_legacy_report`：正文自带 `### 修改原因` 时，`_report_marker_counts` / `_is_included_unit` 仍按共用分节解析计数（v2 与旧报告各一例）。
+- `test_build_docx_accepts_v2_after_submit_and_parent_review`：走完整链后 `build_docx` 成功；`marker_count == anchor_count == 1`，`heading_comment_count/missing_count/over_count == 0`；Word 正文含原文「木板」、批注含「木块」与原因；**v2 正文字面保留**（`修改原因`、`编号：木板` 均在正文里，`jiaodui-body` 信封标记不泄漏）。
+- `test_build_docx_excludes_v2_without_current_review`：提交但未复核 → 单元被排除、原因含「父代理复核」、不产出 docx。
+- `test_build_docx_unescapes_v2_marker_fields_without_leaking_backslashes`：**P3 转义边界走完 Word**——源文含竖线与标记括号（`甲|乙与【注】尾。`），报告写入侧确实含 `甲\|乙`，Word 正文还原为 `甲|乙`、批注为 `甲或乙`，且 `\|` 不泄漏到正文或批注。
+- `test_build_docx_legacy_requires_reasons_and_strips_decorations`（2 参数）：旧报告仍走兼容清理（`编号：`/`内容：` 不进正文），缺原因则整单元排除且不产出 docx。
+- 整卷闸门三条：`test_build_report_is_complete_only_when_every_unit_passed`（1 单元通过 → `complete=true`，拼入正文含 `## 单元名` 与标记）、`test_build_report_marks_missing_unit_as_failed`（2 单元只交 1 个 → `complete=false`，缺报告的单元记 `failed`，`ok` 仅表示诊断文件已生成）、`test_build_report_marks_submitted_but_unreviewed_unit`（提交未复核 → `complete=false`，记 `unreviewed`）。
+
+**顺带确认的两条语义**（写进用例，避免以后再猜）：材料单元集与磁盘不一致是**硬错误** `unit-set-mismatch`（带 `.superseded/<run_id>/` 提示），不是 `complete=false`；`unreviewed`（已提交未复核）与 `failed`（本轮无报告）是两个不同桶。
+
+**操作口径修正（本批踩到）**：`pyproject.toml` 的 `addopts` 已含 `-q`，若命令行再加 `-q` 会变成 `-qq`——pytest 9 的 `-qq` 会**连汇总行一起吞掉**，看起来全绿却没有数字。规范调用：默认口径用 `python -m pytest`（不要另加 `-q`），CI 口径用 `python -m pytest -o addopts='' -q -rs`；批次口径从本批起同时记录 `--collect-only` 总数，便于核对新增例数。
+
+测试与口径：本批新增 **9 例**（`tests/test_docx_report.py` collect 92 → 101；全量 1108 → 1117）。双口径执行均 **1112 passed / 0 failed / 5 skipped / 4 subtests**（1112 + 5 = 1117 = collect 总数，自洽；5 个 skip 仍是工作树路径相关的旧语料/回归样本）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
@@ -128,6 +148,6 @@
 
 ## 未完成与交付限制
 
-- 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**；**P6 第 2 项（两个失败单元根因 + 回归）已完成**，余下 P6 的两块按用户 6C 决定执行——① 确定性链路验收（合成材料 e2e：P3 转义边界 + Word v2 端到端结构计数 + `complete` 判定；计划 §0 记录 Word-v2 端到端回归在实验分支缺失，须补）；② 最小真实校对 1–2 个单元（图片证据型 + 转义边界型，需用户授权范围）。再往后是实际安装方式与新会话父子 catalog（P2）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
+- 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**；**P6 第 2 项（两个失败单元根因 + 回归）已完成**，**P6 确定性链路验收已完成**（P3 转义边界走完 Word + Word-v2 端到端结构计数 + 整卷 `complete` 三态）；余下 P6 一块按用户 6C 决定执行——最小真实校对 1–2 个单元（图片证据型 + 转义边界型，需用户授权范围）。再往后是实际安装方式与新会话父子 catalog（P2）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。
