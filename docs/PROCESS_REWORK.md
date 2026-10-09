@@ -187,6 +187,17 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 新增 `docs/NEXT-SESSION-BRIEF.md`：自包含交接（会话设置、任务一 8 条验收的重点四条、任务二两个单元的 task/unit id 与要求、禁止事项、做完后写哪里），使新会话不需要上一个会话的上下文即可开工。
 
+### P2 中不依赖宿主会话的那条已验收：真实安装方式（wheel / pipx 路径）
+
+插件在找不到 CLI 时提示「pipx install <jiaodui wheel>」，所以分发路径必须独立验证，不能只验 editable：
+
+- `python -m build --wheel` 成功产出 `jiaodui-0.1.0-py3-none-any.whl`（194 KB，51 个条目）。内容核对：核心模块齐全（含分支新增的 `error_classification.py`、`review.py`、`report_suggestions.py`、`source_index.py`、`unit_delivery.py`、`unit_reader.py`），**包数据 `jiaodui/data/subjects/高中物理.json` 与 `py.typed` 都在**（包数据漏装是常见打包缺陷，这条证明没有）。
+- 装入全新的 `python3.12 -m venv` 后：`import jiaodui` → **site-packages**（不是仓库），控制台脚本 `jiaodui` 可用，`check-env` → `ok=true`。
+- **判别器**：同一 venv 里 `jiaodui --json dispatch-plan --task-id 236927c8…` 返回 `ok=true, dispatch=['单元3','单元4']`——分支独有命令可用，证明 wheel 里装的是**分支 core**。
+- 优雅降级：该 venv 未装 matplotlib，`matplotlib_available()` 返回 `False` 且不抛异常，符合「render 依赖缺失时优雅降级」的约定。
+
+尚未验收（需宿主会话）：父/子 catalog、skill 挂载、`read_image` 实读、零 shell 真实校对、停止语义。
+
 口径：本批只加文档，未改 `jiaodui/` 代码；双口径仍为 **1112 passed / 0 failed / 5 skipped / 4 subtests**。
 
 ## 安全复核
