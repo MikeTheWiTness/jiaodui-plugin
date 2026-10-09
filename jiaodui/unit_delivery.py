@@ -12,7 +12,7 @@ from . import material
 from .errors import BusinessError, NotFoundError
 from .paths import data_path, find_source_md, report_path
 from .report_parse import parse_proofread_md, split_sections
-from .report_suggestions import ReportCandidate, render_suggestions
+from .report_suggestions import ReportCandidate, extract_body, render_suggestions
 from .verify import verify_report_text, verify_unit
 from .workdir import ensure_inside
 
@@ -54,7 +54,7 @@ def _snapshot(root: Path, unit: Path) -> dict:
         "inputs": inputs,
         "input_digest": _canonical_hash(inputs),
         "source_sha256": material.sha256(source),
-        "body_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+        "body_sha256": hashlib.sha256(extract_body(source_text).encode("utf-8")).hexdigest(),
         "report_sha256": material.sha256(report) if report.is_file() else None,
         "data_sha256": material.sha256(data_file) if data_file.is_file() else None,
     }
@@ -82,7 +82,8 @@ def _candidate(root: Path, unit: Path, snapshot: dict, proposal: dict) -> tuple[
                                        expected_task_id=snapshot["task_id"],
                                        expected_unit_id=snapshot["unit_id"],
                                        expected_run_id=snapshot["run_id"],
-                                       calc_calls=data["runs"][-1].get("calc_calls", []))
+                                       calc_calls=data["runs"][-1].get("calc_calls", []),
+                                       expected_source_sha256=snapshot["source_sha256"])
     except ValueError as exc:
         raise BusinessError(str(exc), code=getattr(exc, "code", "proposal-invalid")) from exc
     verdict = verify_report_text(candidate.text, source_text)
@@ -91,7 +92,8 @@ def _candidate(root: Path, unit: Path, snapshot: dict, proposal: dict) -> tuple[
                             details={"errors": [item.to_dict() for item in verdict.errors]})
     _, marked_body, _ = split_sections(candidate.text)
     from .markers import split_marked_body
-    if marked_body is None or split_marked_body(marked_body) != source_text:
+    if (marked_body is None
+            or split_marked_body(marked_body, escaped=True) != source_text):
         raise BusinessError("生成报告无法逐字恢复源文", code="report-restore-mismatch")
     parsed = parse_proofread_md(candidate.text)
     if parsed is None:

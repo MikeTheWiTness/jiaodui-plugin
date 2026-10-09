@@ -8,9 +8,21 @@ from typing import Any
 from . import markers
 from .source_index import LocationError, resolve_location, source_digest
 
-REPORT_V2_PREFIX = "<!-- jiaodui-report-v2 -->"
-BODY_END = "<!-- jiaodui-body-end -->"
+# 封套常量定义在 markers（最低层，供语法/审计/转义共用），这里保持既有导入面。
+REPORT_V2_PREFIX = markers.REPORT_V2_PREFIX
+BODY_END = markers.BODY_END
 _SEVERITY_RANK = {"轻微问题": 1, "一般问题": 2, "严重错误": 3}
+
+
+def extract_body(source_text: str) -> str:
+    """提取单元源文中的**正文**；正文之外的部分（信封）不参与报告还原。
+
+    ADR 0006 §6/§7：v2 正文当前就是源文全文——实测回放材料与冻结语料里没有一份
+    源文含 `## 前置参考` 之类的信封行，那些装饰只存在于 v1 报告里。这里保留唯一的
+    正文提取点：将来若真要引入源文侧信封（例如导入器写死的抬头），只改这一处，
+    CAS 契约、`body_sha256` 语义与所有调用方都不必动。
+    """
+    return source_text
 _REQUIRED_KEYS = {
     "schema_version", "task_id", "unit_id", "run_id", "source_sha256", "body_sha256",
     "proposal_revision", "summary", "corrections", "evidence",
@@ -180,8 +192,14 @@ def _error(code: str, message: str) -> SuggestionError:
 
 def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str,
                        expected_unit_id: str, expected_run_id: str,
-                       calc_calls: list[dict] | None = None) -> ReportCandidate:
-    """校验建议并从不可变源文生成报告全文；不读写文件。"""
+                       calc_calls: list[dict] | None = None,
+                       expected_source_sha256: str | None = None) -> ReportCandidate:
+    """校验建议并从不可变源文生成报告全文；不读写文件。
+
+    两个摘要分别校验（ADR 0006 §7）：`source_sha256` 绑定源文**文件字节**
+    （由调用方经 `expected_source_sha256` 传入，缺省退回正文摘要以兼容直接调用），
+    `body_sha256` 绑定**正文文本**。诊断因此能指出到底哪一项对不上。
+    """
     if not isinstance(payload, dict) or set(payload) - _ALLOWED_KEYS or not _REQUIRED_KEYS <= set(payload):
         raise _error("proposal.schema", "建议字段缺失或包含未支持字段")
     if (type(payload.get("schema_version")) is not int or payload["schema_version"] != 2
@@ -198,11 +216,16 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
     corrections = payload["corrections"]
     _validate_self_check(payload.get("self_check"), has_corrections=bool(corrections))
 
-    digest = source_digest(source_text)
-    if payload.get("source_sha256") != digest or payload.get("body_sha256") != digest:
-        raise _error("proposal.source-mismatch", "建议绑定的源文摘要已失效")
-    if markers.INLINE_MARKER_CAPTURE_RE.search(source_text):
-        raise _error("proposal.source-markers", "源文含契约标记语法，当前报告格式无法无损区分")
+    body_text = extract_body(source_text)
+    if not body_text.strip():
+        raise _error("proposal.empty-body",
+                     "单元源文没有正文（仅空白），不能生成空报告；该单元应按 skip 处理")
+    body_digest = source_digest(body_text)
+    if payload.get("body_sha256") != body_digest:
+        raise _error("proposal.source-mismatch", "建议绑定的正文摘要已失效（body_sha256 不匹配）")
+    file_digest = expected_source_sha256 if expected_source_sha256 is not None else source_digest(source_text)
+    if payload.get("source_sha256") != file_digest:
+        raise _error("proposal.source-mismatch", "建议绑定的源文文件摘要已失效（source_sha256 不匹配）")
     corrections = payload.get("corrections")
     if not isinstance(corrections, list):
         raise _error("proposal.corrections", "corrections必须为数组")
@@ -215,7 +238,7 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
     evidence_ids = _validate_first_pass_evidence(payload["evidence"])
     evidence_ids |= _validate_calculation_evidence(
         payload["evidence"], calc_calls, task_id=expected_task_id, unit_id=expected_unit_id,
-        run_id=expected_run_id, source_sha256=digest)
+        run_id=expected_run_id, source_sha256=file_digest)
     resolved: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for item in corrections:
@@ -229,10 +252,7 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
                 or not isinstance(item["replacement"], str)
                 or item["replacement"] == item["expected_original"]):
             raise _error("proposal.no-op", "原文必须非空且修改后内容不能与原文相同")
-        if any(token in item["expected_original"] for token in ("|", "【", "】")):
-            raise _error("proposal.marker-unrepresentable", "原文含当前标记语法无法无损编码的括号或竖线")
-        if any(token in item["replacement"] for token in ("【", "】")):
-            raise _error("proposal.marker-unrepresentable", "修改后内容含当前标记语法无法编码的标记括号")
+        # ADR 0006：竖线与标记括号由写入侧转义承载，不再拒绝（可表达字符集只看编码）
         if not isinstance(item["reason"], str) or not item["reason"].strip():
             raise _error("proposal.reason", "每项修改必须提供原因")
         if not isinstance(item["category"], str) or not item["category"]:
@@ -246,7 +266,9 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
         if not isinstance(item["location_id"], str):
             raise _error("proposal.location", "location_id必须为字符串")
         try:
-            span = resolve_location(source_text, digest, item["location_id"], item["expected_original"])
+            # 位置索引由调用方按源文文本摘要生成，这里必须用同一份文本摘要校验
+            span = resolve_location(source_text, source_digest(source_text),
+                                    item["location_id"], item["expected_original"])
         except LocationError as exc:
             raise _error(exc.code, str(exc)) from exc
         from .source_index import _safe_span
@@ -271,13 +293,14 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
     numbered: list[dict[str, Any]] = []
     for number, item in enumerate(resolved, 1):
         chunks.extend((source_text[cursor:item["start"]],
-                       f"【{number}|{item['expected_original']}|{item['replacement']}】"))
+                       f"【{number}|{markers.escape_marker_field(item['expected_original'])}"
+                       f"|{markers.escape_marker_field(item['replacement'])}】"))
         cursor = item["end"]
         reasons.append(f"{number}. {item['reason'].strip()}")
         numbered.append({**item, "number": number})
     chunks.append(source_text[cursor:])
     marked_body = "".join(chunks)
-    if markers.split_marked_body(marked_body) != source_text:
+    if markers.split_marked_body(marked_body, escaped=True) != source_text:
         raise _error("proposal.restore-mismatch", "标记正文不能逐字恢复为原始源文")
 
     normalized_body = marked_body.replace("\r\n", "\n").replace("\r", "\n")
@@ -288,7 +311,7 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
               f"{marked_body}\n{BODY_END}\n### 修改原因\n"
               f"{'\n'.join(reasons) if reasons else '无'}\n\n{evidence_note}\n")
     proposal_bytes = json_bytes(payload)
-    return ReportCandidate(report, payload["summary"], tuple(numbered), digest,
+    return ReportCandidate(report, payload["summary"], tuple(numbered), file_digest,
                            hashlib.sha256(proposal_bytes).hexdigest())
 
 

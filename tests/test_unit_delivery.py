@@ -138,3 +138,99 @@ def test_bad_proposal_never_mutates_existing_files(tmp_path, monkeypatch):
     with pytest.raises(BusinessError):
         commit_unit_submission(data["task_id"], unit_id, invalid, fresh["snapshot_sha256"])
     assert [(unit / name).read_bytes() for name in ("_校对报告.md", "_校对数据.json")] == before
+
+
+def _prepare_special(tmp_path, monkeypatch, source_text: str, phrase: str):
+    """为「含标记特殊字符的源文」准备一次真实提交现场（复用与 _prepared 相同的装配）。"""
+    from pathlib import Path
+
+    from jiaodui.paths import find_source_md
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source = tmp_path / "lesson.md"
+    source.write_text(source_text, encoding="utf-8")
+    # clean=False：讲义清理会去表格竖线，本用例要保留源文字面的 `|`
+    converted = convert_material(source, material_name="特殊字符", mode="lecture")
+    split = split_material(converted.raw_md, subject="高中物理", mode="lecture",
+                           strategy="none", clean=False)
+    root = workspace / "校对" / "特殊字符"
+    material.set_execution_policy(root, "automatic", "user")
+    data = material.load(root)
+    unit_id = data["unit_ids"][data["unit_set"][0]]
+    unit = Path(split.unit_dirs[0])
+    text = find_source_md(unit).read_bytes().decode("utf-8")
+    located = query_locations(text, hashlib.sha256(text.encode()).hexdigest(), phrase)[-1]
+    return data, unit_id, unit, text, located
+
+
+def test_submission_round_trips_marker_special_characters(tmp_path, monkeypatch):
+    """ADR 0006 集成：含竖线/标记括号/反斜杠的源文经 unit-submit 后逐字恢复且登记成功。"""
+    source_text = "第一段：甲|乙 与【注】 和反斜杠\\尾。\n\n第二段：结尾。\n"
+    data, unit_id, unit, text, located = _prepare_special(
+        tmp_path, monkeypatch, source_text, "甲|乙")
+    proposal = {
+        "schema_version": 2,
+        "task_id": data["task_id"],
+        "unit_id": unit_id,
+        "run_id": data["current_run_id"],
+        "source_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "body_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "proposal_revision": 1,
+        "summary": "一般问题",
+        "corrections": [{
+            "id": "c1", "location_id": located["location_id"],
+            "expected_original": located["original"], "replacement": "甲或乙",
+            "reason": "并集写法不一致。", "category": "term",
+            "severity": "一般问题", "evidence_ids": ["e1"],
+        }],
+        "evidence": {
+            "assumptions": [{"id": "e1", "text": "按源文核对。", "source_locations": []}],
+            "symbols": [],
+            "images": {"status": "not_applicable", "reason": "合成材料无图"},
+            "calculations": {"status": "not_applicable", "reason": "无数值或公式核验"},
+        },
+        "self_check": {"status": "passed", "checks": ["real_issue", "replacement_semantics",
+                         "related_coverage", "scope_and_uncertainty", "severity"], "unresolved": []},
+    }
+    snapshot = read_unit_snapshot(data["task_id"], unit_id)
+    result = commit_unit_submission(data["task_id"], unit_id, proposal,
+                                    snapshot["snapshot_sha256"])
+    assert result["ok"] and result["registered"] and result["verified"]
+    report = (unit / "_校对报告.md").read_text(encoding="utf-8")
+    _, marked, _ = split_sections(report)
+    assert r"甲\|乙" in marked
+    assert split_marked_body(marked, escaped=True) == text
+    assert verify_unit(unit).ok
+
+
+def test_submission_rejects_empty_body(tmp_path, monkeypatch):
+    """空白正文的单元必须显式拒绝，不得登记出一份空报告（ADR 0006 §8）。"""
+    data, unit_id, unit, text, located = _prepare_special(
+        tmp_path, monkeypatch, "   \n\n", " ")
+    assert not text.strip()
+    proposal = {
+        "schema_version": 2,
+        "task_id": data["task_id"],
+        "unit_id": unit_id,
+        "run_id": data["current_run_id"],
+        "source_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "body_sha256": hashlib.sha256(text.encode()).hexdigest(),
+        "proposal_revision": 1,
+        "summary": "无问题",
+        "corrections": [],
+        "evidence": {
+            "assumptions": [{"id": "e1", "text": "无正文。", "source_locations": []}],
+            "symbols": [],
+            "images": {"status": "not_applicable", "reason": "合成材料无图"},
+            "calculations": {"status": "not_applicable", "reason": "无数值或公式核验"},
+        },
+        "self_check": {"status": "passed", "checks": ["no_issue_review"], "unresolved": []},
+    }
+    snapshot = read_unit_snapshot(data["task_id"], unit_id)
+    with pytest.raises(BusinessError) as error:
+        commit_unit_submission(data["task_id"], unit_id, proposal,
+                               snapshot["snapshot_sha256"])
+    assert error.value.code == "proposal.empty-body"
+    assert not (unit / "_校对报告.md").exists()

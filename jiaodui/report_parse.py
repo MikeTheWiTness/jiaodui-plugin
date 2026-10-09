@@ -14,7 +14,8 @@ import re
 import traceback
 
 from .log import log
-from .markers import INLINE_MARKER_CAPTURE_RE, INLINE_MARKER_DETECT_RE
+from .markers import (BODY_END, INLINE_MARKER_CAPTURE_RE, INLINE_MARKER_DETECT_RE,
+                      is_v2_report, unescape_marker_field)
 from .workdir import ensure_inside
 
 # 严重度总结词；未识别到任何一条时记为 UNSTATED，不冒充「无问题」
@@ -80,9 +81,7 @@ def _parse_marker_num(s: str) -> int:
 
 def split_sections(text: str) -> tuple[str, str | None, str | None]:
     """把报告切成 (头部, 标记原文段, 修改原因段)，兼容旧报告与v2封套。"""
-    from .report_suggestions import BODY_END, REPORT_V2_PREFIX
-
-    if text.startswith(REPORT_V2_PREFIX):
+    if is_v2_report(text):
         length_match = re.search(r"(?m)^<!-- jiaodui-body-length:(\d+):(\d+) -->\r?\n", text)
         if length_match is None:
             return text, None, None
@@ -191,7 +190,8 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
     head, marked_section, reasons_section = split_sections(text)
     if reasons_section is None:
         return None
-    if not text.startswith("<!-- jiaodui-report-v2 -->"):
+    escaped = is_v2_report(text)
+    if not escaped:
         marked_section = _strip_reference_preamble(marked_section or "")
     reasons = parse_reasons(reasons_section)
 
@@ -200,8 +200,10 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
 
     def _extract(marker):
         num = _parse_marker_num(marker.group(1))
-        orig = marker.group(2)
-        corr = marker.group(3).strip() if marker.group(3) else ""
+        # 进入内容语义：v2 字段必须反转义（ADR 0006 §4）
+        orig = unescape_marker_field(marker.group(2)) if escaped else marker.group(2)
+        raw_corr = marker.group(3)
+        corr = (unescape_marker_field(raw_corr) if escaped else raw_corr).strip() if raw_corr else ""
         if num not in seen_nums:
             seen_nums.add(num)
             corrections.append({

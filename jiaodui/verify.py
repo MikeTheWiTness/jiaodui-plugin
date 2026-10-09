@@ -109,18 +109,26 @@ def _line_of(text: str, needle: str, start: int = 0) -> str | None:
     return f"行 {line}"
 
 
-def _check_syntax(text: str, marked_section: str | None, issues: list[VerifyIssue]) -> None:
+def _check_syntax(text: str, marked_section: str | None, issues: list[VerifyIssue],
+                  *, escaped: bool = False) -> None:
+    """标记语法检查。`escaped=True`（v2）时先屏蔽字段内容，只看结构分隔符。
+
+    ADR 0006 §3/§5：v2 字段里的字面 `|`、`【`、`】` 由写入侧转义承载，
+    不是结构，不能参与括号配对与字段数判定；结构判定仍保持原有严格度。
+    """
     if marked_section is None:
         return
-    # 括号不配对
-    opens = marked_section.count("【")
-    closes = marked_section.count("】")
+    scan = M.mask_marker_fields(marked_section) if escaped else marked_section
+    # 括号不配对（只看结构括号）
+    opens = scan.count("【")
+    closes = scan.count("】")
     if opens != closes:
         issues.append(VerifyIssue(
             "syntax.unbalanced-brackets",
             f"标记括号不配对：【 出现 {opens} 次，】 出现 {closes} 次",
         ))
-    malformed = list(__import__("re").finditer(r"【\d+(?![|\d])", marked_section))
+    # 诊断片段从原始正文取，屏蔽只影响结构判定，不改变报错文字
+    malformed = list(__import__("re").finditer(r"【\d+(?![|\d])", scan))
     for m in malformed:
         snippet = marked_section[m.start():m.start() + 30].replace("\n", " ")
         issues.append(VerifyIssue(
@@ -129,15 +137,15 @@ def _check_syntax(text: str, marked_section: str | None, issues: list[VerifyIssu
             location=_line_of(text, marked_section[m.start():m.start() + 5]) or None,
         ))
     # 字段数：每个 【编号|原文|改为】 内未转义的竖线必须恰好 2 个
-    for block in __import__("re").finditer(r"【\d+[^】]*】", marked_section):
+    for block in __import__("re").finditer(r"【\d+[^】]*】", scan):
         body = block.group(0)[1:-1]  # 去掉首尾括号
         pipes = len(__import__("re").findall(r"(?<!\\)\|", body))
         if pipes != 2:
-            snippet = block.group(0)[:30].replace("\n", " ")
+            raw = marked_section[block.start():block.end()][:30].replace("\n", " ")
             issues.append(VerifyIssue(
                 "syntax.field-count",
-                f"标记字段数错误（应为 编号|原文|改为 三段，实数竖线分隔符 {pipes} 个）：{snippet}…",
-                location=_line_of(text, block.group(0)) or None,
+                f"标记字段数错误（应为 编号|原文|改为 三段，实数竖线分隔符 {pipes} 个）：{raw}…",
+                location=_line_of(text, marked_section[block.start():block.end()]) or None,
             ))
 
 
@@ -200,11 +208,11 @@ def _check_reasons(marked_section: str | None, reasons_section: str | None,
 
 
 def _check_marker_fields(marked_section: str | None, source_text: str | None,
-                         issues: list[VerifyIssue]) -> dict:
+                         issues: list[VerifyIssue], *, escaped: bool = False) -> dict:
     stats = {"empty_orig": 0, "noop": 0, "unknown": 0, "manual": 0, "restore_new": 0}
     if not marked_section:
         return stats
-    for audit in M.audit_markers(marked_section, source_text):
+    for audit in M.audit_markers(marked_section, source_text, escaped=escaped):
         if audit.verdict == M.MARKER_EMPTY_ORIG:
             stats["empty_orig"] += 1
             issues.append(VerifyIssue(
@@ -241,13 +249,17 @@ _UNKNOWN_TOKEN_RE = re.compile(r"\ue000U\d+\ue000")
 """unknown 标记字段的占位符：只让「落在该字段内」的差异被豁免。"""
 
 
-def _reconstruct_with_unknown_tokens(marked_section: str, unknown_nums: set[int]) -> str:
-    """重建正文：unknown 标记替换为占位符，其余标记还原为原文字段。"""
+def _reconstruct_with_unknown_tokens(marked_section: str, unknown_nums: set[int],
+                                     *, escaped: bool = False) -> str:
+    """重建正文：unknown 标记替换为占位符，其余标记还原为原文字段。
+
+    `escaped=True`（v2）时先反转义字段，重建结果才是 Word 实际渲染出的正文。
+    """
     def _repl(m: re.Match) -> str:
         num = int(m.group(1))
         if num in unknown_nums:
             return _UNKNOWN_TOKEN.format(num)
-        return m.group(2)
+        return M.unescape_marker_field(m.group(2)) if escaped else m.group(2)
 
     return M.INLINE_MARKER_CAPTURE_RE.sub(_repl, marked_section)
 
@@ -380,7 +392,7 @@ def _align_paragraphs(src_c: list[str], rep_c: list[str],
 
 
 def _check_integrity(text: str, marked_section: str | None, source_text: str | None,
-                     issues: list[VerifyIssue]) -> dict:
+                     issues: list[VerifyIssue], *, escaped: bool = False) -> dict:
     """全文逐段比对：缺段 / 重段 / 改变未标记正文 → 拒绝。
 
     - 空「标记原文」不再放行：源文有内容即判缺段；源文缺失/为空直接拒绝。
@@ -399,12 +411,12 @@ def _check_integrity(text: str, marked_section: str | None, source_text: str | N
             severity=ERROR))
         return stats
 
-    audits = M.audit_markers(body, source_text) if body else []
+    audits = M.audit_markers(body, source_text, escaped=escaped) if body else []
     unknown = [a for a in audits if a.verdict == M.MARKER_UNKNOWN]
     # 只有「公式字段」的 unknown 才替换为占位符；其余（含非公式 unknown）保留
     # 原文字面参与全文比对，避免因邻近公式的装饰差异丢掉普通标记的原文信息。
     exempt_nums = {a.num for a in unknown if _is_math_field(a)}
-    reconstructed = _reconstruct_with_unknown_tokens(body, exempt_nums)
+    reconstructed = _reconstruct_with_unknown_tokens(body, exempt_nums, escaped=escaped)
     src_paras = [p for p in _paragraphs(source_text) if p.strip()]
     rep_paras = [p for p in _paragraphs(reconstructed) if p.strip()]
     stats["source_paragraphs"] = len(src_paras)
@@ -450,17 +462,18 @@ def verify_report_text(text: str, source_text: str | None = None) -> VerifyResul
     issues = result.issues
 
     head, marked_section, reasons_section = split_sections(text)
-    if marked_section is not None and not text.startswith("<!-- jiaodui-report-v2 -->"):
+    escaped = M.is_v2_report(text)
+    if marked_section is not None and not escaped:
         # 旧报告允许剥离参考装饰；v2正文边界精确，不得把源文字面当装饰删除。
         marked_section = strip_reference_preamble(marked_section)
     summary_declared = _extract_summary(text)
 
     _check_sections(text, issues)
-    _check_syntax(text, marked_section, issues)
+    _check_syntax(text, marked_section, issues, escaped=escaped)
     result.summary = _check_severity(text, summary_declared, marked_section, issues)
     _check_reasons(marked_section, reasons_section, issues)
-    field_stats = _check_marker_fields(marked_section, source_text, issues)
-    integrity_stats = _check_integrity(text, marked_section, source_text, issues)
+    field_stats = _check_marker_fields(marked_section, source_text, issues, escaped=escaped)
+    integrity_stats = _check_integrity(text, marked_section, source_text, issues, escaped=escaped)
     result.marker_count = len(marker_numbers(marked_section or ""))
     result.stats = {**field_stats, **integrity_stats,
                     "markers": result.marker_count,

@@ -30,7 +30,8 @@ from .errors import BusinessError
 from .log import log
 from .image_utils import rewrite_inline_images
 from .markers import (INLINE_MARKER_CAPTURE_RE, MARKER_NOOP,
-                      MARKER_RESTORE_NEW, audit_markers)
+                      MARKER_RESTORE_NEW, audit_markers, is_v2_report,
+                      unescape_marker_field)
 from .markers import scan_math_spans as _scan_math_spans
 from .report_parse import parse_reasons, strip_reference_preamble
 
@@ -570,6 +571,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
         for qid, part in questions:
             mark_seg, reason_section = _report_sections(part)
             has_sections = reason_section is not None
+            # v2 报告的字段带转义（ADR 0006）：审计与渲染都必须先反转义
+            escaped = is_v2_report(part)
 
             # 无标记（【N|原|改】）即视为「无问题」单元：
             # - 无分段形态：LLM 判定无问题时只输出「无问题 + 工具日志 + 思考过程」；
@@ -605,12 +608,12 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
             body = mark_seg
             # 标记真实性审计必须在重写图片引用与 LaTeX 预处理之前做：
             # 审计要把「重建正文」与单元源文逐字比对，而这两步都会改写正文字面
-            audits = audit_markers(body, _read_unit_source(paper_path, qid))
+            audits = audit_markers(body, _read_unit_source(paper_path, qid), escaped=escaped)
             body = _rewrite_images(body, paper_path / qid, img_root, stats)
             body = _convert_multiline_tables(body)
             # 标记字段先摘出再预处理正文：字段里的 \[ 多为待修改的转义错误，
             # 套用正文的「\[…\] → $…$」还原会打乱字段内 $ 配对（见 _mask_markers）
-            body, marker_fields = _mask_markers(body)
+            body, marker_fields = _mask_markers(body, escaped=escaped)
             body = _preprocess_latex(body)
 
             # 行内公式区间（$...$ 配对），锚点落在公式内部的标记跳过——
@@ -894,7 +897,7 @@ def _strip_wrapping_fence(text: str) -> str:
     return "\n".join(lines)
 
 
-def _mask_markers(body: str) -> tuple[str, list[tuple[int, str, str]]]:
+def _mask_markers(body: str, *, escaped: bool = False) -> tuple[str, list[tuple[int, str, str]]]:
     """把内联标记整段摘成占位符，返回 (掩码文本, [(编号, 原文, 改为), ...])。
 
     标记字段必须与正文的 LaTeX 预处理隔离：字段里的 `\\[`、`\\]` 多半是待修改的
@@ -906,7 +909,10 @@ def _mask_markers(body: str) -> tuple[str, list[tuple[int, str, str]]]:
     fields: list[tuple[int, str, str]] = []
 
     def _sub(m):
-        fields.append((int(m.group(1)), m.group(2), m.group(3)))
+        # 字段进入「内容」语义：v2 报告先反转义（ADR 0006 §4）
+        original = unescape_marker_field(m.group(2)) if escaped else m.group(2)
+        replacement = unescape_marker_field(m.group(3)) if escaped else m.group(3)
+        fields.append((int(m.group(1)), original, replacement))
         return f"【MARKSLOT{len(fields) - 1}Z】"
 
     return _PAT.sub(_sub, body), fields

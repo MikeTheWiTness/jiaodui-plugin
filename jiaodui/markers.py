@@ -6,11 +6,28 @@
 2. XML 批注 <批注 id=N><原>…</原><改>…</改></批注>
 3. 内联校对标记 【编号|原文|改为】
 4. 标记真实性审计 audit_markers（重建正文与单元源文比对）
+
+v2 报告的无损编码（ADR 0006）：报告首行带 `<!-- jiaodui-report-v2 -->` 时，字段
+写入前用 `escape_marker_field` 转义、读出后用 `unescape_marker_field` 还原，
+因此原文/改为可以包含字面 `|`、`【`、`】` 与反斜杠。v1 报告不转义也不反转义。
 """
 from __future__ import annotations
 
 import re
 from typing import NamedTuple
+
+# ---- 0. 报告封套（v2 唯一的版本判据） ----
+
+REPORT_V2_PREFIX = "<!-- jiaodui-report-v2 -->"
+"""v2 报告首行封套标记；有无它就是转义与否的唯一判据（ADR 0006 §1）。"""
+
+BODY_END = "<!-- jiaodui-body-end -->"
+"""v2 报告正文结束标记；正文长度另由 `<!-- jiaodui-body-length:… -->` 精确记账。"""
+
+
+def is_v2_report(text: str) -> bool:
+    """报告全文是否 v2 封套（转义、精确正文边界与信封语义都以它为准）。"""
+    return bool(text) and text.startswith(REPORT_V2_PREFIX)
 
 # ---- 1. Word 批注结束令牌（docx 使用） ----
 
@@ -24,17 +41,19 @@ XML_ANNOTATION_RE = re.compile(r"<批注\s+id=(\d+)><原>(.*?)</原><改>(.*?)</
 
 # ---- 3. 内联校对标记 ----
 
-INLINE_MARKER_CAPTURE_RE = re.compile(r"【(\d+)\|((?:\\\||[^|])*)\|([^】]*?)】", re.DOTALL)
+INLINE_MARKER_CAPTURE_RE = re.compile(r"【(\d+)\|((?:\\[\s\S]|[^|])*)\|((?:\\[\s\S]|[^】])*?)】", re.DOTALL)
 """提取内联校对标记的三个字段（编号、原文、改为）。
 
-编号为阿拉伯数字；原文字段支持 LaTeX 转义竖线；re.DOTALL 支持跨行标记。
+编号为阿拉伯数字；re.DOTALL 支持跨行标记。两个字段都把「反斜杠 + 任意字符」当成
+一个整体，因此 v2 转义后的 `\\|` / `\\】` 不会终止字段（ADR 0006 §3）；v1 里未转义
+的 `|` / `】` 行为不变。
 """
 
 INLINE_MARKER_DETECT_RE = INLINE_MARKER_CAPTURE_RE
 """检测是否存在内联校对标记（与 CAPTURE 同源，带 DOTALL 支持跨行）。"""
 
-_MARKER_MASK_RE = re.compile(r"【\d+\|[^】]*】")
-"""屏蔽用：匹配整个内联标记 【N|原文|改为】，扫描公式时替换为等长无 $ 占位。"""
+_STRUCT_MARKER_START_RE = re.compile(r"【\d+\|")
+"""结构开括号 + 编号 + 第一个结构竖线：字段内容扫描的起点。"""
 
 _ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\u2060\ufeff]")
 """零宽字符：LLM 抄录源文时可能带入，定位比较前必须剥离。"""
@@ -81,6 +100,84 @@ class MarkerAudit(NamedTuple):
         return self.verdict not in (MARKER_NOOP, MARKER_EMPTY_ORIG)
 
 
+_FIELD_ESCAPE_TABLE = str.maketrans({"|": "\\|", "【": "\\【", "】": "\\】"})
+"""v2 字段转义表（反斜杠另行优先处理，不放进表里）。"""
+
+_ESCAPE_CHARS = "\\|【】"
+"""反转义可还原的字符集合；其余 `\\X` 原样保留。"""
+
+
+def escape_marker_field(text: str) -> str:
+    """v2 标记字段的写入侧转义：`\\` → `\\\\`，再 `|`/`【`/`】` 各加一个反斜杠。
+
+    顺序不可交换：必须先转义反斜杠，否则新引入的转义符会被再转一遍。
+    """
+    return text.replace("\\", "\\\\").translate(_FIELD_ESCAPE_TABLE)
+
+
+def unescape_marker_field(text: str) -> str:
+    """v2 标记字段的读取侧反转义，与 `escape_marker_field` 严格对称。
+
+    从左到右扫描：`\\` 后跟 `\\`、`|`、`【`、`】` 之一 → 还原该字符并跳过两位；
+    `\\` 后跟其他字符 → 反斜杠与该字符都原样保留（保护 `\\frac`、`\\mathrm` 等命令）。
+    """
+    if "\\" not in text:
+        return text
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n and text[i + 1] in _ESCAPE_CHARS:
+            out.append(text[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def mask_marker_fields(text: str) -> str:
+    """把标记字段内容替换为等长占位，只保留结构字符（`【`、编号、结构竖线、`】`）。
+
+    供语法检查与公式扫描使用。长度保持不变，因此调用方可以用同一偏移在原文字符串上
+    取诊断片段；转义序列（`\\X`）整体视为字段内容，含 `\\】` 的字段不会被提前截断。
+    没有标记时原样返回。
+    """
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "【":
+            i += 1
+            continue
+        match = _STRUCT_MARKER_START_RE.match(text, i)
+        if match is None:
+            i += 1
+            continue
+        j = match.end()  # 指向第一个结构竖线之后
+        end: int | None = None
+        while j < n:
+            ch = text[j]
+            if ch == "\\":
+                out[j] = "X"
+                if j + 1 < n:
+                    out[j + 1] = "X"
+                j += 2
+                continue
+            if ch == "】":
+                end = j
+                break
+            if ch != "|":
+                out[j] = "X"
+            j += 1
+        i = end + 1 if end is not None else n
+    return "".join(out)
+
+
+def _field(text: str, escaped: bool) -> str:
+    """按报告版本决定是否反转义字段。"""
+    return unescape_marker_field(text) if escaped else text
+
+
 def normalize_marker_field(text: str) -> str:
     """标记字段定位比较前的归一化：剥离零宽字符、转义美元还原为美元。
 
@@ -94,16 +191,20 @@ def _squeeze(text: str) -> str:
     return re.sub(r"\s+", "", normalize_marker_field(text))
 
 
-def split_marked_body(body: str) -> str:
+def split_marked_body(body: str, *, escaped: bool = False) -> str:
     """把标记插回各自「原文字段」，得到 Word 版默认渲染出的正文形状。
 
     用于标记审计（定位原文字段）与 verify-report 的原文完整性比对。
+    `escaped=True` 时先反转义字段（v2 报告）；v1 报告逐字回填，`\\|` 保持字面。
     """
+    if escaped:
+        return INLINE_MARKER_CAPTURE_RE.sub(
+            lambda m: unescape_marker_field(m.group(2)), body)
     return INLINE_MARKER_CAPTURE_RE.sub(lambda m: m.group(2), body)
 
 
 def audit_markers(body: str, source_text: str | None = None,
-                  win: int = MARKER_AUDIT_WINDOW) -> list[MarkerAudit]:
+                  win: int = MARKER_AUDIT_WINDOW, *, escaped: bool = False) -> list[MarkerAudit]:
     """逐个标记判定真实性：是否生成批注、正文该渲染哪一侧字段。
 
     判定依据是「重建正文」与单元源文的逐字比对。重建正文 = 把每个标记插回各自
@@ -117,6 +218,7 @@ def audit_markers(body: str, source_text: str | None = None,
 
     空原文字段与空操作（原文 == 改为）不依赖源文，源文缺失时依然判定。
     无法判定时不猜测：源文缺失一律返回 MARKER_UNKNOWN。
+    `escaped=True` 时字段先反转义再参与重建与定位（v2 报告，ADR 0006 §4）。
     """
     matches = list(INLINE_MARKER_CAPTURE_RE.finditer(body))
     if not matches:
@@ -129,10 +231,10 @@ def audit_markers(body: str, source_text: str | None = None,
     for m in matches:
         chunks.append(body[last:m.start()])
         cursor += m.start() - last
-        orig = m.group(2)
-        spans.append((cursor, cursor + len(orig)))
-        chunks.append(orig)
-        cursor += len(orig)
+        orig_field = _field(m.group(2), escaped)
+        spans.append((cursor, cursor + len(orig_field)))
+        chunks.append(orig_field)
+        cursor += len(orig_field)
         last = m.end()
     chunks.append(body[last:])
     reconstructed = "".join(chunks)
@@ -141,8 +243,8 @@ def audit_markers(body: str, source_text: str | None = None,
     audits: list[MarkerAudit] = []
     for m, (start, end) in zip(matches, spans):
         num = int(m.group(1))
-        orig = m.group(2)
-        new = m.group(3).strip()
+        orig = _field(m.group(2), escaped)
+        new = _field(m.group(3), escaped).strip()
         if not orig.strip():
             audits.append(MarkerAudit(num, orig, new, MARKER_EMPTY_ORIG))
             continue
@@ -174,7 +276,7 @@ def scan_math_spans(text: str) -> list[tuple[int, int]]:
     返回全文偏移（累计行偏移），与 re.Match.start() 对齐。
     转义美元不参与配对；标记字段内部的美元先屏蔽为等长占位，避免干扰公式配对。
     """
-    masked = _MARKER_MASK_RE.sub(lambda m: "【" + "X" * (len(m.group(0)) - 2) + "】", text)
+    masked = mask_marker_fields(text)
 
     def _escaped(s: str, i: int) -> bool:
         return i > 0 and s[i - 1] == chr(92)
