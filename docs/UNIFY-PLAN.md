@@ -141,7 +141,7 @@ main 删掉了 4 个核心模块与 6 个结构化测试文件；分支保留并
 | **B1 ✅** | 抽 `execution_policy.py`：把 `material.py` 内嵌的授权/预算/记账搬进纯模块；把 `error_classification` 的分类作为 `spend()` 之前的钩子；扣费采纳 M3（连带扣） | 现有 `test_execution_policy.py`/`test_workflow_milestones.py` 全绿 + 新增扣费语义测试；`material.py` 不再内嵌预算表 |
 | **B2 ✅** | 移植旧清单兼容：`_LEGACY_BUDGETS` 映射、`migrate_legacy_spent`、`test_policy_legacy_compat` 两条断言（旧清单可读但未授权；聚合预算按单元保守迁移） | 用工作区里 6 份 main 时期旧清单（`第 6 讲校对测试`、`第 6 讲校对测试-流程测试`、`-独立续测-02`、`-独立续测-03`、`_独立流程测试`、`_独立流程测试_重跑`；实测均无 `execution_policy`）验证：可读、不被授权、聚合预算按单元保守迁移 |
 | **B3 ✅** | 统一恢复契约：`attempt_id` 幂等 + `fingerprint` + `error_code`；CLI/插件/工具 schema 同步；`unit-event` 签名对齐 | 幂等用例（同 attempt 不重复扣、同指纹换 attempt 再扣、换指纹不重置）+ 现有机试用例 |
-| **B4** ⏳ | 文档归位：确认 main 独有文档在分支可得（合并不删）；在 `SKILL.md`/`operation-manual` 里补"兼容只读路径"的边界说明 | 入口 ≤8192 与链接回归全绿 |
+| **B4 ✅** | 文档归位：**验证批，无需改动**——main 独有文档（`PLAN-rework-continuation.md`、`M0.md`）只在 main、合并不删；「旧主链=只读兼容」的边界已写在手册（`verify-report`/`parse-report` 兼容读取、仅旧报告可用完整性辅助）与 SKILL（`--legacy-layout` 显式开关），且有代码强制（`report_repair` 的 `repair.v2-not-supported` + `--legacy-layout` 显式 opt-in） | 入口 8164 码点 <8192、两份副本一致、skill 与插件包测试 34 例绿 |
 
 Phase 1 全部在**分支**上做，main 不动。已完成 B1/B2/B3（见 `PROCESS_REWORK.md` 的对应批次记录）；B3 落地形态：`unit-recovery` 签名为 `--task-id --unit-id --attempt-id --fingerprint [--error-code | --category targeted_review] [--expected-run-id]`，幂等索引在 run 级 `recovery_attempts[unit][attempt_id]`（main 的幂等来自事件账本，分支的事件与预算账本分开，故另建索引，错误码沿用 main 的 `attempt-id-conflict`）。
 

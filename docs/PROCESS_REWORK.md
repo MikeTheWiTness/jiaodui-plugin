@@ -358,6 +358,22 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 
 **口径**：双口径均 **1126 passed / 0 failed / 5 skipped / 4 subtests**（B3 前 1119，+7 例）。
 
+## B4：文档归位（UNIFY-PLAN Phase 1 第 4 批，验证批）
+
+结论：**无需改动**。逐项核查如下（Phase 1 至此完成）。
+
+| 核查项 | 结果 |
+|---|---|
+| main 独有文档是否会在合并后保留 | `docs/PLAN-rework-continuation.md`、`docs/M0.md` 只在 main；分支没有 → 合并不会删，无需搬运 |
+| 「旧主链 = 只读兼容」是否写清 | 手册「只读与计算」：历史 Markdown 报告兼容读取（`verify-report` / `parse-report`），仅旧报告可用完整性辅助；SKILL 第 33 行：历史写入须显式 `--legacy-layout` 且仍限工作区内 |
+| 这条边界是否**有代码强制** | 有两条：① `report_repair.py` 对 v2 报告返回 `repair.v2-not-supported`（测试 `test_report_suggestions.py:133` 锁定）；② 旧布局必须显式 `--legacy-layout`（`cli.py`/`report.py`/`docx_report.py`/`material.py`/`workflow.py` 均按此开关分支） |
+| 入口预算与链接回归 | SKILL.md 8164 码点 < 8192；两份副本逐字节一致；`test_skill_docs.py` + `test_dsh_plugin_package.py` 34 例绿 |
+
+因此 B4 只留下"合并不删 main 独有文档"这一条，已作为 Phase 2 的裁决规则（§6 表末行）。
+
+**Phase 1 状态**：B1 ✅（纯策略模块 + 连带扣费）、B2 ✅（旧清单可读/未授权/保守迁移）、B3 ✅（`attempt_id` 幂等）、B4 ✅（文档归位验证）。分支口径 **1126 passed / 0 failed / 5 skipped / 4 subtests**（双口径）。
+下一步是 Phase 2：从 main 建 `integration/structured-into-main`，按 §6 + §6.1 裁决 28 处冲突与 19 处静默变更，裁决后立刻跑全量并做真机冒烟。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
