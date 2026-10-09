@@ -72,12 +72,31 @@ await assert.rejects(()=>tool.execute({args:['--help']},{}),/工作区/);
 apply(ctx,{command:'node',timeoutMs:150});
 result=await tool.execute({args:['-e','console.error("started");setInterval(()=>{},1000)']},exec);
 assert.equal(result.exitCode,-1);assert.match(result.stderr,/started/);assert.match(result.stderr,/timeout/);
-// 外部取消必须传播取消语义，不能包装成普通技术失败。
+// 外部 signal 中止可能来自用户、父代理或宿主；保留 AbortError，不猜来源。
+const assertHostAbort = error => {
+  assert.equal(error.name, 'AbortError');
+  assert.equal(error.message, 'jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录');
+  assert.doesNotMatch(error.message, /用户已取消/);
+  return true;
+};
 const cancelController = new AbortController();
 const cancelExec = {...exec, signal: cancelController.signal};
 const cancelPromise = tool.execute({args:['-e','setInterval(()=>{},1000)']},cancelExec);
-setTimeout(()=>cancelController.abort(),20);
-await assert.rejects(cancelPromise,/用户已取消/);
+setTimeout(()=>cancelController.abort('parent stopped child'),20);
+await assert.rejects(cancelPromise,assertHostAbort);
+// 派发前已中止：不得启动新子进程。
+const alreadyAborted = new AbortController();
+alreadyAborted.abort('host shutdown');
+const requestCount = requests.length;
+await assert.rejects(()=>tool.execute({args:['--help']},{...exec,signal:alreadyAborted.signal}),assertHostAbort);
+assert.equal(requests.length,requestCount);
+// done 已完成但宿主中止仍必须传播相同错误；不返回技术失败结果。
+const completionAbort = new AbortController();
+ctx.subprocess.spawn=()=>({collected:{},done:Promise.resolve().then(()=>{
+  completionAbort.abort('parent stopped collection');
+  return {exitCode:0};
+})});
+await assert.rejects(()=>tool.execute({args:['--help']},{...exec,signal:completionAbort.signal}),assertHostAbort);
 // reject 后仍读取完整收集结果，并延后读取截断标记。
 ctx.subprocess.spawn=()=>({collected:{stdout:{readFrom(){return {text:'partial',lossy:true}}},stderr:{readFrom(){return {text:'diagnostic',lossy:false}}}},done:Promise.reject(new Error('broken'))});
 result=await tool.execute({args:['--help']},exec);

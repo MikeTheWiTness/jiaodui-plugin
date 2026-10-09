@@ -136,7 +136,7 @@ export function apply(ctx, config = {}) {
       }
       if (!executable) throw new Error('jiaodui: 未找到 CLI，请使用 Python 3.12 的 pipx install <jiaodui wheel>，并安装 pandoc；可用 python3 -m jiaodui 诊断安装')
       if (exec?.signal?.aborted) {
-        const cancelled = new Error('jiaodui: 用户已取消')
+        const cancelled = new Error('jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录')
         cancelled.name = 'AbortError'
         throw cancelled
       }
@@ -160,7 +160,7 @@ export function apply(ctx, config = {}) {
       try {
         const outcome = await handle.done
         if (exec?.signal?.aborted) {
-          const cancelled = new Error('jiaodui: 用户已取消')
+          const cancelled = new Error('jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录')
           cancelled.name = 'AbortError'
           throw cancelled
         }
@@ -174,7 +174,7 @@ export function apply(ctx, config = {}) {
         }
       } catch (error) {
         if (exec?.signal?.aborted) {
-          const cancelled = new Error('jiaodui: 用户已取消')
+          const cancelled = new Error('jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录')
           cancelled.name = 'AbortError'
           throw cancelled
         }
