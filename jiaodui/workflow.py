@@ -437,3 +437,98 @@ def parse_unit(unit: str | Path, *, source: str | Path | None = None,
         material.register(root, unit, text, data["current_run_id"])
     return {"ok": True, "data": str(data_path(unit)), "verified": verdict.ok,
             "legacy": bool(legacy and not verdict.ok), "registered": root is not None}
+
+
+def _current_unit_root(unit: str | Path, expected_run_id: str) -> tuple[Path, Path]:
+    if not expected_run_id:
+        raise UsageError("必须指定 expected_run_id，防止迟到写入新轮次")
+    unit = input_path(unit)
+    root = material.find_material(unit)
+    if root is None:
+        raise BusinessError("找不到已登记材料", code="manifest-required")
+    data = material.load(root)
+    paper = material.check_units(root, data)
+    if unit.parent != paper or unit.name not in data["unit_set"]:
+        raise BusinessError("单元路径未登记在材料清单", code="unit-path-mismatch")
+    if data["current_run_id"] != expected_run_id:
+        raise BusinessError("轮次已改变，拒绝迟到的单元写入", code="run-changed")
+    return root, unit
+
+
+def set_execution_policy(unit: str | Path, *, mode: str, origin: str,
+                         expected_run_id: str) -> dict:
+    from .execution_policy import new_policy
+
+    root, _ = _current_unit_root(unit, expected_run_id)
+    with material.locked(root):
+        data = material.load(root)
+        if data["current_run_id"] != expected_run_id:
+            raise BusinessError("轮次已改变，拒绝迟到的策略写入", code="run-changed")
+        run = data["runs"][-1]
+        current = run.get("execution_policy")
+        if current and current["mode"] == mode and current["origin"] == origin:
+            return current
+        policy = new_policy(mode=mode, origin=origin, confirmed_at=material.now())
+        if current:
+            policy["spent"] = dict(current["spent"])
+        run["execution_policy"] = policy
+        material.write(root, data)
+        return policy
+
+
+def record_unit_event(unit: str | Path, *, phase: str, event: str,
+                      expected_run_id: str, source: str | None = None,
+                      category: str | None = None) -> dict:
+    from .execution_policy import new_policy, spend
+
+    root, unit = _current_unit_root(unit, expected_run_id)
+    if not phase.strip() or not event.strip():
+        raise UsageError("phase 与 event 不能为空")
+    if source in {"user_cancel", "cancel", "permission_denied", "permission"} and category is not None:
+        raise BusinessError("用户取消与权限拒绝事件不能消耗恢复预算", code="recovery-forbidden",
+                            details={"source": source, "phase": phase})
+    key = {"unit": unit.name, "phase": phase, "event": event,
+           "source": source, "category": category}
+    with material.locked(root):
+        data = material.load(root)
+        if data["current_run_id"] != expected_run_id:
+            raise BusinessError("轮次已改变，拒绝迟到的单元事件", code="run-changed")
+        run = data["runs"][-1]
+        events = run.setdefault("unit_events", [])
+        for previous in events:
+            if all(previous.get(name) == value for name, value in key.items()):
+                return {**key, "at": previous["at"]}
+        policy = run.setdefault("execution_policy", new_policy(confirmed_at=run["started_at"]))
+        if category is not None:
+            spend(policy, category)
+        record = {**key, "at": material.now()}
+        events.append(record)
+        material.write(root, data)
+        return record
+
+
+def recover_unit(unit: str | Path, *, source: str, phase: str,
+                 expected_run_id: str) -> dict:
+    from .execution_policy import spend
+
+    if source in {"user_cancel", "cancel", "permission_denied", "permission"}:
+        raise BusinessError("用户取消与权限拒绝不得自动恢复", code="recovery-forbidden",
+                            details={"source": source, "phase": phase})
+    if source not in {"technical_crash", "timeout", "rate_limit"}:
+        raise UsageError("恢复来源只允许 technical_crash / timeout / rate_limit")
+    root, unit = _current_unit_root(unit, expected_run_id)
+    with material.locked(root):
+        data = material.load(root)
+        if data["current_run_id"] != expected_run_id:
+            raise BusinessError("轮次已改变，拒绝迟到的恢复", code="run-changed")
+        run = data["runs"][-1]
+        from .execution_policy import new_policy
+        policy = run.setdefault("execution_policy", new_policy(confirmed_at=run["started_at"]))
+        spend(policy, "unit_recovery")
+        spend(policy, "technical_retry")
+        run.setdefault("unit_events", []).append({
+            "unit": unit.name, "phase": phase, "event": "recovery_started",
+            "source": source, "category": "unit_recovery", "at": material.now(),
+        })
+        material.write(root, data)
+        return run["unit_events"][-1]

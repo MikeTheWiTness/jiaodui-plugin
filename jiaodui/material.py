@@ -105,6 +105,25 @@ def validate(root: Path, data: dict) -> dict:
                 or run["status"] not in {"in_progress", "completed", "superseded"}):
             _invalid("轮次记录无效", root)
         ids.append(run["run_id"])
+        from .execution_policy import validate_policy
+        if "execution_policy" in run and not validate_policy(run["execution_policy"]):
+            _invalid("轮次执行策略无效", root)
+        if "unit_events" in run:
+            events = run["unit_events"]
+            if (not isinstance(events, list) or any(
+                    not isinstance(event, dict)
+                    or set(event) - {"unit", "phase", "event", "source", "category", "at"}
+                    or event.get("unit") not in names
+                    or not isinstance(event.get("phase"), str) or not event["phase"]
+                    or not isinstance(event.get("event"), str) or not event["event"]
+                    or not isinstance(event.get("at"), str) or not event["at"]
+                    or (event.get("source") is not None and not isinstance(event["source"], str))
+                    or (event.get("category") is not None and (
+                        not isinstance(event["category"], str) or event["category"] not in {
+                            "entry_question", "call_correction", "report_correction", "unit_recovery",
+                            "technical_retry", "calculation_correction"}))
+                    for event in events)):
+                _invalid("轮次单元事件无效", root)
         for r in run["resources"]:
             resource(r)
     if len(set(ids)) != len(ids) or not ids or data["current_run_id"] != ids[-1]:
@@ -216,8 +235,11 @@ def new_run(data: dict, params: dict, associated: list[dict]) -> str:
     data["current_run_id"] = run_id
     data["params"] = params
     data["resources"] = associated
-    data["runs"].append({"run_id": run_id, "started_at": now(), "status": "in_progress",
-                         "params": params, "resources": associated, "actions": []})
+    started_at = now()
+    from .execution_policy import new_policy
+    data["runs"].append({"run_id": run_id, "started_at": started_at, "status": "in_progress",
+                         "params": params, "resources": associated, "actions": [],
+                         "execution_policy": new_policy(confirmed_at=started_at), "unit_events": []})
     return run_id
 
 

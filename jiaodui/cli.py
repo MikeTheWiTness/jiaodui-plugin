@@ -321,6 +321,32 @@ def cmd_build_report(args: argparse.Namespace) -> int:
     return ExitCode.OK
 
 
+def cmd_execution_policy(args: argparse.Namespace) -> int:
+    from .workflow import set_execution_policy
+    payload = {"ok": True, "execution_policy": set_execution_policy(
+        args.unit, mode=args.mode, origin=args.origin, expected_run_id=args.expected_run_id)}
+    _json_out(payload)
+    return ExitCode.OK
+
+
+def cmd_unit_event(args: argparse.Namespace) -> int:
+    from .workflow import record_unit_event
+    payload = {"ok": True, "event": record_unit_event(
+        args.unit, phase=args.phase, event=args.event, source=args.source,
+        category=args.category, expected_run_id=args.expected_run_id)}
+    _json_out(payload)
+    return ExitCode.OK
+
+
+def cmd_unit_recovery(args: argparse.Namespace) -> int:
+    from .workflow import recover_unit
+    payload = {"ok": True, "recovery": recover_unit(
+        args.unit, source=args.source, phase=args.phase,
+        expected_run_id=args.expected_run_id)}
+    _json_out(payload)
+    return ExitCode.OK
+
+
 def cmd_build_docx(args: argparse.Namespace) -> int:
     from .docx_report import build_docx
 
@@ -464,6 +490,30 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("paper_dir")
     sp.add_argument("--out-dir")
     sp.set_defaults(func=cmd_build_docx)
+
+    sp = sub.add_parser("execution-policy", help="记录当前轮次执行模式与确认来源")
+    sp.add_argument("--unit", required=True)
+    sp.add_argument("--mode", required=True, choices=["automatic", "interactive"])
+    sp.add_argument("--origin", required=True, choices=["user", "confirmed"])
+    sp.add_argument("--expected-run-id", required=True)
+    sp.set_defaults(func=cmd_execution_policy)
+
+    sp = sub.add_parser("unit-event", help="记录当前轮次单元阶段事件")
+    sp.add_argument("--unit", required=True)
+    sp.add_argument("--phase", required=True)
+    sp.add_argument("--event", required=True)
+    sp.add_argument("--source")
+    sp.add_argument("--category", choices=["entry_question", "call_correction", "report_correction",
+                                            "unit_recovery", "technical_retry", "calculation_correction"])
+    sp.add_argument("--expected-run-id", required=True)
+    sp.set_defaults(func=cmd_unit_event)
+
+    sp = sub.add_parser("unit-recovery", help="按当前轮次预算记录单元恢复")
+    sp.add_argument("--unit", required=True)
+    sp.add_argument("--source", required=True)
+    sp.add_argument("--phase", required=True)
+    sp.add_argument("--expected-run-id", required=True)
+    sp.set_defaults(func=cmd_unit_recovery)
 
     # 每个子命令都接受 --json / --quiet（默认 SUPPRESS，保留顶层取值）
     for sp in sub.choices.values():

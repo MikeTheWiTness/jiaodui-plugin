@@ -1,6 +1,6 @@
 # 失败模式与自修指引
 
-`verify-report` 的每个失败都带结构化 code 与位置。子 agent 拿到原因后**只改 `_校对报告.md`**，改完重跑 `jiaodui verify-report --unit <dir>`，**自修 ≤3 轮**；仍不过写 `_校对失败.md`，不阻塞批次。通用自修动作：按报错编号定位 → 修正 → 重跑；不要为了过闸门而删改真实发现（057 教训）。
+`verify-report` 的每个失败都带结构化 code 与位置。子 agent 拿到原因后只改 `_校对报告.md`，按 `report_correction` 预算最多机械修正 3 次，改完重跑 `jiaodui verify-report --unit <dir>`；仍不过写 `_校对失败.md`，不阻塞批次。通用动作：按报错编号定位 → 不改变题意地修正 → 重跑；不要为了过闸门而删改真实发现（057 教训）。工具参数/schema 的机械修正最多 2 次并记 `call_correction`，read_image schema 修正也计入此预算、不附加额外次数；计算输入的机械修正最多 2 次并记 `calculation_correction`。实质性判断争议在 interactive 模式询问用户。用户取消与权限拒绝不恢复、不重派，立即停止并留痕。
 
 ## 一、格式型失败（最常见）
 | 症状（code / 现象） | 自修动作 |
@@ -56,7 +56,9 @@
 | `edit` 报旧文本未匹配 | 先读取当前报告，使用唯一且逐字一致的 `old_string`；匹配失败即停止并留痕，不猜测替换文本或继续登记 |
 | Harness `run_code` 外层参数校验失败（如 `invalid justification`） | 内层程序和工具尚未执行；按当前外层 schema 检查必填字段，`justification` 用非空完整句子。保留完整错误并注明实际阶段；用户要求遇错即停时不重试，也不记作 CLI 执行失败 |
 | 找不到单元源文（`integrity.no-source`，**error → 拒绝**） | 确认单元目录名与源文名匹配（`第N题.md` / `单元N.md`）；必要时用 `--source` 指定 |
-| 读图参数错误（missing required property / invalid arguments） | 尚未验证视觉能力。核对当前工具 schema，DSH read_image 使用 file_path 而非 path；修正后最多重试 2 次。用户明确遇错即停则停止并保留完整错误，不称为宿主不支持读图 |
+| 工具参数校验错误 | 若修正只是恢复 schema 所需字段、类型或 JSON 格式，最多 2 次并记 `call_correction`；不可更换题意或命令来绕过失败。超过预算停止并留痕 |
+| 计算输入解析错误 | 仅对缺字段、类型或表达式传输格式做最多 2 次机械修正，记 `calculation_correction`；不得更换题意、假设或目标来绕过失败。实质性计算争议按模式处理 |
+| 读图参数错误（missing required property / invalid arguments） | 核对当前工具 schema，DSH read_image 使用 `file_path` 而非 `path`；机械修正最多 2 次，计入 `call_correction`，不叠加图片重试额度。用户取消或权限拒绝立即停止 |
 | 固定读图探针失败 | 按 vision-probe.md 检查随包 assets/vision-probe.png 的绝对路径与实际图像返回；不依赖教材图片，不重复建立随机探针目录。有限修正后仍无法确认视觉能力 → 按 D14 停止校对 |
 | 实际材料图片读不到（图片显示失败、模型看不到配图） | 先确认是否透明底 PNG：合成白底后重读；完成白底合成仍读不到 → 回报失败，由主 agent 按 D14 拒绝 / 重派；不得静默跳过图片内容检查 |
 | 权限拒绝（permission denied / authorization required） | 不是参数错误，不用同一权限重复尝试；停止本次工具调用，说明需要宿主授权或用户处理，并写入失败留痕 |

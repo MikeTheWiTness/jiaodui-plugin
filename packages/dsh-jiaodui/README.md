@@ -20,12 +20,12 @@
 
 ## 它做了什么
 
-- **agent preset「校对」（id `jiaodui`）**：自带完整 plugins 列表（以内置 `standard` preset 为底座，工具呈现为 `native`，
-  含 bash / fs / subagent / todo / web / present / goal / plan / compaction），外加：
-  - `skill-filesystem` 的 `customSkillDirs` 指向本包 `skills/`，所以 jiaodui skill
-    只在这个 preset 的会话里可见（DSH 的 skill 发现按 preset 分层）；
+- **agent preset「校对」（id `jiaodui`）**：自带完整 plugins 列表（以内置 `standard` preset 为底座，工具呈现为 `native`），保留 bash / filesystem / skill / spawn 子代理 / todo / present / compaction 与 jiaodui CLI；显式关闭 web、goal、plan、fork。
+  - `tool-fs` 保留 `read`、`read_image`（宿主 attachments 可用时）与旧报告所需 `write` / `edit`；不挂载新的报告提交工具。
+  - `skill-filesystem` 只从本包 `skills/` custom 目录加载，不读取默认 skill roots。
+  - spawn 子代理限制 `maxDepth: 1`，工具目录 allowlist 为 `skill/read/read_image/write/edit/jiaodui`。宿主 `toolFilter` 不能据此视作严格权限隔离；待第 7 章依赖/子权限实验后再收紧。
   - `./tools/index.js` 注册原生工具 `jiaodui`。
-  工具直接接收 JSON 参数，不要求生成 `run_code` 程序。普通 `subagent` / `subagent_fork` 与并行派发保留，PTC workflow 引擎保持禁用。
+  工具直接接收 JSON 参数，不要求生成 `run_code` 程序。子代理只开放单层 spawn 与并行派发，PTC workflow 引擎保持禁用。
 - **原生工具 `jiaodui`**：参数 `args: string[]` 原样透传给 CLI（如
   `["verify-report", "--unit", "<单元目录>"]`），返回 `exitCode / stdout / stderr / truncated`。
   它走宿主平面的 `ctx.subprocess`（子进程服务会清洗环境变量），不是 bash。
@@ -62,7 +62,7 @@ Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要
 
 1. 安装后确认 bundle 在「插件」页列出、行 `preset-jiaodui` 激活。
 2. **新开**一个会话，在 agent preset 里选「校对」（或在「设置 → 通用」把它设为之后会话的默认）。
-3. 验证模式与 skill：重新加载组合包后新开「校对」会话，工具目录应直接包含 `read`、`write`、`jiaodui`、`subagent` 等；不再仅暴露 `run_code`。会话的 skill 目录里应出现 `jiaodui`；加载它返回 SKILL.md 正文。已有会话不作为模式切换成功的证明；若新会话仍仅暴露 `run_code`，先重启 DSH 以重新加载 preset。
+3. 验证模式与 skill：重新加载组合包后新开「校对」会话，工具目录应包含 `read`、`read_image`（attachments 已挂载时）、`write`、`edit`、`jiaodui`、`subagent` 等；不应有 web/goal/plan/fork。子代理工具目录按 allowlist 配置，但这不是严格权限隔离证明。会话的 skill 目录里应出现 `jiaodui`；加载它返回 SKILL.md 正文。已有会话不作为模式切换成功的证明；若新会话仍仅暴露 `run_code`，先重启 DSH 以重新加载 preset。
 4. 验证工具：让 agent 调用 `jiaodui` 工具，例如 `args: ["check-env"]`，应看到退出码与输出。
 5. 视觉门槛使用随包 `skills/jiaodui/assets/vision-probe.png`，不依赖待校对文件有没有图片，不需要现场绘图。按 skill 的 `references/vision-probe.md` 派发不带答案的观察任务；DSH `read_image` 使用 `file_path`，应先核对工具 schema。同一会话和模型/工具配置通过一次即可复用。
 

@@ -22,6 +22,8 @@ class BuildReportResult:
     def to_dict(self) -> dict:
         return {
             "out_path": self.out_path,
+            "ok": self.out_path is not None,
+            "complete": self.out_path is not None and not self.failed,
             "included": self.included,
             "failed": self.failed,
             "skipped": self.skipped,
