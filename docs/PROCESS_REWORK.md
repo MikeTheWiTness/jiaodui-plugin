@@ -254,6 +254,27 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 口径：双口径均 **1114 passed / 0 failed / 5 skipped / 4 subtests**（1114+5=1119=collect）。
 
+## B1：策略机制抽成纯模块 + 采纳 main 的连带扣费（UNIFY-PLAN Phase 1 第 1 批）
+
+**做什么**：把分支内嵌在 `material.py` 的授权/预算/扣费机制搬进纯模块，并采纳 main 的两条更优语义。
+
+- 新增 `jiaodui/execution_policy.py`：**纯机制（无 IO、无 json）**，含 `CATEGORIES` / `BUDGETS` / `MODES` / `ORIGINS` 与 `charges()` / `charge()` / `new_policy()` / `is_current_policy()` / `validate_fingerprint()`。
+- `error_classification.py` 改为从纯模块**重导出**类别与额度：分支里原先的第二份定义已删除，类别与额度现在只有一处（模块内自检 `open(`/`json.load`/`Path(`/`subprocess` 命中 0）。
+- `material.py` 的**策略引用清零**：构造、校验、指纹校验、扣费全部委托纯模块；`record_recovery_attempt` 只剩取锁、读盘、记账与落盘。
+- 语义变更（采纳 main `_charges`）：**`image_schema_fix` 连带扣一次 `call_correction`**（图片格式修复本身占一次调用）；先判全部被扣类别的余额，**任一不足即整次拒绝、不做部分扣费**；成功返回 `charged`，被拒返回 `blocked_category`；`recovery_events` 同时记这两个字段。连带扣只记成本、不记失败指纹。
+
+**先红后绿**：`tests/test_execution_policy.py` 新增 3 例——连带扣生效（两类各 +1、指纹只记主类别）、`call_correction` 用满后图片修复被拒且 `image_schema_fix` 仍为 0、纯模块无 IO 且类别/额度单源。修复前 3 例全红。
+
+**真机冒烟**（`/tmp` 临时材料，单次调用逐步）：① `images.missing` → `charged=['image_schema_fix','call_correction']`、`used=1/2`；② `usage` → `call_correction` `2/2`；③ 再用 `images.missing` → 被拒 `blocked_category=call_correction`、`remaining=0`、`retryable=false`；④ 记账 `{image_schema_fix:1, call_correction:2}`（无超扣、无部分扣费）；⑤ 事件带 `charged` 与 `blocked_category`。
+
+> 冒烟脚本第一版把 CLI 调用写在字典推导里，导致"每个键调用一次"、数字虚高（`used=2` 而实际只该 1）。已改为单次调用复测；记在此处以便复查同类脚本。
+
+**文档**：`operation-manual.md` 的「恢复与事件」补上连带扣费与`blocked_category`语义，两份副本一致。
+
+**口径**：双口径均 **1117 passed / 0 failed / 5 skipped / 4 subtests**（B1 前 1114，+3 例）。
+
+**边界**：`validate_attempt`（B3 的 `attempt_id` 幂等）与 `migrate_legacy_spent`（B2 的旧清单迁移）**不在本批引入**，避免留下无调用方的死代码；它们各自在对应批次连同测试一起加。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。

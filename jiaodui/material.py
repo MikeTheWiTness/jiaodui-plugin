@@ -11,8 +11,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .error_classification import (RECOVERY_BUDGETS, RECOVERY_CATEGORIES,
-                                  classify_error)
+from .error_classification import RECOVERY_CATEGORIES, classify_error
+from .execution_policy import (charge, is_current_policy, new_policy,
+                               validate_fingerprint)
 from .errors import BusinessError, NotFoundError
 from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
@@ -172,14 +173,8 @@ def validate(root: Path, data: dict) -> dict:
 
 
 def _validate_execution_policy(policy: dict, run_id: str, root: Path) -> None:
-    """校验绑定当前材料轮次的一次性执行授权。"""
-    expected = dict(RECOVERY_BUDGETS)
-    if (not isinstance(policy, dict)
-            or policy.get("mode") not in {"automatic", "interactive"}
-            or policy.get("origin") not in {"user", "confirmed"}
-            or policy.get("run_id") != run_id
-            or not isinstance(policy.get("confirmed_at"), str)
-            or policy.get("budgets") != expected):
+    """校验绑定当前材料轮次的一次性执行授权（机制在 execution_policy）。"""
+    if not is_current_policy(policy, run_id):
         _invalid("执行模式授权无效或不属于当前轮次", root)
 
 
@@ -409,11 +404,6 @@ def new_run(data: dict, params: dict, associated: list[dict]) -> str:
 
 def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
     """为当前轮次记录一次自动/交互执行授权和固定恢复预算。"""
-    if mode not in {"automatic", "interactive"}:
-        raise BusinessError("执行模式必须为 automatic 或 interactive", code="invalid-execution-mode")
-    if origin not in {"user", "confirmed"}:
-        raise BusinessError("执行模式来源必须为 user 或 confirmed", code="invalid-execution-origin")
-    budgets = dict(RECOVERY_BUDGETS)
     with locked(root):
         data = load(root)
         run = data["runs"][-1]
@@ -422,8 +412,7 @@ def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
             if existing["mode"] == mode and existing["origin"] == origin:
                 return existing
             raise BusinessError("本轮执行模式已确认；如需改变策略，请显式开启新轮次", code="execution-policy-locked")
-        policy = {"mode": mode, "origin": origin, "confirmed_at": now(),
-                  "budgets": budgets, "run_id": run["run_id"]}
+        policy = new_policy(mode, origin, now(), run["run_id"])
         run["execution_policy"] = policy
         run["actions"].append({"command": "execution-policy", "at": policy["confirmed_at"],
                                "mode": mode, "origin": origin})
@@ -440,8 +429,7 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
     - 只给 `category`：仅允许父代理判断类的 `targeted_review`，其余必须给错误码；
     - 未分类码、用户取消、权限拒绝一律拒绝，且不消耗任何预算。
     """
-    if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
-        raise BusinessError("SHA-256失败指纹无效", code="recovery-invalid")
+    validate_fingerprint(fingerprint)
     if category is not None and category not in RECOVERY_CATEGORIES:
         raise BusinessError(f"未知恢复类别：{category!r}", code="recovery-invalid")
     if error_code is None:
@@ -473,23 +461,13 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
             raise BusinessError("当前轮次尚未确认执行模式", code="execution-policy-required")
         if run["run_id"] != data["current_run_id"]:
             raise BusinessError("恢复预算只能记入当前轮次", code="run-changed")
-        budget = policy["budgets"][category]
         unit_state = run.setdefault("recovery", {}).setdefault(unit_id, {})
-        state = unit_state.setdefault(category, {"used": 0, "fingerprints": {}})
-        if state["used"] >= budget:
-            result = {"allowed": False, "retryable": False, "category": category,
-                      "used": state["used"], "budget": budget, "remaining": 0,
-                      "fingerprint_attempts": state["fingerprints"].get(fingerprint, 0)}
-        else:
-            state["used"] += 1
-            state["fingerprints"][fingerprint] = state["fingerprints"].get(fingerprint, 0) + 1
-            result = {"allowed": True, "retryable": True, "category": category,
-                      "used": state["used"], "budget": budget, "remaining": budget - state["used"],
-                      "fingerprint_attempts": state["fingerprints"][fingerprint]}
+        result = charge(unit_state, category, fingerprint)
         run.setdefault("recovery_events", []).append({
             "at": now(), "unit_id": unit_id, "category": category,
+            "charged": result["charged"], "blocked_category": result.get("blocked_category"),
             "error_code": error_code, "fingerprint": fingerprint,
-            "allowed": result["allowed"], "used": result["used"], "budget": budget,
+            "allowed": result["allowed"], "used": result["used"], "budget": result["budget"],
         })
         write(root, data)
         return result

@@ -16,25 +16,10 @@ PLAN-rework-continuation P5 第 1 项：core 增一份「错误码 → 恢复类
 """
 from __future__ import annotations
 
-RECOVERY_CATEGORIES: tuple[str, ...] = (
-    "call_correction",
-    "calc_representation",
-    "report_repair",
-    "targeted_review",
-    "technical_redispatch",
-    "image_schema_fix",
-)
-"""六类恢复预算的类别名（唯一来源；材料清单与 CLI 都从这里取值）。"""
+from .execution_policy import BUDGETS as RECOVERY_BUDGETS
+from .execution_policy import CATEGORIES as RECOVERY_CATEGORIES
 
-RECOVERY_BUDGETS: dict[str, int] = {
-    "call_correction": 2,
-    "calc_representation": 2,
-    "report_repair": 3,
-    "targeted_review": 2,
-    "technical_redispatch": 1,
-    "image_schema_fix": 2,
-}
-"""每单元每轮的固定额度；变更必须同时改文档与测试。"""
+# 类别与额度只有一份定义（jiaodui/execution_policy.py）；这里重导出，保持既有调用面。
 
 NON_RECOVERABLE_CODES: frozenset[str] = frozenset({
     "user-cancel", "user_cancel",
