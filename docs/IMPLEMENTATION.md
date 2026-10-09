@@ -1,12 +1,14 @@
 # 实施清单
 
+2026-10-10 第7章结构化报告主链并入 `main`：子 agent 提交 schema v2 结构化提案、报告由程序从源文生成、父代理复核版本绑定后登记成为**正常交付路径**；旧 Markdown 报告链降级为只读兼容。合并按 [UNIFY-PLAN](UNIFY-PLAN.md) §6 裁决 28 处冲突、修掉 19 处静默变更（main 回退时整份删除的 `source_index`/`unit_reader`/`calc/schema`/`calc-schemas.json` 与 v2 守门已取回），并在映射 main 测试时采纳六处 main 更优语义（`report.ok`、`unit-event` 轮次 CAS 与授权要求、指纹错误码、幂等重放不写盘、被拒 attempt 不写盘）。根仓双口径 **1158 passed / 0 failed**、冻结语料 4/4、P6 材料真机 `build-report`/`build-docx` 通过（标记 2 = 锚点 2 + 兜底 0）；桌面 profile 已切回仓库根包，实验 worktree 与集成分支已删除。见 [PROCESS_REWORK](PROCESS_REWORK.md) 的 Phase 2/3 记录。
+
 2026-10 报告完整性程序化重建：新增 `jiaodui repair-report --unit <dir> [--apply]`（确定性核心 `jiaodui/report_repair.py`）。它只从单元源文重建 `### 标记原文`，把原报告的完整标记插回源文逐字唯一命中的位置；字段找不到、命中多处、乱序、重叠、编号/语法/原因/严重度无效或图片检查失败一律拒绝，`--apply` 前先验候选文本与图片、再原子替换并要求完整 verify-unit 复验，失败恢复原报告。修复不判断校对意见正确性、不改源文、不自动登记；`verify-report` 仍是唯一闸门。回归见 `tests/test_report_repair.py`、`tests/test_skill_docs.py`。
 
 2026-09-30 固定视觉探针：skill/bundle 随包提供 SVG、透明 PNG 和白底 PNG，默认直接读白底 PNG，无需从教材取图；同会话同模型/工具配置成功后复用。入口补充 DSH `read_image(file_path=...)` 和参数错误有限修正，区分调用失败与视觉能力未确认。具体步骤及仅供主 agent 的验收答案见 `skills/jiaodui/references/vision-probe.md`；实际材料透明图仍按需白底处理。
 
 2026-09-30 入口补齐：用户指定讲义/试卷优先；未知类型先只读检查 Word 嵌套表格，必要时有限预览或询问。核对旧仓后补齐类型驱动转换参数、原始 Markdown 导入保真和人工/整篇拆分入口。见 [ADR 0003](adr/0003-material-type-entry.md) 与 [迁移核对](ENTRY_MIGRATION.md)。校对与交付链共用；DSH 真机由用户验证。
 
-状态：**M0 骨架与 M1 高中物理端到端竖切已完成**（见 [docs/M0.md](M0.md) / [docs/M1.md](M1.md) §9）；M1 后补修讲义导入清理与 P1/P2，并已在当前代码上重跑竖切（5/5 通过、28 标记 = 28 锚点 + 0 兜底）；下一步 M2 质量评估。
+状态：**M0 骨架与 M1 高中物理端到端竖切已完成**（见 [docs/M0.md](M0.md) / [docs/M1.md](M1.md) §9）；M1 后补修讲义导入清理与 P1/P2，并已在当前代码上重跑竖切（5/5 通过、28 标记 = 28 锚点 + 0 兜底）。**第7章结构化主链已于 2026-10-10 并入 `main` 成为正常路径**（见上）；下一步 M2 质量评估。
 需求与验收口径以 [PRD](PRD.html) 为准；本清单用于确定执行顺序。
 
 2026-09-30 工作区布局修复按 [ADR 0002](adr/0002-workspace-material-layout.md) 实现：写入边界、材料记录与轮次、双向单元集、当前轮交付登记、可搬移 raw 图片、DSH 每次调用工作区注入和延迟输出收集。自动测试与 wheel 仓库外安装另见 [工作区验证记录](WORKSPACE.md)。DSH 真机会话 A/B、子 agent 读图与落盘测试由用户执行，不把 Node 行为测试当作宿主验收。

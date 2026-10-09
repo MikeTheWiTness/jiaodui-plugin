@@ -1,5 +1,7 @@
 # 后续实现计划：M0—M6 收口
 
+> **状态：本计划已被 [UNIFY-PLAN.md](UNIFY-PLAN.md) 取代，且其中的隔离策略已终结。** 2026-10-10 结构化主链已并入 `main`（见 [PROCESS_REWORK.md](PROCESS_REWORK.md) 的 Phase 2/3）：`.worktrees/structured-report` 与集成分支已删除，桌面 profile 已切回仓库根包。本文件保留为历史执行记录；下文「根仓常驻 main、实验只在 worktree、不合并」等表述**不再适用**。
+
 - 依据：[EasyUse《校对流程改造执行计划》](/Users/chouchou/开发/EasyUse/校对流程改造执行计划.md) 的 M0—M6 与 §11 验收场景；需求口径仍以 [docs/PRD.html](PRD.html) 为准。
 - 边界说明：[main 进度说明](PROCESS_REWORK.md)（旧 Markdown 报告主链）与 [实验进度说明](../.worktrees/structured-report/docs/PROCESS_REWORK.md)（第7章结构化主链）。
 - 本计划只覆盖「把已实现的部分收口到可验收」和「补齐明确缺口」，不新增学科、不建设模型 benchmark、不动 GUI、不改源文、不 push、不改 profile。
