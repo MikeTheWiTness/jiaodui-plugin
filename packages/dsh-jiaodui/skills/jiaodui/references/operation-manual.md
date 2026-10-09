@@ -10,6 +10,9 @@
 
 ## 入口和准备
 
+正常路径调用结构化工具 `jiaodui_task_prepare`（`operation` 取 `check-env` / `inspect-source` / `convert` / `split` / `precheck-split` / `status` / `execution-policy`），参数按名传入，不再手拼命令行。
+下面的 CLI 写法只在没有该工具（或需要上面没登记的参数）时作为退路：
+
 ```text
 jiaodui check-env
 jiaodui inspect-source <file> [--preview-chars 0..2000] --json
@@ -78,6 +81,8 @@ jiaodui status <paper_dir> --json
 技术提交后，先生成整卷报告通读全文和证据。`unreviewed`列出待审单元，但全文可读；complete仍false。以提交后的unit-snapshot hash调用 `jiaodui_unit_review`，decision为accepted或needs_revision；退回需issue，接受绑定当前输入、建议、报告与自查hash。任何版本变化后重新复核。Word只允许当前版本已accepted。
 
 ## 交付
+
+正常路径调用 `jiaodui_delivery`（`operation` 取 `build-report` / `build-docx`，`paper_dir` 为拆分返回的单元根目录）。它的 `json` 字段直接给出 `ok` / `complete` 与结构计数，不必自己解析 `stdout`。CLI 退路：
 
 ```text
 jiaodui build-report <paper_dir> --work-root W --json

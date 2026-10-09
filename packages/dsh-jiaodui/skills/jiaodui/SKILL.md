@@ -36,20 +36,20 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 - 先确认完整材料目标路径不存在；独立回放使用新材料名，不读取、覆盖或清理现有报告、记录和单元。产物路径一律以CLI JSON为准，不猜测或拼接。
 - `material_dir`、`paper_dir`、`unit_dir`不可混用；定义与恢复路径规则见 [`references/operation-manual.md`](references/operation-manual.md)。
 
-1. 转换：`jiaodui convert <源文件> --mode <已确定类型> --work-root <W> --json` → raw 文本和图片；讲义自动启用其专用转换参数，试卷 Word 使用对应后处理，Markdown 保留原有格式。用户指定类型默认记为 user；根据结构/节选/询问确定时传 `--mode-origin structure|preview|confirmed --mode-reason <简短依据>`，写入材料记录。已有公共转换须按确定类型补转换，不按旧类型直接复用。
-2. 拆分：`jiaodui split <raw_md> --subject <已确定学科> --mode exam|lecture`（默认规则，类型沿用入口；也可省略 mode 复用材料记录，未知则拒绝）。讲义按模块/例练拆单元，试卷按题号拆题并处理随题或文末答案。用户明确要求人工标记或整篇时用 `--strategy manual|none`，否则 rule；两种类型进入同一套单元校对与交付流程。
+1. 转换：`jiaodui_task_prepare`（operation=convert） → raw 文本和图片；讲义自动启用其专用转换参数，试卷 Word 使用对应后处理，Markdown 保留原有格式。用户指定类型默认记为 user；根据结构/节选/询问确定时传 `--mode-origin structure|preview|confirmed --mode-reason <简短依据>`，写入材料记录。已有公共转换须按确定类型补转换，不按旧类型直接复用。
+2. 拆分：`jiaodui_task_prepare`（operation=split）（默认规则，类型沿用入口；也可省略 mode 复用材料记录，未知则拒绝）。讲义按模块/例练拆单元，试卷按题号拆题并处理随题或文末答案。用户明确要求人工标记或整篇时用 `--strategy manual|none`，否则 rule；两种类型进入同一套单元校对与交付流程。
    - **讲义模式默认执行完整导入清理**（与旧仓 `clean_enabled` 默认开启一致，顺序固定）：`fix_latex_escapes` 还原 pandoc 过度转义 → `comprehensive_clean` 去表格竖线 → `clean_intent` 清【出题意图】 → `fix_floating_images` 把浮进选项 A 的题图挪回独立行 → `normalize_option_spacing` 压选项/解答长空格 → `strip_decor_images` 清装饰图。pandoc 会把讲义渲染成网格表，`**例1**`/`**练1**` 落在表格行内（行首是竖线）；不清理则 `section_pattern` 命中不到，整篇会塌成一个超长单元。仅在需要保留原始表格做对照时才加 `--no-clean`（此时六步全不执行）。
 3. 抽查：`jiaodui precheck-split <paper_dir>`（单元根目录，见上方目录参数约定），看单元数、各单元首行、字符数分布、空单元与超长单元；异常才升级智能拆分：
    1. 派**拆分子 agent**（主 agent 不亲自执行）：子 agent 自行运行 `jiaodui slice --raw <raw_md> --mode <mode> --subject <学科> --preview`，在输出的**清理后正文**上定行号；主 agent 只收边界文件路径与一行摘要，**不读预览正文**。
    2. 边界清单 JSON 必须写明 `"mode"` 与 `"subject"`：`{"raw": "...", "mode": "lecture", "subject": "高中物理", "boundaries": [...]}`。
    3. 主 agent 执行 `jiaodui slice --boundaries <清单.json> --mode <mode> --subject <学科>`——**必须与预览完全同一组参数**。
    - 讲义先清理再切，预览与执行须使用完全相同的 mode/subject/清理参数。新布局未知 mode 不再默认试卷；清单类型与显式类型冲突会拒绝。修改类型先重新 convert 再预览，不沿用旧类型的行号。
-4. 扫描：`jiaodui status <paper_dir> --json`（传拆分返回的单元根目录，不传材料根目录），派发未开始 / 未过校验 / 本轮未完成的单元。每个单元派发前先运行只读的 `jiaodui inspect-images --unit <dir> --json`；清单按正文引用顺序绑定引用序号、位置、原图和实际读取图，缺图/无效/不支持远程引用先停止该单元。
+4. 扫描：`jiaodui_task_prepare`（operation=status）（传拆分返回的单元根目录，不传材料根目录），派发未开始 / 未过校验 / 本轮未完成的单元。每个单元派发前先运行只读的 `jiaodui inspect-images --unit <dir> --json`；清单按正文引用顺序绑定引用序号、位置、原图和实际读取图，缺图/无效/不支持远程引用先停止该单元。
 5. 滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。输入包必须显式携带 `references/failure-modes.md` 路径，并列出本轮允许重试的类别、次数和停止范围。
-6. 单元子 agent：先用 `jiaodui_unit_snapshot` 获取当前版本，再通过 `jiaodui_unit_read` 分页读取源文和图片实际读取清单；真实读取配图并核对引用归属；按需使用 operation-specific calc 工具验算。用 `jiaodui_unit_locate` 选择位置，再以该snapshot调用 `jiaodui_unit_submit` 提交schema v2建议。模型不写报告；程序从不可变原稿生成全文、verify、解析并登记。建议含源文/图片hash与当前轮次；版本变化或标记不可无损表达时拒绝写入。
-7. `jiaodui build-report <paper_dir>` 生成审阅全文；complete=false时检查failed与unreviewed。待复核单元技术合格全文仍可供父代理通读，技术失败只留占位。完成父复核后再汇总，complete=true才可正式交付。
+6. 单元子 agent：先用 `jiaodui_unit_snapshot` 获取当前版本，再通过 `jiaodui_unit_read` 分页读取源文和图片实际读取清单；真实读取配图并核对引用归属；按需使用 operation-specific calc 工具验算。用 `jiaodui_unit_locate` 选择位置，再以该snapshot调用 `jiaodui_unit_submit` 提交schema v2建议。模型不写报告；程序从不可变原稿生成全文、verify、解析并登记。建议含源文/图片hash与当前轮次；版本变化时拒绝写入。
+7. `jiaodui_delivery`（operation=build-report） 生成审阅全文；complete=false时检查failed与unreviewed。待复核单元技术合格全文仍可供父代理通读，技术失败只留占位。完成父复核后再汇总，complete=true才可正式交付。
 8. 主 agent **通读整卷报告全文**（整体把关）：个别单元漏检 → 定向复核；系统性问题 → 停手回报用户。
-9. `jiaodui build-docx <paper_dir>`，复核 **错误标记数 = 批注锚点数 + 公式兜底数，且缺失数为 0**（无问题单元标题批注单列）。不满足按确定性 bug 处理，**不交付 docx**。
+9. `jiaodui_delivery`（operation=build-docx），复核 **错误标记数 = 批注锚点数 + 公式兜底数，且缺失数为 0**（无问题单元标题批注单列）。不满足按确定性 bug 处理，**不交付 docx**。
 10. 交付：整卷报告 + Word 批注版 + 失败清单（不自动改源文）。
 
 ## 4. 调度规则
@@ -77,6 +77,7 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 材料目录采用 §3 固定布局，新增契约名 `_校对记录.json`；单元目录名只认**精确名** `第N题` / `单元N` / `板块N`（变体名不是单元，识别与清单一致忽略）；单元内只允许：`第N题.md`、`单元N.md`、`板块N.md`、`images/`、`_校对报告.md`、`_校对数据.json`、`_校对失败.md`及既有跳过标记。禁止 attempt / 副本等自由命名；轮次与执行摘要进入记录，报告只保存当前交付。
 
 ## 8. 操作参考
+- 正常路径只用结构化工具（task_prepare / unit_* / calc_* / delivery）；`jiaodui` argv 透传是永久退路。
 - 命令参数、task/unit工具schema和交付判据见 [`references/operation-manual.md`](references/operation-manual.md)。未列入当前工具schema的参数不得猜测。
 - 工具调用必须通过当前宿主暴露的结构化能力；CLI仅作兼容退路。所有写入限当前工作区，完整帮助由 `jiaodui <command> --help` 提供。
 

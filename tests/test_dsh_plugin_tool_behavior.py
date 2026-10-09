@@ -86,6 +86,41 @@ await unitRead.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),start_line
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-read','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--start-line','1','--max-lines','2000']);
 await calc.execute({expression:'1+2'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','calc','evaluate','--param','expression="1+2"']);
+// P4：父侧准备/交付工具必须结构化传参，且只拼真实存在的子命令与参数
+const prepare=registered.get('jiaodui_task_prepare');
+assert.equal(prepare.parameters.additionalProperties,false);
+assert.deepEqual(prepare.parameters.required,['operation']);
+assert.ok(!('args' in prepare.parameters.properties));
+const delivery=registered.get('jiaodui_delivery');
+assert.equal(delivery.parameters.additionalProperties,false);
+assert.deepEqual(delivery.parameters.required,['operation','paper_dir']);
+assert.deepEqual(delivery.parameters.properties.operation.enum,['build-report','build-docx']);
+await prepare.execute({operation:'check-env'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','check-env']);
+await prepare.execute({operation:'inspect-source',path:'/tmp/a.docx',preview_chars:0},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','inspect-source','/tmp/a.docx','--preview-chars','0']);
+await prepare.execute({operation:'convert',path:'/tmp/a.docx',mode:'lecture',mode_origin:'user',mode_reason:'嵌套表格'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','convert','/tmp/a.docx','--mode','lecture','--mode-origin','user','--mode-reason','嵌套表格']);
+await prepare.execute({operation:'split',path:'/tmp/a_raw.md',subject:'高中物理',mode:'lecture',strategy:'rule',no_clean:true},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','split','/tmp/a_raw.md','--subject','高中物理','--mode','lecture','--strategy','rule','--no-clean']);
+await prepare.execute({operation:'status',path:'/tmp/units'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','status','/tmp/units']);
+await prepare.execute({operation:'precheck-split',path:'/tmp/units'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','precheck-split','/tmp/units']);
+await prepare.execute({operation:'execution-policy',path:'/tmp/mat',execution_mode:'automatic',origin:'user'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','execution-policy','/tmp/mat','--mode','automatic','--origin','user']);
+// 未提供的可选参数不得拼进 argv（no_clean 省略时不能出现 --no-clean）
+await prepare.execute({operation:'split',path:'/tmp/a_raw.md',subject:'高中物理',mode:'lecture'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','split','/tmp/a_raw.md','--subject','高中物理','--mode','lecture']);
+const delivered=await delivery.execute({operation:'build-report',paper_dir:'/tmp/units'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','build-report','/tmp/units']);
+assert.deepEqual(delivered.json,{});
+// stdout 不是 JSON 对象时：不伪造 json 字段，也不抛错
+const jsonStub=ctx.subprocess.spawn;
+ctx.subprocess.spawn=spec=>{requests.push(spec);return {done:Promise.resolve({exitCode:0}),collected:{stdout:{readFrom(){return {text:'not json',lossy:false}}},stderr:{readFrom(){return {text:'',lossy:false}}}}}};
+const rawDelivery=await delivery.execute({operation:'build-docx',paper_dir:'/tmp/units'},exec);
+assert.equal(rawDelivery.json,undefined);assert.equal(rawDelivery.stdout,'not json');
+ctx.subprocess.spawn=jsonStub;
 ctx.subprocess.spawn=realSpawn;
 result=await tool.execute({args:['-e','setTimeout(()=>{console.error("failure");process.exit(4)},30)']},exec);
 assert.equal(result.exitCode,4);assert.equal(result.stderr.trim(),'failure');

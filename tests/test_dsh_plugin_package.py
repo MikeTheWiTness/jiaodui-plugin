@@ -181,3 +181,52 @@ def test_vision_probe_white_png_is_ready_without_source_material():
         for point in ((186, 415), (240, 415), (294, 415)):
             assert ready.convert("RGB").getpixel(point) == (40, 123, 209)
         assert ready.convert("RGB").getpixel((240, 240)) == (223, 51, 69)
+
+
+def _cli_surface() -> tuple[set[str], set[str]]:
+    """从 build_parser() 收集 (全部 option string, 全部子命令名)。"""
+    import argparse
+
+    from jiaodui.cli import build_parser
+
+    options: set[str] = set()
+    commands: set[str] = set()
+
+    def walk(parser: argparse.ArgumentParser) -> None:
+        for action in parser._actions:
+            options.update(action.option_strings)
+            if isinstance(action, argparse._SubParsersAction):
+                for name, sub in action.choices.items():
+                    commands.add(name)
+                    walk(sub)
+
+    walk(build_parser())
+    return options, commands
+
+
+def test_plugin_emitted_subcommands_and_flags_exist_in_cli():
+    """插件拼出的子命令与 --flag 必须真实注册（防臆造 / 改名漂移）。"""
+    import re
+
+    source = (PKG / "tools" / "index.js").read_text(encoding="utf-8")
+    options, commands = _cli_surface()
+    emitted = set(re.findall(r"'(--[a-z][a-z0-9-]+)'", source))
+    unknown = sorted(emitted - options)
+    assert not unknown, f"插件传了 CLI 没有注册的参数：{unknown}"
+    for name in ("TASK_PREPARE_OPERATIONS", "DELIVERY_OPERATIONS"):
+        assert f"const {name}" in source
+        block = source.split(f"const {name} = [", 1)[1].split("]", 1)[0]
+        declared = set(re.findall(r"'([a-z][a-z0-9-]*)'", block))
+        assert declared <= commands, f"{name} 含未注册子命令：{sorted(declared - commands)}"
+
+
+def test_prepare_and_delivery_tools_are_registered_without_argv_escape_hatch():
+    """父侧准备/交付工具必须结构化注册，且不暴露 args 数组绕过 schema。"""
+    source = (PKG / "tools" / "index.js").read_text(encoding="utf-8")
+    for tool in ("jiaodui_task_prepare", "jiaodui_delivery"):
+        assert f"'{tool}'" in source
+    prepare = source.split("'jiaodui_task_prepare'", 1)[1].split("}, taskPrepareArgs)", 1)[0]
+    assert "additionalProperties: false" in prepare
+    assert "args:" not in prepare
+    # 通用 argv 透传必须保留（CLI 是永久退路）
+    assert "name: 'jiaodui'" in source

@@ -12,7 +12,7 @@
 ## 实验实现
 
 - **M1部分**：轮次执行模式与预算持久化；preset去掉shell、关闭web/goal/plan/fork。聚合fs必须暂保留真实read_image；父只读工具细分尚未实现，不能称完全隔离。
-- **M2**：task/unit ID、源码SHA绑定、Unicode码点位置和重复词候选、安全公式/加粗范围；calc schema从核心元数据导出。
+- **M2**：task/unit ID、源码SHA绑定、Unicode码点位置和重复词候选、安全公式/加粗范围；calc schema从核心元数据导出。**P4 已补齐父侧结构化工具**（准备 / 交付），正常路径不再手拼 argv，见下节。
 - **M3初版**：schema v2提交少量建议，程序生成全文；长度封套保护正文中的报告标题/装饰行；快照CAS和材料锁，异常回滚报告/数据/清单，登记为最后提交标志。初版不能无损承载原文字面含`|`/标记括号的内容，只能明确拒绝；**P3 已按 ADR 0006 补齐可逆特殊字符编码与正文/信封契约**，见下节。
 - **M4初版**：assumptions/symbols/images/calculations首轮证据、必需自查项；真实calc call_id与单元源码/轮次/结果关联；父复核绑定输入/建议/自查/报告hash。最新退回撤销旧接受。技术报告仍可汇总通读，但unreviewed时complete=false、Word拒绝。
 - **M5部分**：恢复类别累计、失败指纹、阶段事件、显式取消来源API。调度尚依赖宿主/父代理主动登记；插件中断来源不得猜为用户。预算耗尽留痕，不能换agent刷新额度。
@@ -31,6 +31,23 @@
 
 测试与口径：新增 `tests/test_marker_escape.py`、`tests/test_report_suggestions.py` 的执行计划 §11.1/§11.2 场景（竖线/标记括号/反斜杠/emoji/组合字符/零宽/CRLF/跨行公式无损恢复、空正文拒绝、21 字符短正文放行、v2 不剥信封、反向用例仍拒绝）。双口径全量 **1043 passed / 0 failed / 5 skipped**（P3 前 989 + 5 skip；5 个 skip 是 worktree 内语料路径依赖，非真跳过）；带 `JIAODUI_LEGACY_CORPUS` 的旧语料 4/4 与 `test_m1_fixture` 3/3 保持预期。实测冻结语料无一份含 `\】` 边界写法，故正则扩展不改变 v1 既有预期。
 
+## P4强类型父工具（已完成）
+
+父侧准备/交付不再靠 `args: string[]` 手拼命令行，改由结构化工具传名参数；壳仍只做参数搬运与协议转换，判断留在 core。
+
+- `jiaodui_task_prepare`：`operation` 取 `check-env` / `inspect-source` / `convert` / `split` / `precheck-split` / `status` / `execution-policy`；按 operation 选参（`path`、`preview_chars`、`material_name`、`subject`、`mode`、`mode_origin`、`mode_reason`、`strategy`、`no_clean`、`execution_mode`、`origin`）。未用到的参数不拼进 argv，缺参数不在 JS 里判，交给 CLI 出稳定的用法错误（exit 2）。
+- `jiaodui_delivery`：`operation` 取 `build-report` / `build-docx` + `paper_dir`；在通用四字段之外附 `json`（stdout 的解析副本，含 `ok` / `complete` / 结构计数），解析失败时缺省该字段、不抛错。
+- 未做可选的 `jiaodui_finalize_unit`：v2 正常路径的 `unit-submit` 内部已完成 verify 与登记，独立 finalize 只服务旧 Markdown 报告链，而旧链走 `jiaodui` argv 退路。
+- 通用 `jiaodui` argv 透传保留（CLI 是永久退路）；skill 正常路径只写结构化工具。
+
+测试与冒烟：
+- Node 行为测试（真加载插件）断言两个工具 `additionalProperties: false`、`required`、**不暴露 `args` 逃生口**，并逐条核对 argv（含 `--no-clean` 只在 `no_clean: true` 时出现、可选参数省略时不进 argv、`json` 字段在非 JSON stdout 下缺省）。
+- Python 侧新增「插件拼出的每个 `--flag` ⊆ CLI 实际注册」「`TASK_PREPARE_OPERATIONS` / `DELIVERY_OPERATIONS` ⊆ 真实子命令」「准备/交付工具结构化注册且无 `args` 数组」三条一致性测试。
+- 真机 CLI 冒烟（带插件同款 `JIAODUI_WORK_ROOT` 注入）：`check-env`、`inspect-source <docx> --preview-chars 0`、`status <paper_dir>`、`precheck-split <paper_dir>` 四条按工具拼出的 argv 全部 exit 0 且返回预期字段。
+- 文档同步：两份 `SKILL.md`（**8133 码点**，余量 59，仍在 8192 阈值内）与两份 `references/operation-manual.md` 字节一致；顺手删掉一句因 P3 而过期的措辞（"标记不可无损表达时拒绝写入"）。
+
+口径：双口径全量 **1047 passed / 0 failed / 5 skipped**（P4 前 1045 + 5 skip）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
@@ -45,6 +62,6 @@
 
 ## 未完成与交付限制
 
-- 本轮尚不满足M0—M6全部验收：完整强类型父工具（P4）、错误分类与自动心跳/取消闭环（P5）、实际安装方式、新会话父子catalog（P2）均需继续。P3 已收口特殊字符无损编码与正文/信封契约。
+- 本轮尚不满足M0—M6全部验收：错误分类与自动心跳/取消闭环（P5）、实际安装方式、新会话父子catalog（P2）均需继续。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。
