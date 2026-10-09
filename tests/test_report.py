@@ -30,6 +30,8 @@ def test_only_verified_included(tmp_path):
     assert "未通过交付校验" in text
     assert [u["unit"] for u in r.included] == ["第1题"]
     assert [u["unit"] for u in r.failed] == ["第2题"]
+    assert r.complete is False
+    assert r.to_dict()["complete"] is False
 
 
 def test_skipped_unit_placeholder(tmp_path):
@@ -39,3 +41,4 @@ def test_skipped_unit_placeholder(tmp_path):
     (d / ".skip_proofread").touch()
     r = build_report(paper, out_path=tmp_path / "out.md", legacy_layout=True)
     assert r.skipped and not r.included
+    assert r.complete is True

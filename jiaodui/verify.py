@@ -450,9 +450,8 @@ def verify_report_text(text: str, source_text: str | None = None) -> VerifyResul
     issues = result.issues
 
     head, marked_section, reasons_section = split_sections(text)
-    if marked_section is not None:
-        # 与解析共用同一清洗规则：剥掉「## 前置参考」与「编号：/内容：」装饰，
-        # 否则会把报告自带的头字段误判成「改变未标记正文」。
+    if marked_section is not None and not text.startswith("<!-- jiaodui-report-v2 -->"):
+        # 旧报告允许剥离参考装饰；v2正文边界精确，不得把源文字面当装饰删除。
         marked_section = strip_reference_preamble(marked_section)
     summary_declared = _extract_summary(text)
 

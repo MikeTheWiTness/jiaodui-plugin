@@ -79,12 +79,24 @@ def _parse_marker_num(s: str) -> int:
 
 
 def split_sections(text: str) -> tuple[str, str | None, str | None]:
-    """把报告切成 (头部, 标记原文段, 修改原因段)。
+    """把报告切成 (头部, 标记原文段, 修改原因段)，兼容旧报告与v2封套。"""
+    from .report_suggestions import BODY_END, REPORT_V2_PREFIX
 
-    标记段以 「### 标记原文」标题开始（标题行可有附加说明），到「### 修改原因」截止；
-    原因段从「### 修改原因」标题的下一行开始，到下一个 ### 或 --- 或文末截止。
-    找不到对应标题时返回 None。
-    """
+    if text.startswith(REPORT_V2_PREFIX):
+        length_match = re.search(r"(?m)^<!-- jiaodui-body-length:(\d+):(\d+) -->\r?\n", text)
+        if length_match is None:
+            return text, None, None
+        raw_length, normalized_length = map(int, length_match.groups())
+        body_length = raw_length if "\r" in text else normalized_length
+        body_start = length_match.end()
+        body_end = body_start + body_length
+        suffix = "\n" + BODY_END + "\n### 修改原因\n"
+        if text[body_end:body_end + len(suffix)] != suffix:
+            return text, None, None
+        reason_start = body_end + len(suffix)
+        head = text[:length_match.start()]
+        return head, text[body_start:body_end], text[reason_start:]
+
     text = text.strip().replace("\r\n", "\n").replace("\r", "\n")
     reason_m = re.search(r"\n###\s*修改原因[^\n]*\n", text)
     if not reason_m:
@@ -179,7 +191,8 @@ def _parse_inline_format(text: str, summary: str) -> dict | None:
     head, marked_section, reasons_section = split_sections(text)
     if reasons_section is None:
         return None
-    marked_section = _strip_reference_preamble(marked_section or "")
+    if not text.startswith("<!-- jiaodui-report-v2 -->"):
+        marked_section = _strip_reference_preamble(marked_section or "")
     reasons = parse_reasons(reasons_section)
 
     corrections = []

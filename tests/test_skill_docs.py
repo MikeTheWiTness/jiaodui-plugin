@@ -39,6 +39,11 @@ def _cli_options() -> set[str]:
     return options
 
 
+def test_skill_entry_stays_under_host_context_budget():
+    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    assert len(text) < 8192
+
+
 def test_skill_documented_flags_exist_in_cli():
     """SKILL.md 里出现的每个 --flag 都必须在 CLI 上真实注册（防臆造/改名漂移）。"""
     text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
@@ -49,7 +54,8 @@ def test_skill_documented_flags_exist_in_cli():
 
 def test_skill_documents_parameters_that_had_drifted():
     """速查表必须覆盖这些实际存在的参数。"""
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    text = ((SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+            + (SKILL_DIR / "references" / "operation-manual.md").read_text(encoding="utf-8"))
     missing = [flag for flag in MUST_BE_DOCUMENTED if flag not in text]
     assert not missing, f"SKILL.md 漏记：{missing}"
 
@@ -65,7 +71,8 @@ def test_harness_call_contract_is_documented():
 
 def test_repair_preview_is_documented_as_explicit_gate_auxiliary():
     """完整性修复必须是显式命令，且 verify-report 仍是唯一闸门。"""
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    skill = ((SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+             + (SKILL_DIR / "references" / "operation-manual.md").read_text(encoding="utf-8"))
     failures = (SKILL_DIR / "references" / "failure-modes.md").read_text(encoding="utf-8")
     assert "jiaodui repair-report" in skill
     assert "verify-report" in skill

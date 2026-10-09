@@ -8,6 +8,8 @@ YAML 用例需要 pyyaml（pyproject 的 dev 额外依赖）。
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -56,16 +58,21 @@ def test_manifest_declares_bundle_plugin_and_display_metadata():
     assert (PKG / "locale" / "en.json").is_file()
 
 
-def test_preset_declares_jiaodui_with_full_agent_capabilities():
+def test_preset_declares_jiaodui_with_minimal_agent_capabilities():
     config = _preset_config()
     assert config["id"] == "jiaodui"
     assert config["name"] == "校对"
     assert isinstance(config["order"], int)
     plugins = {p["id"]: p for p in config["plugins"]}
-    # 预设必须自带完整 plugins 列表（DSH 不提供继承）：抽查核心能力仍在
-    for required in ("persona", "tool-bash", "tool-fs", "tool-skill", "tool-todo", "tool-web"):
-        assert required in plugins, f"preset 缺少公共能力：{required}"
-    assert "tool-subagent" in {p["id"] for p in plugins["delegation"]["config"]}
+    for required in ("persona", "tool-skill", "tool-todo", "jiaodui-tools", "delegation"):
+        assert required in plugins, f"preset 缺少校对能力：{required}"
+    for removed in ("tool-bash", "tool-pwsh", "tool-fs", "tool-fs-search",
+                    "command-goal", "tool-goal"):
+        assert removed not in plugins or plugins[removed].get("disabled", False), f"preset 不应启用：{removed}"
+    assert plugins.get("tool-web", {}).get("disabled", False) is True
+    delegation = {p["id"]: p for p in plugins["delegation"]["config"]}
+    assert delegation["tool-subagent-fork"]["disabled"] is True
+    assert "tool-subagent" in delegation
 
 
 def test_preset_uses_standard_native_tools_and_keeps_parallel_delegation():
@@ -87,6 +94,24 @@ def test_preset_mounts_bundled_skill_dir_and_native_tool():
     assert "'skills'" in dirs[0] and "baseUrl" in dirs[0]
     assert "resolve('dsh-jiaodui/package.json')" in dirs[0]
     assert plugins["jiaodui-tools"]["name"] == "dsh-jiaodui"
+
+
+def test_calc_tool_schemas_match_python_core_export():
+    result = subprocess.run(
+        [sys.executable, "-m", "jiaodui", "calc-schema", "--json"],
+        cwd=ROOT, capture_output=True, text=True, check=True)
+    generated = json.loads(result.stdout)
+    bundled = json.loads((PKG / "tools" / "calc-schemas.json").read_text(encoding="utf-8"))
+    assert bundled == generated
+
+
+def test_proposal_schema_bundle_matches_python_core_export():
+    result = subprocess.run(
+        [sys.executable, "-m", "jiaodui", "unit-schema", "--json"],
+        cwd=ROOT, capture_output=True, text=True, check=True)
+    generated = json.loads(result.stdout)
+    bundled = json.loads((PKG / "tools" / "proposal-schema.json").read_text(encoding="utf-8"))
+    assert bundled == generated
 
 
 def test_native_tool_module_is_dependency_free_and_wired():

@@ -23,8 +23,9 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { apply, inject } from './packages/dsh-jiaodui/tools/index.js';
 let tool;
+const registered=new Map();
 const requests=[];
-const services={tools:{register(t){tool=t}},subprocess:{
+const services={tools:{register(t){registered.set(t.name,t);if(t.name==='jiaodui')tool=t}},subprocess:{
   async resolveExecutable(){return process.execPath},
   spawn(spec){
     requests.push(spec);
@@ -66,6 +67,26 @@ assert.equal(result.stdout.trim(),second);assert.equal(requests[1].cwd,second);a
 assert.equal(policyLookups,2);
 delete services.sandboxPolicy;
 await assert.rejects(()=>tool.execute({args:['--work-root',second,'--help']},exec),/work-root/);
+const locate=registered.get('jiaodui_unit_locate');
+assert.deepEqual(locate.parameters.required,['task_id','unit_id','phrase']);
+const unitRead=registered.get('jiaodui_unit_read');
+assert.equal(unitRead.parameters.properties.max_lines.maximum,2000);
+const submit=registered.get('jiaodui_unit_submit');
+assert.equal(submit.parameters.properties.proposal.type,'object');
+assert.equal(submit.parameters.properties.proposal.properties.schema_version.const,2);
+assert.equal(submit.parameters.properties.proposal.properties.corrections.items.additionalProperties,false);
+const calc=registered.get('jiaodui_calc_evaluate');
+assert.equal(calc.parameters.additionalProperties,false);
+assert.deepEqual(calc.parameters.required,['expression']);
+const realSpawn=ctx.subprocess.spawn;
+ctx.subprocess.spawn=spec=>{requests.push(spec);return {done:Promise.resolve({exitCode:0}),collected:{stdout:{readFrom(){return {text:'{}',lossy:false}}},stderr:{readFrom(){return {text:'',lossy:false}}}}}};
+await locate.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),phrase:'木板'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-locate','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--phrase','木板']);
+await unitRead.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),start_line:1,max_lines:2000},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-read','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--start-line','1','--max-lines','2000']);
+await calc.execute({expression:'1+2'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','calc','evaluate','--param','expression="1+2"']);
+ctx.subprocess.spawn=realSpawn;
 result=await tool.execute({args:['-e','setTimeout(()=>{console.error("failure");process.exit(4)},30)']},exec);
 assert.equal(result.exitCode,4);assert.equal(result.stderr.trim(),'failure');
 await assert.rejects(()=>tool.execute({args:['--help']},{}),/工作区/);
