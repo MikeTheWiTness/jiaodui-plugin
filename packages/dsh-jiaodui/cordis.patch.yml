@@ -30,11 +30,15 @@
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
               maxBytes: 65536
+          # 聚合fs暂保留：宿主read_image来自该插件。细粒度读写过滤尚待宿主支持。
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
           - id: skill-filesystem
             name: '@deepseek-ai/dsh-skill-filesystem'
             config:
+              includeDefaultRoots: false
               # preset 行的挂载基准是 profile 根（agent-preset-registry 的 ctx.baseUrl），
               # 不是本 patch 所在目录，所以不能用 ./skills；按 DSH 自带 bundle 的写法，
               # 用 createRequire(baseUrl) 反查包的真实路径。
@@ -114,6 +118,30 @@
                   toolName: subagent
                   modelSelectionSettings: true
                   backgroundMode: continuable
+                  maxDepth: 1
+                  toolFilter:
+                    allow:
+                      - skill
+                      - read
+                      - read_image
+                      - jiaodui_unit_read
+                      - jiaodui_unit_locate
+                      - jiaodui_unit_snapshot
+                      - jiaodui_unit_submit
+                      - jiaodui_unit_event
+                      - jiaodui_unit_recovery
+                      - jiaodui_calc_evaluate
+                      - jiaodui_calc_simplify
+                      - jiaodui_calc_solve
+                      - jiaodui_calc_equality
+                      - jiaodui_calc_differentiate
+                      - jiaodui_calc_integrate
+                      - jiaodui_calc_formula
+                      - jiaodui_calc_dimensional
+                      - jiaodui_calc_limit
+                      - jiaodui_calc_geometry
+                      - jiaodui_calc_vector_ops
+                      - jiaodui_calc_circle_from_two_points
               - id: tool-subagent-fork
                 disabled: true
                 name: '@deepseek-ai/dsh-tool-subagent'

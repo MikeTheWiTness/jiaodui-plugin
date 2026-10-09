@@ -9,6 +9,7 @@
       "proposal_revision",
       "run_id",
       "schema_version",
+      "self_check",
       "source_sha256",
       "summary",
       "task_id",
@@ -116,7 +117,34 @@
       },
       "self_check": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "checks",
+          "unresolved"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "needs_user"
+            ]
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "unresolved": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       }
     }
   }

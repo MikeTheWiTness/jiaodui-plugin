@@ -16,11 +16,11 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)
 - DSH 插件包（M7 换壳的首次尝试）：[packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md)
 
-## 当前状态：校对流程改造 M0–M6（M4第7项单独分支）
+## 当前状态：第7章新报告主链的隔离实验分支
 
 M0 已核对 `main` 初始干净状态、Python 3.12.13、独立CLI环境与官方 `install_bundle` 安装约定；改造前全量基线为 941 passed、4 subtests passed。M1–M3、M5及M6的仓内实现包括轮次执行授权、task/unit身份、Unicode位置索引、结构化建议生成/提交、有限恢复预算和整卷 `complete` 判据。
 
-改造代码的定向测试已通过；M4 首轮证据/建议自查/父复核版本绑定按用户要求隔离到独立分支。未能从本仓静态配置证明默认 skill 排他、父子能力隔离，也未执行 DSH `install_bundle` 或新会话真机验收；这些不计作仓内测试完成。
+用户已确认独立分支指第7章新报告主链；M2定位、M3结构化生成和依赖它们的M4自查/父复核均隔离在 `feature/structured-report-pipeline`。main保持旧Markdown主链，只落实兼容改造。当前实验代码经过定向测试，真实回放仍有预算耗尽失败，M0—M6不能宣称全部完成。已只读核实宿主支持includeDefaultRoots/toolFilter/maxDepth；尚未执行官方安装、重启或新preset会话验收。
 
 已实现的核心与入口命令：
 

@@ -66,7 +66,8 @@ def test_preset_declares_jiaodui_with_minimal_agent_capabilities():
     plugins = {p["id"]: p for p in config["plugins"]}
     for required in ("persona", "tool-skill", "tool-todo", "jiaodui-tools", "delegation"):
         assert required in plugins, f"preset 缺少校对能力：{required}"
-    for removed in ("tool-bash", "tool-pwsh", "tool-fs", "tool-fs-search",
+    assert plugins["tool-fs"]["name"] == "@deepseek-ai/dsh-tool-fs"
+    for removed in ("tool-bash", "tool-pwsh", "tool-fs-search",
                     "command-goal", "tool-goal"):
         assert removed not in plugins or plugins[removed].get("disabled", False), f"preset 不应启用：{removed}"
     assert plugins.get("tool-web", {}).get("disabled", False) is True
@@ -84,11 +85,17 @@ def test_preset_uses_standard_native_tools_and_keeps_parallel_delegation():
     assert delegation["tool-subagent"].get("disabled", False) is False
     assert delegation["tool-subagent"]["config"]["provider"] == "spawn"
     assert delegation["tool-subagent"]["config"]["backgroundMode"] == "continuable"
+    assert delegation["tool-subagent"]["config"]["maxDepth"] == 1
+    child_tools = set(delegation["tool-subagent"]["config"]["toolFilter"]["allow"])
+    assert {"skill", "read_image", "jiaodui_unit_read", "jiaodui_unit_submit"} <= child_tools
+    assert not child_tools & {"jiaodui", "write", "edit", "bash", "web_search", "subagent",
+                              "subagent_fork", "jiaodui_unit_review", "create_goal"}
     assert plugins["tool-todo"]["config"]["allowParallelInProgress"] is True
 
 
 def test_preset_mounts_bundled_skill_dir_and_native_tool():
     plugins = {p["id"]: p for p in _preset_config()["plugins"]}
+    assert plugins["skill-filesystem"]["config"]["includeDefaultRoots"] is False
     dirs = plugins["skill-filesystem"]["config"]["customSkillDirs"]
     assert len(dirs) == 1
     assert "'skills'" in dirs[0] and "baseUrl" in dirs[0]

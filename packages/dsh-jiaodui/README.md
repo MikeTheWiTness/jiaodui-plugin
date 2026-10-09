@@ -22,10 +22,10 @@
 
 ## 它做了什么
 
-- **agent preset「校对」（id `jiaodui`）**：自带 plugins 列表并使用 native 工具呈现；保留单元身份读取/定位/提交、子 agent、询问、任务、交付展示和压缩能力，关闭shell、通用fs、web、goal、plan与嵌套fork。
+- **实验分支preset「校对」（id `jiaodui`）**：保留结构化单元读取/定位/提交、真实read_image、单层子agent和交付能力，关闭shell、web、goal、plan与fork。父侧暂保留聚合fs，子侧通过toolFilter只允许读取/计算/提交，不暴露write/edit、argv退路或父复核。
   - `skill-filesystem` 的 `customSkillDirs` 指向本包 `skills/`，用于发现随包 jiaodui skill。
   - `./tools/index.js` 注册原生工具 `jiaodui`。
-  当前配置没有默认 skill 排他白名单，也没有按父/子角色限制文件工具操作；无关 skill 是否仍被宿主注入、子 agent 实际工具范围需在 DSH 新会话中核验，不能仅凭 bundle 配置认定已隔离。
+  实际宿主源码已确认支持 `includeDefaultRoots:false`、子代理 `toolFilter.allow` 和 `maxDepth:1`；本实验preset已配置这些字段。静态结构检查不替代新会话父子实际catalog验收，也不将开发会话CLI回放当作安装验证。
 - **原生工具 `jiaodui`**：旧命令 `args: string[]` 透传入口继续保留，作为兼容CLI退路。
 - **结构化工具**：按task/unit ID提供位置查询、版本快照、建议提交、恢复预算和阶段/取消事件；14个计算operation使用独立JSON Schema。calc schema从Python核心 `OPERATIONS` 元数据生成，打包测试核对副本漂移。
 

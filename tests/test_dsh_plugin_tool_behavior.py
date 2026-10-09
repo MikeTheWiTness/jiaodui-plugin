@@ -98,7 +98,7 @@ const cancelController = new AbortController();
 const cancelExec = {...exec, signal: cancelController.signal};
 const cancelPromise = tool.execute({args:['-e','setInterval(()=>{},1000)']},cancelExec);
 setTimeout(()=>cancelController.abort(),20);
-await assert.rejects(cancelPromise,/用户已取消/);
+await assert.rejects(cancelPromise, error => error.name === 'AbortError' && /宿主已中止调用/.test(error.message));
 // reject 后仍读取完整收集结果，并延后读取截断标记。
 ctx.subprocess.spawn=()=>({collected:{stdout:{readFrom(){return {text:'partial',lossy:true}}},stderr:{readFrom(){return {text:'diagnostic',lossy:false}}}},done:Promise.reject(new Error('broken'))});
 result=await tool.execute({args:['--help']},exec);

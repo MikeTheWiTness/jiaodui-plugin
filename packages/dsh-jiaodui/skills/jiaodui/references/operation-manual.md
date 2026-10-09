@@ -53,7 +53,17 @@ jiaodui status <paper_dir> --json
     "severity": "一般问题",
     "evidence_ids": ["e1"]
   }],
-  "evidence": {"assumptions": [{"id": "e1", "text": "依据摘要", "source_locations": []}]}
+  "evidence": {
+    "assumptions": [{"id": "e1", "text": "依据摘要", "source_locations": []}],
+    "symbols": [],
+    "images": {"status": "not_applicable", "reason": "无配图"},
+    "calculations": {"status": "not_applicable", "reason": "无数值或公式核验"}
+  },
+  "self_check": {
+    "status": "passed",
+    "checks": ["real_issue", "replacement_semantics", "related_coverage", "scope_and_uncertainty", "severity"],
+    "unresolved": []
+  }
 }
 ```
 
@@ -62,6 +72,10 @@ jiaodui status <paper_dir> --json
 ## 恢复与事件
 
 执行模式记录后，以 `unit-recovery` 按 `unit_id`、类别和64位小写SHA-256失败指纹消费有限预算；换 agent 或更换指纹不能重置同轮计数。`unit-event` 记录阶段、attempt、agent，以及明确的取消发起者和原因。user取消不重派；parent技术取消不得记作user取消。
+
+## 父代理复核（第7项实验分支）
+
+技术提交后，先生成整卷报告通读全文和证据。`unreviewed`列出待审单元，但全文可读；complete仍false。以提交后的unit-snapshot hash调用 `jiaodui_unit_review`，decision为accepted或needs_revision；退回需issue，接受绑定当前输入、建议、报告与自查hash。任何版本变化后重新复核。Word只允许当前版本已accepted。
 
 ## 交付
 

@@ -139,24 +139,30 @@ class DocxBuildResult:
                 and not self.excluded_units)
 
 
+def _report_sections(part: str) -> tuple[str, str | None]:
+    """所有Word消费者共用版本化报告边界，旧报告仍沿用兼容清理。"""
+    from .report_parse import split_sections
+    _, body, reasons = split_sections(part)
+    if body is None or reasons is None:
+        return part, None
+    if part.startswith("<!-- jiaodui-report-v2 -->"):
+        return body, reasons
+    return _audit_body(body), reasons
+
+
 def _report_marker_counts(questions) -> dict:
     """按单元统计报告「标记原文」段里的内联标记总数（jiaodui.markers 单一源）。"""
     counts = {}
     for qid, part in questions:
-        marker_idx = part.find("### 标记原文")
-        reason_idx = part.find("### 修改原因")
-        has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
-        mark_seg = _audit_body(part[marker_idx:reason_idx]) if has_sections else part
+        mark_seg, _ = _report_sections(part)
         counts[qid] = len(_PAT.findall(mark_seg))
     return counts
 
 
 def _is_included_unit(part: str) -> bool:
     """与 generate_combined_docx 同口径：含标记但缺分段的单元被跳过。"""
-    marker_idx = part.find("### 标记原文")
-    reason_idx = part.find("### 修改原因")
-    has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
-    mark_seg = _audit_body(part[marker_idx:reason_idx]) if has_sections else part
+    mark_seg, reasons = _report_sections(part)
+    has_sections = reasons is not None
     if _PAT.search(mark_seg) and not has_sections:
         return False
     return True
@@ -359,10 +365,15 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
     for qid, part in questions_all:
         # 走完整闸门（含图片资源），与 verify-report 同一口径
         verdict = verify_unit(paper_path / qid)
-        if verdict.ok and (data is None or material.registered(root, data, paper_path / qid)):
+        current_review = True
+        if part.startswith("<!-- jiaodui-report-v2 -->"):
+            from .review import review_current
+            current_review = data is not None and review_current(root, data, qid)
+        if verdict.ok and current_review and (data is None or material.registered(root, data, paper_path / qid)):
             questions.append((qid, part))
             continue
-        reason = "；".join(i.message for i in verdict.errors[:2]) or "本轮尚未登记或摘要已改变"
+        reason = ("结构化建议尚无当前版本的父代理复核" if not current_review else
+                  "；".join(i.message for i in verdict.errors[:2]) or "本轮尚未登记或摘要已改变")
         result.excluded_units.append({"unit": qid, "reason": reason})
         result.warnings.append(f"{qid}: 未通过 verify-report，已排除出 Word 交付（{reason}）")
         log(f"⛔ {qid}: 未通过 verify-report，排除出 Word 交付")
@@ -557,16 +568,14 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
         skipped_broken = 0
 
         for qid, part in questions:
-            marker_idx = part.find("### 标记原文")
-            reason_idx = part.find("### 修改原因")
-            has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
+            mark_seg, reason_section = _report_sections(part)
+            has_sections = reason_section is not None
 
             # 无标记（【N|原|改】）即视为「无问题」单元：
             # - 无分段形态：LLM 判定无问题时只输出「无问题 + 工具日志 + 思考过程」；
             # - 有分段形态：LLM 按完整分段输出（标记原文 = 无标记全文，修改原因 = 无）。
             # 两种形态都插入单元原文 + 「无问题」批注（锚定标题）。
             # 含标记却缺分段才可疑（批注可能丢失），单独警示。
-            mark_seg = part[marker_idx:reason_idx] if has_sections else part
             if _PAT.search(mark_seg):
                 if not has_sections:
                     skipped_broken += 1
@@ -592,8 +601,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
                 else:
                     all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
                 continue
-            reasons = parse_reasons(part[reason_idx:])
-            body = _audit_body(part[marker_idx:reason_idx])
+            reasons = parse_reasons(reason_section)
+            body = mark_seg
             # 标记真实性审计必须在重写图片引用与 LaTeX 预处理之前做：
             # 审计要把「重建正文」与单元源文逐字比对，而这两步都会改写正文字面
             audits = audit_markers(body, _read_unit_source(paper_path, qid))

@@ -148,15 +148,32 @@ function registerStructuredTools(ctx, cliTool) {
     ...(args.cancel_initiator ? ['--cancel-initiator', args.cancel_initiator] : []),
     ...(args.cancel_reason ? ['--cancel-reason', args.cancel_reason] : [])])
 
+  register('jiaodui_unit_review', '父代理按当前snapshot接受或退回结构化建议。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id', 'expected_snapshot_sha256', 'decision', 'reviewer_id'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' },
+      expected_snapshot_sha256: { type: 'string' },
+      decision: { type: 'string', enum: ['accepted', 'needs_revision'] },
+      reviewer_id: { type: 'string' }, issue: { type: 'string' },
+    },
+  }, args => ['unit-review', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--expected-snapshot-sha256', args.expected_snapshot_sha256, '--decision', args.decision,
+    '--reviewer-id', args.reviewer_id, ...(args.issue ? ['--issue', args.issue] : [])])
+
   for (const [operation, schema] of Object.entries(CALC_SCHEMAS)) {
     const parameters = structuredClone(schema.parameters)
     parameters.properties.subject = {
       type: 'string', enum: ['高中物理'], description: '可选学科，用于校验学科工具白名单并注入物理量表。',
     }
+    parameters.properties.task_id = { type: 'string', description: '记录calc证据时的材料task_id。' }
+    parameters.properties.unit_id = { type: 'string', description: '记录calc证据时的单元unit_id。' }
     register(`jiaodui_calc_${operation}`, schema.description, parameters, args => {
-      const { subject, ...values } = args
+      if (Boolean(args.task_id) !== Boolean(args.unit_id)) throw new Error('task_id与unit_id必须同时提供')
+      const { subject, task_id, unit_id, ...values } = args
       const params = Object.entries(values).flatMap(([key, value]) => ['--param', `${key}=${JSON.stringify(value)}`])
-      return ['calc', operation, ...(subject ? ['--subject', subject] : []), ...params]
+      return ['calc', operation, ...(subject ? ['--subject', subject] : []),
+        ...(task_id ? ['--task-id', task_id, '--unit-id', unit_id] : []), ...params]
     })
   }
 }
@@ -236,7 +253,7 @@ export function apply(ctx, config = {}) {
       }
       if (!executable) throw new Error('jiaodui: 未找到 CLI，请使用 Python 3.12 的 pipx install <jiaodui wheel>，并安装 pandoc；可用 python3 -m jiaodui 诊断安装')
       if (exec?.signal?.aborted) {
-        const cancelled = new Error('jiaodui: 用户已取消')
+        const cancelled = new Error('jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录')
         cancelled.name = 'AbortError'
         throw cancelled
       }
@@ -260,7 +277,7 @@ export function apply(ctx, config = {}) {
       try {
         const outcome = await handle.done
         if (exec?.signal?.aborted) {
-          const cancelled = new Error('jiaodui: 用户已取消')
+          const cancelled = new Error('jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录')
           cancelled.name = 'AbortError'
           throw cancelled
         }
@@ -274,7 +291,7 @@ export function apply(ctx, config = {}) {
         }
       } catch (error) {
         if (exec?.signal?.aborted) {
-          const cancelled = new Error('jiaodui: 用户已取消')
+          const cancelled = new Error('jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录')
           cancelled.name = 'AbortError'
           throw cancelled
         }

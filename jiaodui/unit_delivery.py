@@ -81,7 +81,8 @@ def _candidate(root: Path, unit: Path, snapshot: dict, proposal: dict) -> tuple[
         candidate = render_suggestions(source_text, proposal,
                                        expected_task_id=snapshot["task_id"],
                                        expected_unit_id=snapshot["unit_id"],
-                                       expected_run_id=snapshot["run_id"])
+                                       expected_run_id=snapshot["run_id"],
+                                       calc_calls=data["runs"][-1].get("calc_calls", []))
     except ValueError as exc:
         raise BusinessError(str(exc), code=getattr(exc, "code", "proposal-invalid")) from exc
     verdict = verify_report_text(candidate.text, source_text)
@@ -155,6 +156,16 @@ def commit_unit_submission(task_id: str, unit_id: str, proposal: dict,
             raise BusinessError("提交使用的单元版本已改变，拒绝覆盖", code="snapshot-stale",
                                 details={"current_snapshot_sha256": snapshot["snapshot_sha256"]})
         candidate, checked = _candidate(root, unit, snapshot, proposal)
+        if data_file.is_file():
+            try:
+                previous_data = json.loads(data_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise BusinessError("当前数据损坏，不能静默覆盖", code="data-invalid") from exc
+            if not isinstance(previous_data, dict):
+                raise BusinessError("当前数据结构无效，不能静默覆盖", code="data-invalid")
+            if (previous_data.get("schema_version") == 2
+                    and proposal["proposal_revision"] != previous_data.get("proposal_revision", 0) + 1):
+                raise BusinessError("新建议revision必须在当前版本基础上增加1", code="proposal-revision-stale")
         report_bytes = candidate.text.encode("utf-8")
         parsed: dict[str, Any] = dict(checked["parsed"])
         parsed.update({

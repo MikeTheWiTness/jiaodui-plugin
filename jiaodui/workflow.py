@@ -425,6 +425,8 @@ def parse_unit(unit: str | Path, *, source: str | Path | None = None,
     if not report.is_file():
         raise NotFoundError(f"找不到报告：{report}")
     text = report.read_bytes().decode("utf-8")
+    if text.startswith("<!-- jiaodui-report-v2 -->"):
+        raise BusinessError("v2报告须通过unit-submit生成登记，禁止旧parse覆盖建议及证据", code="parse-v2-requires-submit")
     source_file = input_path(source) if source else find_source_md(unit)
     # 走完整闸门：parse-report 是交付登记入口，只查文本会让缺图单元照样登记。
     verdict = verify_unit(unit, source_path=source_file)

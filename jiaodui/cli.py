@@ -275,6 +275,17 @@ def cmd_unit_schema(args: argparse.Namespace) -> int:
     return ExitCode.OK
 
 
+def cmd_unit_review(args: argparse.Namespace) -> int:
+    from .review import record_parent_review
+
+    payload = record_parent_review(args.task_id, args.unit_id,
+                                   expected_snapshot_sha256=args.expected_snapshot_sha256,
+                                   decision=args.decision, reviewer_id=args.reviewer_id,
+                                   issue=args.issue or "")
+    _json_out(payload)
+    return ExitCode.OK
+
+
 def cmd_verify_report(args: argparse.Namespace) -> int:
     from .verify import verify_unit
     from .workdir import input_path
@@ -397,9 +408,17 @@ def cmd_calc(args: argparse.Namespace) -> int:
         if internal == "dimensional":
             params.setdefault("quantities", config.get("quantities") or {})
     result = run_operation(internal, **params)
+    call_id = None
+    if bool(getattr(args, "task_id", None)) != bool(getattr(args, "unit_id", None)):
+        raise UsageError("calc记录证据时必须同时提供--task-id和--unit-id")
+    if getattr(args, "task_id", None):
+        from .material import record_calc_call
+        call_id = record_calc_call(args.task_id, args.unit_id, internal, params, result)
     if not result.get("code") or not args.show_code:
         result = {k: v for k, v in result.items() if k != "code"}
     payload = {"ok": bool(result.get("success")), "op": op, "result": result}
+    if call_id is not None:
+        payload["call_id"] = call_id
     if args.json:
         _json_out(payload)
     else:
@@ -602,6 +621,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("unit-schema", help="输出结构化建议schema v2")
     sp.set_defaults(func=cmd_unit_schema)
 
+    sp = sub.add_parser("unit-review", help="按snapshot接受或退回当前结构化建议")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--expected-snapshot-sha256", required=True)
+    sp.add_argument("--decision", choices=["accepted", "needs_revision"], required=True)
+    sp.add_argument("--reviewer-id", required=True)
+    sp.add_argument("--issue")
+    sp.set_defaults(func=cmd_unit_review)
+
     sp = sub.add_parser("verify-report", help="交付即校验")
     sp.add_argument("--unit", required=True)
     sp.add_argument("--source")
@@ -628,6 +656,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
     sp.add_argument("--show-code", action="store_true", help="回显生成的代码（默认不回显）")
     sp.add_argument("--subject", help="学科；提供后按学科配置的工具集白名单校验 calc 是否可用")
+    sp.add_argument("--task-id", help="记录calc证据时的材料task_id")
+    sp.add_argument("--unit-id", help="记录calc证据时的单元unit_id")
     sp.set_defaults(func=cmd_calc)
 
     sp = sub.add_parser("quantities", help="列出学科物理量表（只读，供量纲声明核对用词）")

@@ -38,7 +38,14 @@ def proposal(source: str, *, phrase: str = "木板", start: int | None = None) -
             "severity": "一般问题",
             "evidence_ids": ["e1"],
         }],
-        "evidence": {"assumptions": [{"id": "e1", "text": "对象为物块。", "source_locations": []}]},
+        "evidence": {
+            "assumptions": [{"id": "e1", "text": "对象为物块。", "source_locations": []}],
+            "symbols": [],
+            "images": {"status": "not_applicable", "reason": "合成测试无图片"},
+            "calculations": {"status": "not_applicable", "reason": "无数值或公式核验"},
+        },
+        "self_check": {"status": "passed", "checks": ["real_issue", "replacement_semantics",
+                         "related_coverage", "scope_and_uncertainty", "severity"], "unresolved": []},
     }
 
 
@@ -61,14 +68,58 @@ def test_versioned_body_boundary_preserves_headings_and_preamble_like_source_lin
     payload["source_sha256"] = payload["body_sha256"] = digest(source)
     payload["corrections"] = []
     payload["summary"] = "无问题"
-    payload["evidence"] = {}
+    payload["evidence"] = {
+        "assumptions": [{"id": "e1", "text": "已核对本单元内容。", "source_locations": []}],
+        "symbols": [],
+        "images": {"status": "not_applicable", "reason": "无配图"},
+        "calculations": {"status": "not_applicable", "reason": "无数值或公式"},
+    }
+    payload["self_check"] = {"status": "passed", "checks": ["no_issue_review"], "unresolved": []}
     candidate = render_suggestions(source, payload, expected_task_id="a" * 32,
                                    expected_unit_id="b" * 32, expected_run_id="run-1")
     _, marked, reasons = split_sections(candidate.text)
     assert marked == source
     assert "### 修改原因" in marked
-    assert reasons.strip() == "无"
+    assert reasons.startswith("无\n")
+    assert "核验说明：" in reasons
     assert verify_report_text(candidate.text, source).ok
+
+
+def test_word_consumers_keep_markers_after_source_reason_heading():
+    from jiaodui.docx_report import _report_marker_counts, _report_sections
+    source = "开头。\n### 修改原因\n编号：末尾木板。"
+    candidate = render_suggestions(source, proposal(source), expected_task_id="a" * 32,
+                                   expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert _report_marker_counts([("单元1", candidate.text)]) == {"单元1": 1}
+    body, _ = _report_sections(candidate.text)
+    assert "编号：末尾【1|木板|木块】。" in body
+    assert split_marked_body(body) == source
+
+
+def test_self_check_and_first_pass_evidence_are_required():
+    source = "木板。"
+    payload = proposal(source)
+    payload.pop("self_check")
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.self-check"
+    payload = proposal(source)
+    payload["evidence"]["assumptions"] = []
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.evidence-assumptions"
+
+
+def test_fabricated_calc_call_is_rejected():
+    source = "木板。"
+    payload = proposal(source)
+    payload["evidence"]["calculations"] = [{"id": "e2", "call_id": "fake", "expression": "1+2", "result": 3}]
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.calc-call-mismatch"
 
 
 def test_schema_v2_report_is_rejected_by_legacy_repair():

@@ -26,8 +26,8 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 ### 2.2 执行前硬门槛（失败即拒绝执行）
 1. `jiaodui check-env` 必须通过（Python≥3.12、sympy / python-docx / Pillow / lxml、pandoc）。它只证明本地依赖，**不证明宿主能力**。`matplotlib` 属可选：check-env 按真实 import 区分「未安装 / 已安装但无法加载」；不可用只让**批注内公式图片**降级为 `$…$` 文本，不阻塞流程。
 2. 首次校对派发前，按 [`references/vision-probe.md`](references/vision-probe.md) 派一个干净上下文的子 agent，实际读取**随包 `assets/vision-probe.png` 白底测试图**并描述内容。以 skill 安装位置解析绝对路径；不从教材找图，不现场绘图，不向子 agent 预告图片答案。无图片讲义/试卷同样可以验证；同会话同模型/工具配置验证成功后可复用，配置改变或新会话重测。
-3. 同时确认宿主支持：一层扁平子 agent、子 agent 能在单元目录内写文件并回传一行摘要。
-4. 调图片工具前核对当前 schema。DSH `read_image` 用 `file_path`，不是 `path`；参数错误先按 schema 修正，最多重试 2 次，不据此宣称宿主无视觉能力。权限拒绝不是参数错误，不用同一权限重复尝试；停止本次操作并说明需要宿主授权或用户处理。用户明确要求遇错即停时遵从用户。仍不能确认读图成功则拒绝校对（D14）。固定探针已预合成白底；实际教材中的透明 PNG 仍须按需合成白底再判读，不能省略真实题图检查。文本工具按宿主上限分页；本次 DSH 每次最多读取 2,000 行，这与入口识别共用的 2,000 字符预览预算不同。宿主调用严格按当前实际暴露的 schema。若宿主直接暴露具名工具，按其 JSON schema 调用；若当前 Harness 只暴露 `run_code`，则在外层按 `run_code` schema 调用，并在程序内使用 `await tools.jiaodui(...)`、`await tools.write(...)`、`await tools.edit(...)` 等 SDK。外层字段与内层工具参数不可混用。当前 Harness 的 `run_code.justification` 必须是非空完整句子；空值会在程序执行前被参数校验拒绝。该字段属于外层调用说明，不是传给内层工具的权限参数，也不能用来掩盖权限拒绝。DSH `read_image` 参数名为 `file_path`。其他宿主以其实际工具 schema 为准；具体示例见 `references/failure-modes.md` 第七节。
+3. 同时确认宿主支持：一层扁平子 agent、真实read_image、结构化单元读取/提交，以及回传一行摘要。
+4. 图片必须用真实读图工具；DSH `read_image` 用 `file_path`。参数错误在预算内最多修正2次，权限拒绝和用户取消不重试。固定探针用随包白底图；教材透明线稿按实际读取清单取白底图，仍无法确认视觉时拒绝校对。单元读取每页最多2000行，与入口识别合计2000字符额度不同。宿主schema与历史run_code调用纪律按需读 `references/failure-modes.md` 第七节，不混用内外层字段。
 
 ## 3. 完整流程
 产物落点：当前会话工作区为 `W`，首次写入自动创建 `W/校对/<材料名>/`；其内 `source/` 保存源文件副本，`raw/` 保存转换文本与图片，`units/<材料名>/` 保存单元，`校对报告/`、`校对Word/` 保存最终报告，`_校对记录.json` 保存溯源和轮次。插件每次调用注入 W；经 bash 调用写入命令（convert / split / slice 非 preview / parse-report / build-report / build-docx / repair-report --apply）必须传 `--work-root <W>`；repair-report 不带 --apply 时只读预览。只读命令不要求 W。不在源文件旁生成产物；以 CLI JSON 的绝对路径为准。冲突、清单损坏或单元集合不一致时停止相关材料，报告原因，不删产物。历史写入显式 `--legacy-layout` 且仍限 W 内；重跑用 `split --rerun` 开新轮次。
@@ -47,7 +47,7 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 4. 扫描：`jiaodui status <paper_dir> --json`（传拆分返回的单元根目录，不传材料根目录），派发未开始 / 未过校验 / 本轮未完成的单元。每个单元派发前先运行只读的 `jiaodui inspect-images --unit <dir> --json`；清单按正文引用顺序绑定引用序号、位置、原图和实际读取图，缺图/无效/不支持远程引用先停止该单元。
 5. 滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。输入包必须显式携带 `references/failure-modes.md` 路径，并列出本轮允许重试的类别、次数和停止范围。
 6. 单元子 agent：先用 `jiaodui_unit_snapshot` 获取当前版本，再通过 `jiaodui_unit_read` 分页读取源文和图片实际读取清单；真实读取配图并核对引用归属；按需使用 operation-specific calc 工具验算。用 `jiaodui_unit_locate` 选择位置，再以该snapshot调用 `jiaodui_unit_submit` 提交schema v2建议。模型不写报告；程序从不可变原稿生成全文、verify、解析并登记。建议含源文/图片hash与当前轮次；版本变化或标记不可无损表达时拒绝写入。
-7. `jiaodui build-report <paper_dir>` 生成整卷报告。JSON 中 `complete` 必须为 true 才进入正式交付；若为 false，保留诊断报告并处理失败清单，不将占位报告当作完成。
+7. `jiaodui build-report <paper_dir>` 生成审阅全文；complete=false时检查failed与unreviewed。待复核单元技术合格全文仍可供父代理通读，技术失败只留占位。完成父复核后再汇总，complete=true才可正式交付。
 8. 主 agent **通读整卷报告全文**（整体把关）：个别单元漏检 → 定向复核；系统性问题 → 停手回报用户。
 9. `jiaodui build-docx <paper_dir>`，复核 **错误标记数 = 批注锚点数 + 公式兜底数，且缺失数为 0**（无问题单元标题批注单列）。不满足按确定性 bug 处理，**不交付 docx**。
 10. 交付：整卷报告 + Word 批注版 + 失败清单（不自动改源文）。
@@ -56,6 +56,11 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 - 主 agent 在入口可按 §2.1 有限预览；进入单元校对后只做调度，每单元只读**一行摘要**（单元号 / 问题数 / 校验结果 / 产物路径 / 失败原因），不逐单元读取报告或源文。收尾按 §3 通读整卷报告。
 - 一层扁平：主 agent 直接派单元子 agent，**禁止嵌套**。
 - 滑动窗口补位：空位立即补派下一个单元，并发取宿主上限（DSH 默认 8）。首个单元错误达到批次停止条件后，立即停止补位并取消仍在途任务；区分此前已发出的并行调用与获知错误后新增的调用，确认在途任务均已停止后才结束批次。异步派发必须等待调用完成后再判断结果：使用 `await Promise.all(...)` 或在需要完整收集部分失败时使用 `await Promise.allSettled(...)`；逐项验证返回的 `kind` 与任务句柄（`jobId` / `subagentId` / `runId`）。未 await 的 Promise 序列化成 `{}` 不代表派发结果；拿到并记录有效句柄前不得检查状态、认定派发失败或结束批次。
+
+### 4.1 内容判断与建议复核（第7项实验分支）
+- 首轮证据分开保存 assumptions（g、计时原点、方向、近似条件）、symbols、images（真实读取与图文归属）、calculations（当前单元真实call_id及验算结果）。无适用图片/公式时显式记not_applicable及原因；无问题也保留核验依据。
+- 提交前子代理自查：真实问题而非错误选项/转换差异；replacement语义；关联选项/解析/结论覆盖；修改范围与不确定性；严重度。含修改时self_check需通过全部五项；无修改时需no_issue_review。
+- 父代理先通读技术合格的整卷审阅报告，再调用 `jiaodui_unit_review` 接受/退回当前snapshot。缺复核时complete=false但可读全文；输入/建议/报告改变后接受失效，最新退回撤销旧接受。Word只接受当前版本复核。父子同模型，不宣称独立模型意见。
 
 ## 5. 子 agent 输入包（只给路径和身份，不给源文全文）
 - 提供工作区 W、单元目录路径、`task_id`、`unit_id`、当前snapshot摘要、图片清单和按需学科 references；同时列明恢复类别预算。主 agent 不读取逐单元源文。

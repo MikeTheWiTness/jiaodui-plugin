@@ -146,6 +146,26 @@ def validate(root: Path, data: dict) -> dict:
             _invalid("转换类型无效", root)
         for r in conversion["resources"] + conversion["source_resources"]:
             resource(r)
+    reviews = data.get("unit_reviews", [])
+    if not isinstance(reviews, list):
+        _invalid("父复核记录必须为数组", root)
+    for review in reviews:
+        if (not isinstance(review, dict)
+                or not isinstance(review.get("unit_id"), str)
+                or not re.fullmatch(r"[0-9a-f]{32}", review["unit_id"])
+                or review.get("run_id") not in ids
+                or review.get("decision") not in {"accepted", "needs_revision"}
+                or not isinstance(review.get("reviewer_id"), str)
+                or not isinstance(review.get("recorded_at"), str)
+                or not isinstance(review.get("inputs"), dict)
+                or not isinstance(review.get("report_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", review["report_sha256"])
+                or not isinstance(review.get("proposal_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", review["proposal_sha256"])
+                or not isinstance(review.get("self_check_sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", review["self_check_sha256"])):
+            _invalid("父复核记录无效", root)
+        input_record(review["inputs"])
     return data
 
 
@@ -389,6 +409,40 @@ def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str
         return event
 
 
+def record_calc_call(task_id: str, unit_id: str, operation: str, params: dict, result: dict) -> str:
+    """记录与当前单元输入绑定的确定性计算结果，返回供建议引用的call_id。"""
+    if not isinstance(operation, str) or not operation or not isinstance(params, dict):
+        raise BusinessError("calc调用信息无效", code="calc-evidence-invalid")
+    root, unit = find_unit_by_id(task_id, unit_id)
+    with locked(root):
+        data = load(root)
+        run = data["runs"][-1]
+        if run.get("execution_policy") is None:
+            raise BusinessError("当前轮次尚未确认执行模式", code="execution-policy-required")
+        inputs = unit_inputs(root, unit)
+        if inputs != data["unit_inputs"].get(unit.name):
+            raise BusinessError("calc调用时单元输入已改变", code="unit-input-mismatch")
+        call_id = uuid.uuid4().hex
+        entry = {
+            "call_id": call_id,
+            "task_id": task_id,
+            "unit_id": unit_id,
+            "run_id": run["run_id"],
+            "source_sha256": inputs["source_sha256"],
+            "input_digest": hashlib.sha256(
+                json.dumps(inputs, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "operation": operation,
+            "params": params,
+            "success": bool(result.get("success")),
+            "result": {key: value for key, value in result.items() if key != "code"},
+            "recorded_at": now(),
+        }
+        run.setdefault("calc_calls", []).append(entry)
+        write(root, data)
+        return call_id
+
+
 def check_units(root: Path, data: dict) -> Path:
     paper = relative_path(root, data["paths"]["paper"])
     dirs = sorted((p for p in paper.iterdir() if p.is_dir() and is_unit_dir(p.name)),
@@ -452,6 +506,12 @@ def register_locked(root: Path, unit: Path, text: str, expected_run_id: str) -> 
         raise BusinessError("登记前缺少 _校对数据.json，请重新运行 parse-report",
                             code="data-missing")
     data_digest = sha256(data_file)
+    previous = [record for record in data["unit_records"]
+                if record["unit"] == unit.name and record["run_id"] == expected_run_id]
+    data["runs"][-1]["actions"].append({
+        "command": "register-unit", "at": now(), "unit": unit.name,
+        "previous_records": previous, "report_sha256": digest, "data_sha256": data_digest,
+    })
     data["unit_records"] = [r for r in data["unit_records"]
                             if not (r["unit"] == unit.name and r["run_id"] == data["current_run_id"])]
     data["unit_records"].append({"unit": unit.name, "run_id": data["current_run_id"],
