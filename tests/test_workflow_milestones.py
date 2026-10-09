@@ -50,11 +50,11 @@ def test_recovery_budget_is_cumulative_by_unit_category_and_fingerprint(tmp_path
     fingerprint = hashlib.sha256(b"bad-arg").hexdigest()
     changed_agent = hashlib.sha256(b"same-error-different-agent").hexdigest()
     first = material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
-                                              error_code="usage")
+                                              attempt_id="w1", error_code="usage")
     second = material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
-                                              error_code="usage")
+                                              attempt_id="w2", error_code="usage")
     denied = material.record_recovery_attempt(task_id, unit_id, None, changed_agent,
-                                              error_code="usage")
+                                              attempt_id="w3", error_code="usage")
     assert first["allowed"] and second["allowed"]
     assert second["fingerprint_attempts"] == 2
     assert not denied["allowed"] and not denied["retryable"]

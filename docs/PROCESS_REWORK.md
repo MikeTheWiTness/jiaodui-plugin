@@ -324,6 +324,40 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 口径：双口径 **1119 passed / 0 failed / 5 skipped / 4 subtests**（本批未改行为，新增 1 条 enum 守卫断言在既有用例内）。
 
+## B3：恢复记账的 attempt_id 幂等契约（UNIFY-PLAN Phase 1 第 3 批）
+
+**契约**（按已批准的决策 2）：
+
+```
+unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
+              [--error-code CODE | --category targeted_review] [--expected-run-id R]
+```
+
+**语义**：
+
+| 情形 | 行为 |
+|---|---|
+| 同 attempt + 同指纹 + 同类别 | **幂等重放**：不再扣费，返回原结果并带 `idempotent=true`；事件忠实记录原结论并带 `replay=true` |
+| 同 attempt + 不同指纹，或同 attempt 但映射到不同类别 | `attempt-id-conflict`（错误码与 main 对齐） |
+| 同指纹 + 新 attempt | 正常再扣（到额度为止）；指纹只标识「同一失败」，不承担幂等 |
+| `--expected-run-id` 与当前轮次不一致 | `run-changed`（CAS 防护，采纳 main） |
+| `attempt_id` 空/超 200 字符/非字符串 | `invalid-attempt-id` |
+| 被拒的 attempt | 也记账：重放返回同一否决结论（不会因重放变成允许） |
+
+**为什么另建索引而不是照搬 main**：main 把恢复本身做成 unit_event，「同 attempt 不重复」免费来自事件账本里 attempt_id 的唯一性；分支的心跳事件账本与预算账本分家（心跳是 `unit_events[unit]` 的 phase 列表），所以新增 run 级 `recovery_attempts[unit][attempt_id]` 索引。**故意不**强制「必须先有同 attempt 的 unit-event」——实测有材料只记预算不记心跳，加这个约束会破坏既有流程；改为在手册里约定「`--attempt-id` 须与该单元 `unit-event` 登记的一致」，两者可按 attempt_id 关联。
+
+**改动面（四处必须同时改，否则契约不一致）**：core（`material.record_recovery_attempt` 签名 + 幂等流程）、纯模块（`validate_attempt()` main 同形状 + `attempt_decision()` 重放/冲突判定）、CLI（`--attempt-id` 必填、`--expected-run-id` 可选）、插件（schema `required` 从 3 项变 4 项 + argv）、手册两份副本 + 工具顶层描述、Node 行为测试。
+
+**先红后绿**：新增 `tests/test_recovery_attempt_idempotency.py` 7 例（幂等重放不重复扣、换指纹冲突、换类别冲突、同指纹换 attempt 再扣、CAS 防护、非法 attempt_id、被拒 attempt 的重放）——实现前 7 例全红。**22 个既有调用点**全部补 `attempt_id`；其中并发压测必须每线程用不同 attempt，否则会退化成重放（单独核对过）。
+
+**真机冒烟 8 步**（每步单独一次调用，避免上次那种"字典推导里重复调用"的假数据）：① 缺 `--attempt-id` → exit 2 `usage`；② 首次 `usage` → `used=1/2`；③ 同 attempt 重放 → `idempotent=true` 且仍 `1/2`；④ 换指纹 → exit 6 `attempt-id-conflict`；⑤ `--expected-run-id` 不匹配 → exit 6 `run-changed`；⑥ 匹配轮次 + 新 attempt 同指纹 → 再扣到 `2/2`；⑦ 第三次 → 被拒 `blocked_category=call_correction`；⑧ 账本 `{call_correction: 2}`、attempt 索引 3 条（a1/a2 允许、a3 拒绝）、事件 4 条（含 1 条 `replay`）。
+
+**自查修正**：我最初写的断言「allowed 事件数 == 1」是错的——重放事件忠实记录原结论，`allowed` 会沿用，所以断言改为「排除 `replay` 的授权记账 == 1」，而「额度不被重复扣」由账本断言单独把关。这是测试预期的问题，不是实现的问题。
+
+**静态检查**：基线 11 处 → 现在 11 处，**本批零新增**；`material.py`/`cli.py` 的既有问题故意不动（它们是 Phase 2 的冲突文件，避免扩大合并面）。
+
+**口径**：双口径均 **1126 passed / 0 failed / 5 skipped / 4 subtests**（B3 前 1119，+7 例）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。

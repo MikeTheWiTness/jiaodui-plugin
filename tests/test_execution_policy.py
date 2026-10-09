@@ -110,7 +110,7 @@ def test_image_schema_fix_charges_call_budget_too(tmp_path, monkeypatch):
     root, task_id, unit_id = _scene(tmp_path, monkeypatch)
 
     result = material.record_recovery_attempt(task_id, unit_id, None, "a" * 64,
-                                              error_code="images.missing")
+                                              attempt_id="img-1", error_code="images.missing")
 
     assert result["allowed"] is True and result["category"] == "image_schema_fix"
     assert result["charged"] == ["image_schema_fix", "call_correction"]
@@ -127,11 +127,11 @@ def test_exhausted_call_budget_blocks_image_schema_fix(tmp_path, monkeypatch):
 
     for index in range(2):  # call_correction 额度 2，用满
         allowed = material.record_recovery_attempt(task_id, unit_id, None, f"{index}" * 64,
-                                                   error_code="usage")
+                                                   attempt_id=f"use-{index}", error_code="usage")
         assert allowed["allowed"] is True
 
     blocked = material.record_recovery_attempt(task_id, unit_id, None, "b" * 64,
-                                               error_code="images.missing")
+                                               attempt_id="img-blocked", error_code="images.missing")
 
     assert blocked["allowed"] is False
     assert blocked["category"] == "image_schema_fix"

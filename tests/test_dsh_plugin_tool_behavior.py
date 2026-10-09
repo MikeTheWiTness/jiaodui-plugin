@@ -129,14 +129,14 @@ assert.deepEqual(requests.at(-1).argv.slice(1),['--json','dispatch-plan','--task
 // P5：恢复入口按错误码分类，category 只留给父代理判断类
 const recovery=registered.get('jiaodui_unit_recovery');
 assert.equal(recovery.parameters.additionalProperties,false);
-assert.deepEqual(recovery.parameters.required,['task_id','unit_id','fingerprint']);
+assert.deepEqual(recovery.parameters.required,['task_id','unit_id','attempt_id','fingerprint']);
 // B1 守卫：插件里恢复类别的 enum 必须与 core 的 CATEGORIES 一致（JS 侧无法 import
 // Python，容易静默漂移；期望值由 Python 单一源经 argv 注入）。
 assert.deepEqual(recovery.parameters.properties.category.enum,JSON.parse(process.argv[2]));
-await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),error_code:'usage',fingerprint:'f'.repeat(64)},exec);
-assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--error-code','usage','--fingerprint','f'.repeat(64)]);
-await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),category:'targeted_review',fingerprint:'f'.repeat(64)},exec);
-assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--category','targeted_review','--fingerprint','f'.repeat(64)]);
+await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t1',error_code:'usage',fingerprint:'f'.repeat(64)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t1','--error-code','usage','--fingerprint','f'.repeat(64)]);
+await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t2',category:'targeted_review',fingerprint:'f'.repeat(64),expected_run_id:'r'.repeat(32)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t2','--category','targeted_review','--expected-run-id','r'.repeat(32),'--fingerprint','f'.repeat(64)]);
 // 未提供的可选参数不得拼进 argv（no_clean 省略时不能出现 --no-clean）
 await prepare.execute({operation:'split',path:'/tmp/a_raw.md',subject:'高中物理',mode:'lecture'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','split','/tmp/a_raw.md','--subject','高中物理','--mode','lecture']);

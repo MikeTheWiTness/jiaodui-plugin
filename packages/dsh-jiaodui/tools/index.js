@@ -166,9 +166,9 @@ function registerStructuredTools(ctx, cliTool) {
     '--proposal-json', JSON.stringify(args.proposal), '--expected-snapshot-sha256',
     args.expected_snapshot_sha256, ...(args.preview ? ['--preview'] : [])])
 
-  register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定。', {
+  register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定，attempt_id 作幂等键（重放不再扣费）。', {
     type: 'object', additionalProperties: false,
-    required: ['task_id', 'unit_id', 'fingerprint'],
+    required: ['task_id', 'unit_id', 'attempt_id', 'fingerprint'],
     properties: {
       task_id: { type: 'string' }, unit_id: { type: 'string' },
       error_code: {
@@ -181,11 +181,21 @@ function registerStructuredTools(ctx, cliTool) {
           'targeted_review', 'technical_redispatch', 'image_schema_fix'],
         description: '只用于父代理判断类的 targeted_review；错误驱动的恢复必须给 error_code，给了 category 就必须与映射一致。',
       },
+      attempt_id: {
+        type: 'string', minLength: 1, maxLength: 200,
+        description: '本次尝试的幂等键：同 attempt 重放不再扣费；换指纹或换类别即 attempt-id-conflict。须与该单元 unit-event 的 attempt_id 一致。',
+      },
+      expected_run_id: {
+        type: 'string',
+        description: 'CAS 防护：与当前轮次不一致即 run-changed（可选）。',
+      },
       fingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$' },
     },
   }, args => ['unit-recovery', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--attempt-id', args.attempt_id,
     ...(args.error_code ? ['--error-code', args.error_code] : []),
     ...(args.category ? ['--category', args.category] : []),
+    ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : []),
     '--fingerprint', args.fingerprint])
 
   register('jiaodui_unit_progress', '只读汇总单元心跳：阶段 / attempt / 最后事件时间 / 在途与超时判定。', {

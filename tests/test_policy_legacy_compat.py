@@ -81,13 +81,13 @@ def test_legacy_manifest_without_policy_is_readable_but_not_authorized(tmp_path,
     # 未授权：任何需要授权的操作必须被拒
     with pytest.raises(BusinessError) as error:
         material.record_recovery_attempt(data["task_id"], unit_id, None, "a" * 64,
-                                         error_code="usage")
+                                         attempt_id="l1", error_code="usage")
     assert error.value.code == "execution-policy-required"
 
     # 重授权后可用
     material.set_execution_policy(root, "automatic")
     allowed = material.record_recovery_attempt(data["task_id"], unit_id, None, "a" * 64,
-                                               error_code="usage")
+                                               attempt_id="l2", error_code="usage")
     assert allowed["allowed"] is True
 
 
@@ -101,7 +101,7 @@ def test_legacy_aggregated_budget_migrates_conservatively_per_unit(tmp_path, mon
     unit_id = list(data["unit_ids"].values())[0]
     with pytest.raises(BusinessError) as error:
         material.record_recovery_attempt(data["task_id"], unit_id, None, "b" * 64,
-                                         error_code="usage")
+                                         attempt_id="l3", error_code="usage")
     assert error.value.code == "execution-policy-required"
 
     policy = material.set_execution_policy(root, "interactive")
@@ -125,8 +125,8 @@ def test_legacy_aggregated_budget_migrates_conservatively_per_unit(tmp_path, mon
 
     # 迁移的计数**计入额度**：call_correction 已用 1，只剩 1 次
     first = material.record_recovery_attempt(data["task_id"], unit_id, None, "c" * 64,
-                                             error_code="usage")
+                                             attempt_id="l4", error_code="usage")
     assert first["allowed"] is True and first["used"] == 2 and first["remaining"] == 0
     second = material.record_recovery_attempt(data["task_id"], unit_id, None, "d" * 64,
-                                              error_code="usage")
+                                              attempt_id="l5", error_code="usage")
     assert second["allowed"] is False, "迁移过来的计数必须计入额度，不能被重置"

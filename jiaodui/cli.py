@@ -254,7 +254,9 @@ def cmd_unit_recovery(args: argparse.Namespace) -> int:
     from .material import record_recovery_attempt
 
     _json_out(record_recovery_attempt(args.task_id, args.unit_id, args.category,
-                                      args.fingerprint, error_code=args.error_code))
+                                      args.fingerprint, attempt_id=args.attempt_id,
+                                      error_code=args.error_code,
+                                      expected_run_id=args.expected_run_id))
     return ExitCode.OK
 
 
@@ -622,7 +624,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="父代理判断类恢复（目前仅 targeted_review）；错误驱动的恢复改用 --error-code")
     sp.add_argument("--error-code",
                     help="失败的工具/宿主错误码；恢复类别由它确定性决定，未分类码会被拒绝")
+    sp.add_argument("--attempt-id", required=True,
+                    help="本次尝试的幂等键（须与该单元 unit-event 登记的 attempt_id 一致）")
     sp.add_argument("--fingerprint", required=True)
+    sp.add_argument("--expected-run-id",
+                    help="CAS 防护：与当前轮次不一致即 run-changed")
     sp.set_defaults(func=cmd_unit_recovery)
 
     sp = sub.add_parser("unit-progress", help="只读汇总单元心跳与在途/超时判定")

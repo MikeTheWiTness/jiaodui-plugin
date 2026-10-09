@@ -142,6 +142,35 @@ def validate_fingerprint(fingerprint: object) -> str:
     return fingerprint
 
 
+def validate_attempt(attempt_id: object, fingerprint: object) -> tuple[str, str]:
+    """`attempt_id` 幂等键与失败指纹的取值校验（形状与 main 一致）。"""
+    if not isinstance(attempt_id, str) or not attempt_id.strip() or len(attempt_id) > 200:
+        raise BusinessError("attempt_id 必须是 1..200 字符的非空字符串",
+                            code="invalid-attempt-id")
+    return attempt_id.strip(), validate_fingerprint(fingerprint)
+
+
+def attempt_decision(recorded: object, *, attempt_id: str, fingerprint: str,
+                     category: str) -> dict:
+    """已记录过的 attempt 该幂等重放还是拒绝。
+
+    main 把恢复做成 unit_event，靠事件账本里 attempt_id 的唯一性实现幂等；分支的事件
+    账本与预算账本分开，因此另建 attempt 索引，但**错误码与 main 对齐**：
+    同一 attempt 换了指纹或换了类别 → `attempt-id-conflict`。
+    """
+    if recorded is None:
+        return {"replay": False}
+    if (not isinstance(recorded, dict) or recorded.get("fingerprint") != fingerprint
+            or recorded.get("category") != category):
+        raise BusinessError("attempt_id 已用于不同事件或 fingerprint",
+                            code="attempt-id-conflict",
+                            details={"attempt_id": attempt_id,
+                                     "recorded_fingerprint": (recorded or {}).get("fingerprint"),
+                                     "recorded_category": (recorded or {}).get("category"),
+                                     "fingerprint": fingerprint, "category": category})
+    return {"replay": True, "result": recorded.get("result")}
+
+
 def charge(recovery: dict, category: str, fingerprint: str) -> dict:
     """从单元的恢复账本扣一次，返回结果字典（只改 `recovery`，不碰其它状态）。
 

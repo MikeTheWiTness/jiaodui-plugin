@@ -124,7 +124,8 @@ def test_concurrent_recovery_attempts_stop_at_budget(tmp_path, monkeypatch):
     def attempt(index):
         return material.record_recovery_attempt(
             task_id, unit_id, None,
-            hashlib.sha256(f"fp-{index}".encode()).hexdigest(), error_code="usage")
+            hashlib.sha256(f"fp-{index}".encode()).hexdigest(),
+            attempt_id=f"thread-{index}", error_code="usage")
 
     with ThreadPoolExecutor(max_workers=UNITS) as pool:
         results = list(pool.map(attempt, range(UNITS)))

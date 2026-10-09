@@ -99,17 +99,18 @@ def test_recovery_consumes_budget_only_for_classified_codes(tmp_path, monkeypatc
 
     # 错误码决定类别：调用方不必也不该自选
     allowed = material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
-                                               error_code="usage")
+                                               attempt_id="e1", error_code="usage")
     assert allowed["allowed"] is True
     assert allowed["category"] == "call_correction"
 
     # 同一错误换新指纹仍消费预算（不因换 agent / 换指纹重置）
     again = material.record_recovery_attempt(task_id, unit_id, None,
                                              hashlib.sha256(b"other").hexdigest(),
-                                             error_code="usage")
+                                             attempt_id="e2", error_code="usage")
     assert again["allowed"] is True
     exhausted = material.record_recovery_attempt(task_id, unit_id, None,
-                                                 fingerprint, error_code="usage")
+                                                 fingerprint, attempt_id="e3",
+                                                 error_code="usage")
     assert exhausted["allowed"] is False and exhausted["remaining"] == 0
 
 
@@ -118,7 +119,7 @@ def test_recovery_rejects_category_that_contradicts_the_code(tmp_path, monkeypat
     fingerprint = hashlib.sha256(b"x").hexdigest()
     with pytest.raises(BusinessError) as error:
         material.record_recovery_attempt(task_id, unit_id, "report_repair", fingerprint,
-                                         error_code="usage")
+                                         attempt_id="e4", error_code="usage")
     assert error.value.code == "recovery-category-mismatch"
 
 
@@ -127,11 +128,12 @@ def test_recovery_rejects_unclassified_code_and_cancel(tmp_path, monkeypatch):
     fingerprint = hashlib.sha256(b"x").hexdigest()
     with pytest.raises(BusinessError) as unknown:
         material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
-                                         error_code="no-such-code")
+                                         attempt_id="e5", error_code="no-such-code")
     assert unknown.value.code == "unclassified-error-code"
     for code in ("user-cancel", "permission-denied"):
         with pytest.raises(BusinessError) as forbidden:
-            material.record_recovery_attempt(task_id, unit_id, None, fingerprint, error_code=code)
+            material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
+                                             attempt_id=f"e6-{code}", error_code=code)
         assert forbidden.value.code == "recovery-forbidden"
     # 被拒绝的事件不得消耗任何预算
     state = material.load(root)["runs"][-1].get("recovery", {})
@@ -141,9 +143,10 @@ def test_recovery_rejects_unclassified_code_and_cancel(tmp_path, monkeypatch):
 def test_targeted_review_needs_no_error_code_but_other_categories_do(tmp_path, monkeypatch):
     root, unit, task_id, unit_id = _unit(tmp_path, monkeypatch)
     fingerprint = hashlib.sha256(b"review").hexdigest()
-    review = material.record_recovery_attempt(task_id, unit_id, "targeted_review", fingerprint)
+    review = material.record_recovery_attempt(task_id, unit_id, "targeted_review", fingerprint,
+                                               attempt_id="e7")
     assert review["allowed"] is True and review["category"] == "targeted_review"
     with pytest.raises(BusinessError) as error:
         material.record_recovery_attempt(task_id, unit_id, "call_correction",
-                                         hashlib.sha256(b"y").hexdigest())
+                                         hashlib.sha256(b"y").hexdigest(), attempt_id="e8")
     assert error.value.code == "recovery-error-code-required"

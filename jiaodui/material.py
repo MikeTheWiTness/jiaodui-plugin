@@ -12,8 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .error_classification import RECOVERY_CATEGORIES, classify_error
-from .execution_policy import (charge, is_current_policy, is_readable_policy,
-                               migrate_legacy_spent, new_policy, validate_fingerprint)
+from .execution_policy import (attempt_decision, charge, is_current_policy,
+                               is_readable_policy, migrate_legacy_spent, new_policy,
+                               validate_attempt)
 from .errors import BusinessError, NotFoundError
 from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
@@ -445,15 +446,21 @@ def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
 
 
 def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fingerprint: str,
-                            *, error_code: str | None = None) -> dict:
+                            *, attempt_id: str, error_code: str | None = None,
+                            expected_run_id: str | None = None) -> dict:
     """在当前轮次消费一个分类预算，并按失败指纹留痕。
 
     类别由错误码确定性决定（PLAN-rework-continuation P5 / `error_classification`）：
     - 给了 `error_code`：类别取映射结果；同时给了 `category` 时必须与映射一致；
     - 只给 `category`：仅允许父代理判断类的 `targeted_review`，其余必须给错误码；
     - 未分类码、用户取消、权限拒绝一律拒绝，且不消耗任何预算。
+
+    `attempt_id` 是幂等键（UNIFY-PLAN B3，采纳 main 的 `attempt_id` 语义）：
+    同一 attempt 重放不再扣费并返回原结果（`idempotent=true`）；同一 attempt 换了指纹
+    或换了类别 → `attempt-id-conflict`。指纹只标识「同一失败」，不承担幂等。
+    `expected_run_id` 是 CAS 防护：与当前轮次不一致即 `run-changed`。
     """
-    validate_fingerprint(fingerprint)
+    attempt_id, fingerprint = validate_attempt(attempt_id, fingerprint)
     if category is not None and category not in RECOVERY_CATEGORIES:
         raise BusinessError(f"未知恢复类别：{category!r}", code="recovery-invalid")
     if error_code is None:
@@ -483,14 +490,34 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
         require_current_policy(run, data)
         if run["run_id"] != data["current_run_id"]:
             raise BusinessError("恢复预算只能记入当前轮次", code="run-changed")
+        if expected_run_id is not None and expected_run_id != run["run_id"]:
+            raise BusinessError("恢复只能记入调用方预期的轮次", code="run-changed",
+                                details={"expected_run_id": expected_run_id,
+                                         "run_id": run["run_id"]})
+        attempts = run.setdefault("recovery_attempts", {}).setdefault(unit_id, {})
+        decision = attempt_decision(attempts.get(attempt_id), attempt_id=attempt_id,
+                                    fingerprint=fingerprint, category=category)
+        event = {"at": now(), "unit_id": unit_id, "category": category,
+                 "error_code": error_code, "attempt_id": attempt_id,
+                 "fingerprint": fingerprint}
+        if decision["replay"]:
+            recorded = decision["result"] or {}
+            event.update({"charged": recorded.get("charged", [category]),
+                          "blocked_category": recorded.get("blocked_category"),
+                          "replay": True, "allowed": recorded.get("allowed"),
+                          "used": recorded.get("used"), "budget": recorded.get("budget")})
+            run.setdefault("recovery_events", []).append(event)
+            write(root, data)
+            return {**recorded, "idempotent": True}
         unit_state = run.setdefault("recovery", {}).setdefault(unit_id, {})
         result = charge(unit_state, category, fingerprint)
-        run.setdefault("recovery_events", []).append({
-            "at": now(), "unit_id": unit_id, "category": category,
-            "charged": result["charged"], "blocked_category": result.get("blocked_category"),
-            "error_code": error_code, "fingerprint": fingerprint,
-            "allowed": result["allowed"], "used": result["used"], "budget": result["budget"],
-        })
+        attempts[attempt_id] = {"fingerprint": fingerprint, "category": category,
+                                "at": event["at"], "result": result}
+        event.update({"charged": result["charged"],
+                      "blocked_category": result.get("blocked_category"),
+                      "allowed": result["allowed"], "used": result["used"],
+                      "budget": result["budget"]})
+        run.setdefault("recovery_events", []).append(event)
         write(root, data)
         return result
 
