@@ -433,6 +433,20 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 
 **口径**：分支双口径 **1130 passed / 0 failed / 5 skipped / 4 subtests**。
 
+## 补漏：`unit-event --expected-run-id` 的 CLI 传参曾无声通过（Phase 2）
+
+采纳 main 的轮次 CAS 时，`material.record_unit_event` 与插件 schema/argv 都改了，但 **`cli.py` 的解析器与传参没落地**（该文件未进那次提交）。它无声通过了三道检查：
+
+- 分支的单测直接调 core API（`material.record_unit_event(..., expected_run_id=…)`），绕过解析器；
+- Node 行为测试只验插件拼出的 argv 字符串，**不验 CLI 是否接受这个参数**；
+- 全量套件里没有一条端到端走 `python -m jiaodui unit-event --expected-run-id …`。
+
+合并树的 CLI 断言把这条兜住了（`unrecognized arguments: --expected-run-id run-1`）。已补：`cli.py` 加参数并真的传入 `record_unit_event`，并新增端到端用例 `test_cli_unit_event_accepts_and_forwards_expected_run_id`（真子进程：旧轮次 → exit 6 `run-changed`；当前轮次 → exit 0 且载荷 `{ok, event}`）。
+
+**教训**：新增 CLI 参数时，光有 core 单测 + 插件 argv 测试不够，必须有**穿过解析器**的端到端用例。
+
+**口径**：分支双口径 **1131 passed / 0 failed / 5 skipped / 4 subtests**（本批 +1 例）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。

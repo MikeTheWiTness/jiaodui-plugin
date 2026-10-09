@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -216,3 +217,34 @@ def test_unit_event_requires_execution_policy(tmp_path, monkeypatch):
 
     assert error.value.code == "execution-policy-required"
     assert (root / material.MANIFEST).read_bytes() == before, "未授权时不得落盘"
+
+
+def test_cli_unit_event_accepts_and_forwards_expected_run_id(tmp_path, monkeypatch):
+    """端到端：CLI 必须真的接受并传递 `--expected-run-id`。
+
+    教训：Node 行为测试只验插件拼的 argv、Python 测试直接用 core API，两者都验不到
+    「CLI 解析器是否接受这个参数」，导致一次漏改无声通过。这条用真子进程兜住。
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    fresh = material.load(root)["current_run_id"]
+
+    def run(*extra):
+        return subprocess.run(
+            [sys.executable, "-m", "jiaodui", "unit-event", "--task-id", task_id,
+             "--unit-id", unit_id, "--phase", "read", "--attempt-id", "cli-1",
+             *extra, "--json"],
+            capture_output=True, text=True, env=os.environ.copy(),
+            cwd=str(Path(__file__).resolve().parents[1]))
+
+    stale = run("--expected-run-id", "0" * 32)
+    assert stale.returncode == 6, stale.stderr
+    assert json.loads(stale.stdout or stale.stderr)["error"]["code"] == "run-changed"
+
+    ok = run("--expected-run-id", fresh)
+    assert ok.returncode == 0, ok.stderr
+    assert json.loads(ok.stdout)["event"]["phase"] == "read"

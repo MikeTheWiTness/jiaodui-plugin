@@ -281,7 +281,8 @@ def cmd_unit_event(args: argparse.Namespace) -> int:
     payload = record_unit_event(args.task_id, args.unit_id, phase=args.phase,
                                 attempt_id=args.attempt_id, agent_id=args.agent_id,
                                 cancel_initiator=args.cancel_initiator,
-                                cancel_reason=args.cancel_reason)
+                                cancel_reason=args.cancel_reason,
+                                expected_run_id=args.expected_run_id)
     _json_out({"ok": True, "event": payload})
     return ExitCode.OK
 
@@ -653,6 +654,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--agent-id")
     sp.add_argument("--cancel-initiator", choices=["user", "parent", "host"])
     sp.add_argument("--cancel-reason", choices=["user_cancel", "technical_timeout", "superseded"])
+    sp.add_argument("--expected-run-id", help="CAS 防护：与当前轮次不一致即 run-changed")
     sp.set_defaults(func=cmd_unit_event)
 
     sp = sub.add_parser("unit-schema", help="输出结构化建议schema v2")
