@@ -137,17 +137,27 @@ def test_invalid_attempt_id_is_rejected(tmp_path, monkeypatch):
     assert "call_correction" not in material.load(root)["runs"][-1].get("recovery", {}).get(unit_id, {})
 
 
-def test_denied_attempt_is_replayed_with_the_same_verdict(tmp_path, monkeypatch):
-    """被拒的 attempt 也记账：重放返回同一结论，不会因为重放而变成允许。"""
+def test_denied_attempt_leaves_no_trace_and_repeats_the_same_verdict(tmp_path, monkeypatch):
+    """被拒的 attempt **不写盘**（采纳 main：不改变状态的操作不落痕）。
+
+    因此重复同一个 attempt_id 不会被当成幂等重放，而是**重新判定**并得到同一结论；
+    这样反复重试被拒的 attempt 也不会让清单增长。
+    """
     root, task_id, unit_id = _scene(tmp_path, monkeypatch)
     for index in range(2):
         material.record_recovery_attempt(task_id, unit_id, None, _fp(f"u{index}"),
                                          attempt_id=f"a{index}", error_code="usage")
+    manifest = root / material.MANIFEST
+    before = manifest.read_bytes()
+
     denied = material.record_recovery_attempt(task_id, unit_id, None, _fp("u9"),
                                               attempt_id="a9", error_code="usage")
-    replay = material.record_recovery_attempt(task_id, unit_id, None, _fp("u9"),
-                                              attempt_id="a9", error_code="usage")
+    assert denied["allowed"] is False and denied["remaining"] == 0
+    assert manifest.read_bytes() == before, "被拒不得写盘"
+    assert "a9" not in material.load(root)["runs"][-1].get("recovery_attempts", {}).get(unit_id, {})
 
-    assert denied["allowed"] is False
-    assert replay["idempotent"] is True and replay["allowed"] is False
+    again = material.record_recovery_attempt(task_id, unit_id, None, _fp("u9"),
+                                             attempt_id="a9", error_code="usage")
+    assert again["allowed"] is False and again.get("idempotent") is not True
+    assert manifest.read_bytes() == before
     assert _ledger(root, unit_id)["call_correction"]["used"] == 2

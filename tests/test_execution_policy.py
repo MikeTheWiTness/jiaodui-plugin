@@ -138,7 +138,7 @@ def test_exhausted_call_budget_blocks_image_schema_fix(tmp_path, monkeypatch):
     assert blocked["blocked_category"] == "call_correction"
     assert blocked["remaining"] == 0
     state = material.load(root)["runs"][-1]["recovery"][unit_id]
-    assert state["image_schema_fix"]["used"] == 0, "被拒时不得部分扣费"
+    assert state.get("image_schema_fix", {}).get("used", 0) == 0, "被拒时不得部分扣费，也不落零状态"
     assert state["call_correction"]["used"] == 2
 
 

@@ -420,6 +420,19 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 
 **口径**：分支双口径 **1130 passed / 0 failed / 5 skipped / 4 subtests**。
 
+## Phase 2 合并中采纳 main 的第六处更优语义：被拒的 attempt 不写盘（在分支上实现）
+
+同一条原理的延续：**不改变状态的操作不该写盘**。分支原先会给被拒的 attempt 记一条记录（并写盘），main 的 `spend()` 抛错时**不改盘**。
+
+判断：**采纳 main**。被拒不改变任何状态，重复判定必然得到同一结论（额度只减不增），因此记录被拒没有收益，反而让反复重试被拒 attempt 的调用撑大清单。
+
+- 实现：`charge()` 返回 `allowed=False` 时直接返回结果，**不记 attempt、不追加事件、不写盘**。
+- 影响与同步：`test_denied_attempt_leaves_no_trace_and_repeats_the_same_verdict`（重写：被拒后清单字节不变、attempt 索引无该条、重复同一 attempt_id 是**重新判定**而非幂等重放）；`test_exhausted_call_budget_blocks_image_schema_fix` 的账本读取改为容错（被拒不再产生零状态条目）。
+
+至此 Phase 2 映射中共采纳 main **六处**更优语义：① `report.ok` ② `unit-event` 轮次 CAS ③ `unit-event` 要求授权 ④ 指纹错误码 ⑤ 幂等重放不写盘 ⑥ 被拒不写盘。其中 ⑤⑥ 同源（不改变状态就不写盘），是本轮最实质的两条行为改进。
+
+**口径**：分支双口径 **1130 passed / 0 failed / 5 skipped / 4 subtests**。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。

@@ -506,6 +506,10 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
             return {**(decision["result"] or {}), "idempotent": True}
         unit_state = run.setdefault("recovery", {}).setdefault(unit_id, {})
         result = charge(unit_state, category, fingerprint)
+        if not result["allowed"]:
+            # 被拒 = 不改变状态 → **不写盘、不记 attempt、不追加事件**（采纳 main：
+            # main 的 spend() 抛错时同样不改盘）。否则反复重试被拒的 attempt 会撑大清单。
+            return result
         attempts[attempt_id] = {"fingerprint": fingerprint, "category": category,
                                 "at": event["at"], "result": result}
         event.update({"charged": result["charged"],
