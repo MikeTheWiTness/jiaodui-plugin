@@ -447,6 +447,12 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 
 **口径**：分支双口径 **1131 passed / 0 failed / 5 skipped / 4 subtests**（本批 +1 例）。
 
+## 分支侧的文档口径统一（Phase 2 收尾）
+
+合并树里 main 的 `test_skill_docs.py` 断言 SKILL.md 出现 `jiaodui repair-report`（main 的入口写法带 `jiaodui ` 前缀）。分支 SKILL 写的是 `repair-report --apply`（无前缀），差 7 个码点。
+
+选择**改文档而不是改测试**：把前缀补上（8164 → 8172 码点，仍在 8192 以内），main 的断言原样通过——保留 main 的测试比改写它更稳。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
