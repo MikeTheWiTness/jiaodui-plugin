@@ -294,6 +294,36 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 **口径**：双口径均 **1119 passed / 0 failed / 5 skipped / 4 subtests**（B2 前 1117，+2 例）。
 
+## B1/B2 复查：发现的遗留坑（对抗性复核，未改行为，只加守卫与计划）
+
+对 B1/B2 做了一次对抗性复核（代码、契约、文档、合并面四项），结论如下。
+
+### 已修
+
+1. **静态检查**：`ruff`（仓库 `pyproject.toml` 已配置，但两个 venv 都没装）装上后跑改动文件，**只有 `error_classification.py` 的两处 F401 是本批引入的**（重导出导入"未使用"），已加显式 `__all__`；另外 5 处（`material.py` 导入顺序、`units.scan_unit_dirs` 未用、2× `datetime.UTC`、`test_execution_policy.py` 导入顺序）在 B1 之前就存在——`material.py` 正是冲突文件，**故意不动**以免扩大合并面。
+2. **插件类别 enum 漂移守卫**（B1 遗留）：插件 JS 无法 import Python，`jiaodui_unit_recovery` 的 `category` enum 是第二处类别表。已在 Node 行为测试里断言它逐项等于 core 的 `CATEGORIES`（期望值由 Python 单一源经 argv 注入）。**并做了反向对照**：把 enum 改坏 → 测试红；还原 → 绿，确认守卫不是空转。
+
+### 未改、但要进合并裁决的坑（已写进 `UNIFY-PLAN.md` §6.1/6.2/6.3）
+
+3. **静默应用的 main 变更 19 个文件**（分支没碰、main 改了、不在冲突清单 → git 直接采用 main 版本）。其中 4 处是**整份删除分支依赖的模块**，naive 合并后分支核心直接 ImportError：
+   - `jiaodui/source_index.py`（−132，被 `report_suggestions.py`/`cli.py` import）
+   - `jiaodui/unit_reader.py`（−55，被 `cli.py` import）
+   - `jiaodui/calc/schema.py`（−41，被 `cli.py` 的 `calc-schema` import）
+   - `packages/dsh-jiaodui/tools/calc-schemas.json`（−391）
+   以及 `jiaodui/report_repair.py` 的 v2 守门被删（−5）→ 分支契约静默失效；4 个测试文件被删 → 覆盖静默消失。
+4. **`workflow.py` 自动合并但语义重复**：main 在该文件新增 `set_execution_policy`/`record_unit_event` 两个入口（写 main 的 `policy["spent"]` 形态），与分支 `material.py` 的同名入口（v2 清单形态）**并存且不兼容**；`workflow.py` 不在冲突清单里，必须显式删除或改成委托。
+5. **实测预判的"合并即红"**：把 main 版 `tests/test_skill_docs.py` 直接跑在分支 skill 上 → `test_repair_preview_is_documented_as_explicit_gate_auxiliary` 失败（断言 SKILL.md 里出现 `jiaodui repair-report`）。另有 main 新增的 `test_execution_compat.py`/`test_main_policy_contract.py`（+208/+234）不在冲突清单里，会静默进入结果并按 main 语义断言。
+6. **冲突面本身也变了**：B1/B2 之后重算为 **28 处**（19 content + 7 modify/delete + 2 add/add）；新增的两处 add/add 是 `jiaodui/execution_policy.py` 与 `tests/test_policy_legacy_compat.py`；测试冲突文件是 8 个而非计划原写的 6 个。已在计划里更正。
+
+### 顺带回应的两个自查点
+
+- `unit_delivery._current` 里 `material.require_current_policy()` 的位置正确（在身份校验之后、读源文之前），三处授权检查已无遗漏（`grep 'execution_policy") is None'` 为空）。
+- `recovery_events` 没有任何核心消费者（仅一处并发测试断言其为空），事件新增 `charged`/`blocked_category` 不构成契约破坏；`is_readable_policy` 的严格度与 main 的 `validate_policy` + 读盘门一致（预算漂移同样判在载入期，缺策略/旧聚合同样可读）。
+
+**遗留（明确记录，非本批范围）**：迁移过来的旧计数**没有指纹**，因此对迁移前那部分额度，同一指纹重复记账不会被幂等挡住——这是旧数据本身缺信息，无法在迁移时凭空补出；B3 引入 `attempt_id` 后会按 attempt 维度解决。
+
+口径：双口径 **1119 passed / 0 failed / 5 skipped / 4 subtests**（本批未改行为，新增 1 条 enum 守卫断言在既有用例内）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。

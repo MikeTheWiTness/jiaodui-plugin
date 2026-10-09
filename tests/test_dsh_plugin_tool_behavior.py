@@ -1,10 +1,13 @@
 """用真 Node 加载插件，验证延迟收集、会话工作区与进程失败返回。"""
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from jiaodui.execution_policy import CATEGORIES
 
 ROOT = Path(__file__).resolve().parents[1]
 # 不写死开发者家目录：只认 PATH 上的 node，找不到就按下面的条件跳过（CI 仍要求必须有）。
@@ -127,6 +130,9 @@ assert.deepEqual(requests.at(-1).argv.slice(1),['--json','dispatch-plan','--task
 const recovery=registered.get('jiaodui_unit_recovery');
 assert.equal(recovery.parameters.additionalProperties,false);
 assert.deepEqual(recovery.parameters.required,['task_id','unit_id','fingerprint']);
+// B1 守卫：插件里恢复类别的 enum 必须与 core 的 CATEGORIES 一致（JS 侧无法 import
+// Python，容易静默漂移；期望值由 Python 单一源经 argv 注入）。
+assert.deepEqual(recovery.parameters.properties.category.enum,JSON.parse(process.argv[2]));
 await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),error_code:'usage',fingerprint:'f'.repeat(64)},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--error-code','usage','--fingerprint','f'.repeat(64)]);
 await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),category:'targeted_review',fingerprint:'f'.repeat(64)},exec);
@@ -166,6 +172,7 @@ apply(ctx,{command:'/explicit/missing/jiaodui'});
 await assert.rejects(()=>tool.execute({args:['--help']},exec),/pipx install/);
 assert.deepEqual(attempted,['/explicit/missing/jiaodui']);
 '''
-    result = subprocess.run([NODE, "--input-type=module", "-e", script, str(tmp_path.resolve())],
+    result = subprocess.run([NODE, "--input-type=module", "-e", script, str(tmp_path.resolve()),
+                             json.dumps(list(CATEGORIES))],
                             cwd=ROOT, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr

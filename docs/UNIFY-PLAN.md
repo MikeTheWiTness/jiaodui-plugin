@@ -182,12 +182,66 @@ Phase 1 全部在**分支**上做，main 不动。
 
 ---
 
+### 6.1 静默应用的 main 变更（比冲突更危险，B1/B2 复查时发现）
+
+实测：main 改了 48 个文件、分支改了 42 个、冲突 28 个；**剩下 19 个是「分支没碰、main 改了」→ git 静默采用 main 版本**。其中这些会造成实质破坏：
+
+| 文件 | main 的改动 | 合并后的后果 | 处置 |
+|---|---|---|---|
+| `jiaodui/source_index.py` | 整份删除（−132） | 分支 `report_suggestions.py`、`cli.py` 都 import 它 → **ImportError，分支核心全废** | **取回分支版本**（等于撤销 main 的删除） |
+| `jiaodui/unit_reader.py` | 整份删除（−55） | 分支 `cli.py`（`unit-read`）import 它 → 命令不可用 | 取回分支版本 |
+| `jiaodui/calc/schema.py` | 整份删除（−41） | 分支 `cli.py` 的 `calc-schema` 用 `all_json_schemas`/`json_schema_for` → 命令不可用 | 取回分支版本 |
+| `packages/dsh-jiaodui/tools/calc-schemas.json` | 删除（−391） | 插件随包 schema 与 `test_calc_schema` 依赖它 | 取回分支版本 |
+| `jiaodui/report_repair.py` | 删掉 v2 守门（−5） | 分支契约「v2 报告不走旧 Markdown 修复器」**静默失效**，`repair-report` 会去修 v2 | 取回分支版本 |
+| `tests/test_calc_schema.py`、`test_source_index.py`、`test_unit_identity.py`、`test_unit_reader.py` | 删除 | 上述模块的测试覆盖静默消失 | 取回分支版本 |
+| `tests/test_report.py` | 删 3 行 | 可能删掉了 v2 相关断言 | 逐行裁决 |
+| `tests/test_skill_docs.py` | 重写（+51/−18） | **直接跑会红**（已实测）：把 main 版放在分支 skill 上，`test_repair_preview_is_documented_as_explicit_gate_auxiliary` 失败——它断言 `jiaodui repair-report` 出现在 SKILL.md | 以分支 skill 为准，逐条裁决断言（保留长度/链接回归，改措辞类断言） |
+| `tests/test_execution_compat.py`、`tests/test_main_policy_contract.py` | 新增（+208/+234） | 锁 main 语义且**不在冲突清单** → 静默进入合并结果、很可能红 | 逐条**映射**成结构化语义的等价断言（`attempt_id` 幂等、连带扣费、取消不花额度、`complete` 解耦） |
+| `docs/PLAN-rework-continuation.md` | 新增（+212） | 无风险 | 保留 |
+| `AGENTS.md`、`skills/.../failure-modes.md`、`subject-matrix.md` | 措辞改写 | 与分支的 SKILL/手册可能不一致 | 取 main 措辞 + 与分支流程对齐 |
+
+**另一处「自动合并但语义重复」**：`jiaodui/workflow.py` 不在冲突清单里（两边各改不同区域 → 自动合并），但 main 在该文件新增了两个**入口函数** `set_execution_policy(unit, *, mode, origin, expected_run_id)` 与 `record_unit_event(...)`（main 版 536 行；分叉点与分支分别 442/444 行、策略入口 0 个）。合并结果里会同时存在：
+
+- main 的 `workflow.set_execution_policy` / `workflow.record_unit_event`（写 main 的 `policy["spent"]` 形态）
+- 分支的 `material.set_execution_policy` / `material.record_unit_event`（写 v2 清单形态）
+
+两套 API 并存且形态不兼容 → **必须删除 main 的这两个函数**（或改成委托分支实现），否则任何仍调用 workflow 版的路径都会写出错形态的清单。
+
+### 6.2 修正后的冲突面（B1/B2 之后重算）
+
+- **28 处**：19 content + 7 modify/delete + **2 add/add**。
+- 新增的两处 add/add 来自 B1/B2：`jiaodui/execution_policy.py`（main 也有同名模块）、`tests/test_policy_legacy_compat.py`（main 也有同名测试）——都取分支版本。
+- 7 处 modify/delete 全是「main 删、分支改」→ 取分支版本：`report_suggestions.py`、`unit_delivery.py`、`proposal-schema.json`、`test_execution_policy.py`、`test_report_suggestions.py`、`test_unit_delivery.py`、`test_workflow_milestones.py`。
+- 测试冲突文件是 **8 个**（§6 表里原写「6 个」，以本节为准）：`test_cli`、`test_dsh_plugin_package`、`test_dsh_plugin_tool_behavior`、`test_execution_policy`、`test_policy_legacy_compat`、`test_report_suggestions`、`test_unit_delivery`、`test_workflow_milestones`。
+
+### 6.3 落地时的操作配方（防这一类坑）
+
+1. 建集成分支后**第一件事跑全量测试**：静默删除会以 ImportError 立刻暴露，`test_skill_docs` 的措辞断言会红。
+2. 重算静默清单（改动前后各跑一次）：
+   ```bash
+   python3 - <<'EOF'
+   import subprocess
+   def names(cmd): return set(subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.split())
+   main_changed = names("git diff --name-only <base>..main")
+   branch_changed = names("git diff --name-only <base>..<branch>")
+   conflicts = {l.split(':')[-1].split(' deleted in')[0].split(' in ')[0].strip()
+                for l in subprocess.run("git merge-tree --write-tree main <branch>", shell=True,
+                                        capture_output=True, text=True).stdout.splitlines()
+                if l.startswith("CONFLICT")}
+   print(sorted(main_changed - branch_changed - conflicts))
+   EOF
+   ```
+3. 按本节 §6.1 的处置列逐项**取回分支版本**，并把它们补进 §6 的裁决表（否则下次重算仍会被当成"无冲突"）。
+4. 裁决后 `git diff main...HEAD -- jiaodui/` 通读，确认没有把两条线的行为合成第三种。
+
 ## 7. 风险与验证矩阵
 
 | 风险 | 触发条件 | 缓解 |
 |---|---|---|
 | 两套预算语义被"合并"成第三种 | 未先定决策 1–3 就动冲突文件 | §5 Phase 2 第 3 步：决策先行；裁决后 `git diff main...HEAD -- jiaodui/` 通读 |
 | 测试口径互斥导致"为了绿而删测试" | 直接保留 main 的旧主链断言 | 用 §6 最后一行：逐条**映射**而非删除；每删一条须在提交信息里写明对应替代 |
+| **静默删除/改写**：分支依赖的模块被 main 删掉后无冲突地消失 | 只盯着冲突清单 | §6.1 清单 + 集成分支先跑全量测试 + §6.3 配方 |
+| **两套入口 API 并存**（workflow 与 material 各一套策略入口） | `workflow.py` 自动合并 | §6.1 末段：删除或委托 main 版入口 |
 | 旧材料不可读 | 策略模块搬迁破坏旧清单解析 | B2 用真实旧标记清单验证；保留 `migrate_legacy_spent` |
 | 交付回退 | Word/整卷在合并后行为变化 | Phase 2 验收含真机冒烟（P6 两份材料 + 夹具，检查 `marker_count/anchor_count/missing_count`） |
 | 环境错位 | profile 仍指向 worktree 包 | Phase 3 明确切回 + 重建根仓 venv + 插件 CLI 判别器复验 |

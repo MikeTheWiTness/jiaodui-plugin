@@ -20,6 +20,7 @@ from .execution_policy import BUDGETS as RECOVERY_BUDGETS
 from .execution_policy import CATEGORIES as RECOVERY_CATEGORIES
 
 # 类别与额度只有一份定义（jiaodui/execution_policy.py）；这里重导出，保持既有调用面。
+__all__ = ["RECOVERY_BUDGETS", "RECOVERY_CATEGORIES", "classify_error"]
 
 NON_RECOVERABLE_CODES: frozenset[str] = frozenset({
     "user-cancel", "user_cancel",
