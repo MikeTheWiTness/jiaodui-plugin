@@ -178,7 +178,6 @@ def convert_material(file: str | Path, out_dir: str | Path | None = None,
         if data is None:
             data = {"schema_version": 1, "material_name": name, "source_path": str(src),
                     "source_sha256": digest, "created_at": material.now(), "tool_version": __version__,
-                     "task_id": material.new_task_id(), "unit_ids": {},
                     "paths": {"source": source_copy.relative_to(directory).as_posix(),
                               "raw": f"raw/{name}_raw.md",
                               "images": f"raw/{name}_images",
@@ -302,7 +301,6 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
             before = list(data["unit_set"])
             dirs = scan_unit_dirs(paper)
             data["unit_set"] = [p.name for p in dirs]
-            material.ensure_unit_ids(data, data["unit_set"])
             data["unit_inputs"] = {p.name: material.unit_inputs(directory, p) for p in dirs}
             material.new_run(data, data["params"], data["resources"])
             data["runs"][-1]["actions"].append({"command": "split --adopt-units", "at": material.now(),
@@ -335,7 +333,6 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
         data["material_type"] = selection
         dirs = [Path(p) for p in result.unit_dirs]
         names = [p.name for p in dirs]
-        material.ensure_unit_ids(data, names)
         archived = _archive_stale_units(paper, names, data["current_run_id"]) if replace_units else []
         inputs = {p.name: material.unit_inputs(directory, p) for p in dirs}
         associated = material.resources(directory, material.relative_path(directory, data["paths"]["images"]))

@@ -14,7 +14,6 @@ from .verify import verify_unit
 @dataclass
 class BuildReportResult:
     out_path: str | None
-    complete: bool = False
     included: list[dict] = field(default_factory=list)
     failed: list[dict] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
@@ -23,7 +22,6 @@ class BuildReportResult:
     def to_dict(self) -> dict:
         return {
             "out_path": self.out_path,
-            "complete": self.complete,
             "included": self.included,
             "failed": self.failed,
             "skipped": self.skipped,
@@ -99,8 +97,6 @@ def build_report(paper_dir: str | Path, out_path: str | Path | None = None,
         sections.append(body)
         sections.append("")
 
-    result.complete = (not result.failed
-                       and len(result.included) + len(result.skipped) == len(dirs))
     out_path = ensure_inside(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")

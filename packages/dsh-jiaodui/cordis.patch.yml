@@ -3,8 +3,8 @@
 # 它声明一个 `jiaodui` agent preset，并在 preset 的 plugins 里：
 #   1. 把随包的 skills/ 目录挂进 skill-filesystem（只对该 preset 生效）；
 #   2. 挂载 ./tools/index.js，注册 jiaodui 原生工具（argv 透传 CLI）。
-# 本preset按校对流程显式维护能力列表；无通用shell和fs聚合工具。
-# 宿主是否仍注入默认skill、以及父子工具是否可分别过滤，需真机验证。
+# 公共能力（bash / fs / subagent / todo / web / present / goal / plan / compaction）
+# 以 standard preset 为底座，工具使用 native 呈现；预设必须自带完整 plugins 列表，DSH 不提供继承。
 #
 # 安装后可在「设置 → 通用 → agent preset」把默认 preset 换成「校对」，
 # 或在新会话里选择它。行 id preset-jiaodui 可被 profile patch 按 id 覆盖。
@@ -30,6 +30,18 @@
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
               maxBytes: 65536
+          - id: tool-bash
+            name: '@deepseek-ai/dsh-tool-bash'
+            disabled: !!js process.platform === 'win32'
+          - id: tool-pwsh
+            name: '@deepseek-ai/dsh-tool-pwsh'
+            disabled: !!js process.platform !== 'win32'
+          - id: tool-fs
+            name: '@deepseek-ai/dsh-tool-fs'
+          - id: tool-fs-search
+            name: '@deepseek-ai/dsh-tool-fs-search'
+            config:
+              sampleOverCapGlobResults: false
           - id: tool-jobs
             name: '@deepseek-ai/dsh-tool-jobs'
           - id: skill-filesystem
@@ -54,14 +66,11 @@
               timeoutMs: 180000
           - id: command-goal
             name: '@deepseek-ai/dsh-command-goal'
-            disabled: true
           - id: tool-goal
             name: '@deepseek-ai/dsh-tool-goal'
-            disabled: true
           - id: planning
             name: cordis:group
             group: true
-            disabled: true
             isolate:
               planMode: true
             config:
@@ -115,7 +124,6 @@
                   modelSelectionSettings: true
                   backgroundMode: continuable
               - id: tool-subagent-fork
-                disabled: true
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
                   provider: fork
@@ -159,7 +167,6 @@
               allowParallelInProgress: true
           - id: tool-web
             name: '@deepseek-ai/dsh-tool-web'
-            disabled: true
             config:
               fetch: true
               searchTimeoutMs: 60000

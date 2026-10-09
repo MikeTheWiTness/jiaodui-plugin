@@ -1,4 +1,4 @@
-"""CLI契约测试：命令可查询、结构化错误和稳定退出码。"""
+"""CLI 契约测试：11 个 v1 命令可查询、结构化错误、稳定退出码。"""
 from __future__ import annotations
 
 import json
@@ -12,9 +12,8 @@ ROOT = Path(__file__).resolve().parent.parent
 PY = sys.executable
 
 V1_COMMANDS = ["check-env", "inspect-source", "inspect-images", "convert", "split", "slice", "precheck-split",
-               "status", "execution-policy", "unit-read", "unit-locate", "unit-snapshot", "unit-submit",
-               "unit-recovery", "unit-event", "unit-schema", "calc-schema", "verify-report",
-               "parse-report", "repair-report", "calc", "build-report", "build-docx"]
+               "status", "verify-report", "parse-report", "repair-report", "calc",
+               "build-report", "build-docx"]
 
 
 def run(*args):

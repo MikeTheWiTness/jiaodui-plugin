@@ -3,7 +3,6 @@
 K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，确定性交给 Python**。
 
 - 需求与契约：[docs/PRD.html](docs/PRD.html)
-- 校对流程改造记录（M0–M6边界与宿主验收）：[docs/PROCESS_REWORK.md](docs/PROCESS_REWORK.md)
 - 执行顺序与完成判据：[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 - M5 架构决策：[ADR-0001：多学科入口与逐科落地](docs/adr/0001-m5-subject-entry-and-rollout.md)
 - 交付闸门：[ADR-0004：闸门单一实现（含图片资源）](docs/adr/0004-gate-single-implementation.md)
@@ -16,11 +15,13 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)
 - DSH 插件包（M7 换壳的首次尝试）：[packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md)
 
-## 当前状态：校对流程改造 M0–M6（M4第7项单独分支）
+## 当前状态：M1（高中物理端到端竖切已跑通）
 
-M0 已核对 `main` 初始干净状态、Python 3.12.13、独立CLI环境与官方 `install_bundle` 安装约定；改造前全量基线为 941 passed、4 subtests passed。M1–M3、M5及M6的仓内实现包括轮次执行授权、task/unit身份、Unicode位置索引、结构化建议生成/提交、有限恢复预算和整卷 `complete` 判据。
-
-改造代码的定向测试已通过；M4 首轮证据/建议自查/父复核版本绑定按用户要求隔离到独立分支。未能从本仓静态配置证明默认 skill 排他、父子能力隔离，也未执行 DSH `install_bundle` 或新会话真机验收；这些不计作仓内测试完成。
+M0 骨架（可安装 `jiaodui` 包 + 11 个 v1 命令）之上，已在**当前代码**上完成高中物理一条真实竖切：
+`convert → split（含完整讲义导入清理）→ 5 个单元子 agent 校对 → verify-report → build-report → build-docx`。
+真机结果：5/5 单元通过校验（28 条标记）；Word 复核 **标记 28 = 锚点 28 + 公式兜底 0，缺失 0**，
+28 条批注均带修改原因；不合格报告被排除出汇总与交付（反向验证退出码 4 / 6）。
+样本、单元源文与报告冻结在 [evaluation/m1](evaluation/m1/README.md)，可还原后独立复现。详见 [docs/M1.md](docs/M1.md) §9。
 
 已实现的核心与入口命令：
 
@@ -34,18 +35,11 @@ M0 已核对 `main` 初始干净状态、Python 3.12.13、独立CLI环境与官�
 | `jiaodui slice --boundaries <f> [--mode] [--subject]` | 按边界清单确定性切片；`--preview` 打印讲义清理后正文供定行号 |
 | `jiaodui status <paper_dir>` | 扫描单元状态（未开始 / 已交付未过校验 / 已完成 / 失败） |
 | `jiaodui verify-report --unit <dir>` | 交付即校验：格式 + 原因对应 + 严重度 + 原文完整性 + 图片资源 |
-| `jiaodui parse-report --unit <dir>` | 旧Markdown报告兼容解析；默认拒绝未过校验的报告 |
-| `jiaodui unit-read --task-id ID --unit-id ID` | 按身份分页读取源文和实际图片读取清单（最多2000行） |
-| `jiaodui unit-locate --task-id ID --unit-id ID --phrase TEXT` | 查询重复短语候选、安全区间与版本绑定位置ID |
-| `jiaodui unit-snapshot --task-id ID --unit-id ID` | 获取run、输入、报告和数据组成的提交快照 |
-| `jiaodui unit-submit ...` | 从schema v2结构化建议生成全文报告并原子校验登记 |
-| `jiaodui unit-recovery / unit-event` | 按类别消费有限预算，记录阶段和取消来源 |
-| `jiaodui calc-schema [--operation OP]` | 从核心参数元数据导出operation-specific JSON Schema |
-| `jiaodui unit-schema` | 导出结构化建议schema v2 |
-| `jiaodui repair-report --unit <dir> [--apply]` | 旧Markdown报告完整性辅助，默认只预览 |
+| `jiaodui parse-report --unit <dir>` | 报告 → `_校对数据.json`（默认拒绝未过校验的报告） |
+| `jiaodui repair-report --unit <dir> [--apply]` | 显式完整性修复：只从源文重建标记原文段；默认预览，`--apply` 原子替换并复验 |
 | `jiaodui calc <op>` | sympy 符号计算沙箱（白名单 + 容差，默认不回显生成代码）；`--subject` 校验工具族并注入物理量表 |
 | `jiaodui quantities --subject <学科> [--search 词]` | 只读列出学科物理量表（不进 agent 上下文，按需查） |
-| `jiaodui build-report <paper_dir>` | 生成整卷报告；失败单元写占位，`complete: true` 才表示正式完整 |
+| `jiaodui build-report <paper_dir>` | 整卷报告：只拼入通过校验的正文，失败写占位 |
 | `jiaodui build-docx <paper_dir>` | Word 批注版，生成后复核实际锚点，缺失必须为 0 |
 
 所有命令支持 `--json`；失败向 stderr 输出一行结构化 JSON，退出码稳定（0/1/2/3/4/5/6/7）。
@@ -54,9 +48,9 @@ M0 已核对 `main` 初始干净状态、Python 3.12.13、独立CLI环境与官�
 
 ## 工作区产物
 
-新运行在当前工作区自动创建 `校对/<材料名>/`，分别用 `source/`、`raw/`、`units/<材料名>/`、`校对报告/`、`校对Word/` 保存源文件副本、中间产物和最终报告。执行模式、task/unit身份和恢复事件写入材料记录。写入命令（convert / split / slice 非 preview / execution-policy / unit-submit / unit-recovery / unit-event / build-report / build-docx / repair-report --apply）必须由宿主注入 `JIAODUI_WORK_ROOT`，或显式传 `--work-root /绝对工作区`；只读命令独立可用。源文件可位于工作区外，但产物不可越界。
+新运行在当前工作区自动创建 `校对/<材料名>/`，分别用 `source/`、`raw/`、`units/<材料名>/`、`校对报告/`、`校对Word/` 保存源文件副本、中间产物和最终报告。写入命令（convert / split / slice 非 preview / parse-report / build-report / build-docx / repair-report --apply）必须由宿主注入 `JIAODUI_WORK_ROOT`，或显式传 `--work-root /绝对工作区`；只读命令独立可用。源文件可位于工作区外，但产物不可越界。
 
-新材料用 `unit-snapshot` 与 `unit-submit` 绑定当前源文、轮次和交付版本，程序生成报告后统一 verify、解析并登记；旧Markdown报告仍可显式走 `verify-report` / `parse-report` 兼容路径。若拆分结果与当前单元集不同，用 `split` / `slice --replace-units`（陈旧单元归档到 `units/<材料名>/.superseded/<run_id>/`，只移动不删除）。同名源文件变化拒绝覆盖，可用 `--material-name` 指定新材料名。历史产物写入使用 `--legacy-layout`，仍需授权工作区。详见 [ADR 0002](docs/adr/0002-workspace-material-layout.md)。
+单元通过 `verify-report` 后必须运行 `parse-report` 登记当前轮次；若因未标记正文被转录改动导致完整性失败，可先用 `repair-report` 预览、确认唯一后 `--apply`，修复不判断意见正确性、不放宽闸门。断点续跑保留已完成报告，`split --rerun` 开新轮次；拆分结果与当前单元集不同时用 `split` / `slice --replace-units`（陈旧单元归档到 `units/<材料名>/.superseded/<run_id>/`，只移动不删除）。同名源文件变化拒绝覆盖，可用 `--material-name` 指定新材料名。历史产物写入使用 `--legacy-layout`，仍需授权工作区。详见 [ADR 0002](docs/adr/0002-workspace-material-layout.md)。
 
 ## 环境
 

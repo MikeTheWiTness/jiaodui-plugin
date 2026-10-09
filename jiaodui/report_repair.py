@@ -242,11 +242,6 @@ def _build_diff(before: str, after: str) -> str:
 
 def build_repair_candidate(source_text: str, report_text: str) -> RepairResult:
     """纯函数：构造候选报告，不读取或写入文件。"""
-    from .report_suggestions import REPORT_V2_PREFIX
-
-    if report_text.startswith(REPORT_V2_PREFIX):
-        return RepairResult(False, diagnostics=[_diagnostic(
-            "repair.v2-not-supported", "schema v2报告由结构化建议重新提交，不走旧Markdown修复器")])
     source = _normalize_newlines(source_text)
     report = _normalize_newlines(report_text)
     if not source.strip():
