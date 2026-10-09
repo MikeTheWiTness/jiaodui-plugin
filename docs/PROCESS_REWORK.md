@@ -231,3 +231,78 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 - 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**；**P6 第 2 项（两个失败单元根因 + 回归）已完成**，**P6 确定性链路验收已完成**（P3 转义边界走完 Word + Word-v2 端到端结构计数 + 整卷 `complete` 三态）；余下 P6 一块按用户 6C 决定执行——最小真实校对 1–2 个单元（图片证据型 + 转义边界型，需用户授权范围）。P2 的宿主准备已完成（worktree venv + profile 三处切换 + 验收清单），**待用户重启 DSH 后在新会话按 `docs/P2-ACCEPTANCE.md` 验收**；验收通过后再跑 P6 余下的最小真实校对（改用原生工具面）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。
+
+## P2 真机验收 + P6 最小真实校对（校对 preset 新会话，已完成，含一处失败发现）
+
+会话设置与 `docs/NEXT-SESSION-BRIEF.md` 一致：preset = 校对，工作区 `JiaoDuiAgentSkill`，插件 CLI 走 worktree 包。两份材料的本轮执行模式由用户确认后写入 `automatic`（`origin=user`）；夹具轮次 `12e3e268`，P6 合成材料轮次 `2faec0a5`。
+
+### P2 八条验收
+
+| # | 验收项 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | 父 catalog | ✅ | 可见 `jiaodui_task_prepare` / `jiaodui_delivery` / `jiaodui_unit_progress` / `jiaodui_dispatch_plan` / 通用 `jiaodui`；**无** `bash` |
+| 2 | 子 catalog = 20 项 | ✅ | 派干净子 agent 点清：`skill`+`read`+`read_image`、6 个 `jiaodui_unit_*`（snapshot/read/locate/submit/event/recovery）、12 个 `jiaodui_calc_*`；`bash`/`pwsh`/`shell`/`write`/`edit`/`fs_search`/`jiaodui_dispatch_plan`/`jiaodui_delivery`/`jiaodui_task_prepare`/`jiaodui_unit_progress`/`jiaodui_unit_review` 逐项确认**不存在** |
+| 3 | skill 挂载 | ✅ | 加载到 worktree 包 `skills/jiaodui/SKILL.md`（89 行、描述含「其余 6 科 M5 待落地」）；主仓同名文件为 76 行且描述不同（「当前只落地高中物理」），两者可判别，证明挂的是分支那份 |
+| 4 | `read_image` 实读 | ✅ | 实读随包 `assets/vision-probe.png`（480×480，sha256 `4595529…`）一次成功；观察与参考一致：**红苹果 + 棕色果柄 + 绿叶 + 底部 3 个等距蓝点，无文字** |
+| 5 | 零 shell 真实校对 | ✅ | 两个单元全程原生工具完成 读取→读图→calc 验算→`unit-submit`→登记；父代理只用 `dispatch_plan` / `unit_progress` / `unit_review` / `delivery`。**子 agent 中途无法解压 docx** 反证了它确实没有 shell/代码通道 |
+| 6 | 停止语义 | ✅ | `interrupt_agent` 中性返回（只回报「interrupt requested」，不猜来源）；父代理用 `jiaodui_unit_event --cancel-initiator parent --cancel-reason superseded` 显式登记，`unit_progress` 回报 `cancelled{initiator:parent,reason:superseded}`、`in_flight=false` |
+| 7 | CLI 判别器 | ✅ | `dispatch-plan --task-id <夹具task>` 返回 `ok=true, dispatch=['单元3','单元4','单元5']`，与记录逐项一致（主仓 CLI 无此子命令，证明跑的是分支 core） |
+| 8 | `check-env` 噪音 | ✅ | 本次**未复现** matplotlib 缓存告警（matplotlib 已安装且 `matplotlib_available()=true`）；8 条前置全绿 |
+
+补充：`build-report` 正确区分三态——夹具材料 `complete=false` 且 `deliverable=false`（单元4/5 记 `failed`「无校对报告」，单元1/2 记 `unreviewed`「结构化建议尚无当前版本的父代理复核」），P6 材料 `complete=true, deliverable=true`。
+
+### P6 两个单元的真实结果（各跑一次，未扩大范围）
+
+| 类型 | 材料 / 单元 | 结果 | 说明 |
+|---|---|---|---|
+| 图片证据型 | 夹具 `第 6 讲校对测试-分支性能测试` / `单元3` | ✅ `registered` + `verified`，父复核 `accepted`（`current=true`） | 报告 `4f1cbc58…`、数据 `81307399…`；`marker_count=1`。**真实读图成功**：读的白底副本（594×271 透明底线稿），识别出纵轴 y/mm、±0.4 刻度、横轴 x/(×10⁻²mm) 刻度 7/14/21/28/35、波谷−0.4→波峰+0.4→次波谷 λ=14×10⁻²mm，M 在平衡位置波前、N 在未扰动段，判「图文与解析一致」。6 条 calc 实算全部相符 |
+| 转义边界型 | `P6转义边界合成` / `第1题` | ✅ `registered` + `verified`，父复核 `accepted`（`current=true`） | 报告 `cce9e125…`、数据 `983d55ea…`；`marker_count=2`。6 条 calc（含 1 条 `dimensional` 返回对象）+ 1 条严重错误 |
+
+两条真实发现均为内容问题，非转换差异：单元3 的解析 C 项结束引号误用**左引号**（`不能“随波逐流“` → `”`）；第1题的数据表三时刻与题干 `T=0.5 s` 冲突（按 `y=A sin(2πt/T)` 反解表观周期 0.4 s，取表得 λ=1.6 m 无对应选项）+ 第2问引用的【注】在源文中不存在。
+
+### ADR 0006 转义无损：报告侧与数据侧已实测通过
+
+父代理亲自核对（不依赖子 agent 自述）：
+
+- 源文真身 `raw/P6转义边界合成_raw.md` 里 `|` 与 `【注】` 都是**裸字符，无反斜杠**；
+- 报告 `_校对报告.md` 与整卷报告里，标记原文字段的表格竖线写成 `\|`、方括号写成 `\【` / `\】`（`【1|\| t/s \| 0.1 \| 0.2 \| 0.3 \||…】`、`【2|解释\【注\】中的约定|…】`），而表格分隔行的 `|---|` 保持字面竖线 —— 即**只有标记字段内被转义，正文没有被误转义**；
+- `_校对数据.json` 的 `corrections[].original` 是**反转义后的真字面**（`| t/s | 0.1 | 0.2 | 0.3 |`、`解释【注】中的约定`），而同一文件的 `marked_text` 保持带转义的报告字面 —— 正好符合 operation-manual §「`marked_text` 保持报告字面（带转义），`corrections` 是反转义后的内容」；
+- 子 agent 全程未收到任何 `syntax.*` / `integrity.*` / `original.*` / `locate.*` 转义相关错误，证明写入侧不再硬拒绝竖线与标记括号（P3 的目标达成）。
+
+### ⚠️ 未通过项：P6 材料的 `build-docx` 判 `missing_count=1`，未交付
+
+这是本轮唯一失败发现，且**是闸门正确拒绝交付**，不是静默失败：
+
+- P6 材料 `build-docx` exit 6 `docx_incomplete`：`marker_count=2, anchor_count=1, formula_fallback_count=0, missing_count=1`，stderr 明确报「批注 1 锚点不完整（缺 commentRangeStart/End/Reference），已移除残引用并从批注部件剔除」，产物按契约另存为 `校对Word/P6转义边界合成_校对批注版.failed.docx`，**未进交付路径**（`out_path=null`）。
+- **已排除「生成器整体坏了」**：同一套代码对夹具材料 `build-docx` 得到 `marker_count=1, anchor_count=1, missing_count=0, anchor_structure_ok=true`（该次退出非 0 只因 单元4/5 无报告、单元1/2 未复核被正当排除）。所以锚点生成、注入、配对校验链路本身正常。
+- **失败点收窄到「标记落在表格行内」这一条件**：第1题标记 1 的**原文字段本身就是一条表格行**（`\| t/s \| 0.1 \| 0.2 \| 0.3 \|`），替换文本也是表格行；标记 2 在普通段落里（也丢了锚点，两者共同点是字段内含被转义的 `\|` / `\【`）。夹具 单元3 的唯一标记是普通正文里的引号，锚点正常。
+- **根因未能定位到行**：`_strip_unanchored_comments` 只在 pandoc 已把 openxml raw 丢掉/吃掉之后才看到残缺，要判断到底是「pandoc 在表格单元格里丢弃 `{=openxml}` raw」还是「转义反斜杠使 raw 被吞进数学/文本」，必须直接看生成中间态的 `word/document.xml`。
+- **能力缺口（需下一会话补）**：校对 preset 无 shell，且插件未暴露任何「读 docx 内部 XML / 跑代码」的工具，父代理**无法解压 docx**；实测 `read` 对 docx 直接报 `binary file`，子 agent catalog 里也没有任何可执行通道（20 项逐条确认）。因此本条属「已复现、已定位到条件、根因待 raw XML 复核」，不是未执行。
+- 建议的下一步：在 standard preset（有 shell/python）里对该 `.failed.docx` 与夹具那次成功的 docx 各解出 `word/document.xml`，对比标记 1/标记 2 位置的 `commentRangeStart` 是否存在、`{=openxml}` 是否变成可见文本；若确认是 pandoc 在表格单元格丢弃 raw，则表格行内的标记需要走 `_convert_multiline_tables` 同款「先转 grid table 再注入」的兜底。
+
+#### 根因已复核（standard preset 有 shell，2026-10-09 晚）
+
+**现象**：`.failed.docx` 解出的可见文本是 `…已知数据表：t/s0.1y/cm40说明「…` —— 表格**塌了**：`0.2`/`0.3` 与 `0`/`-4` 整段丢失，`|---|---|---|` 分隔行消失，`commentRangeStart/End/Reference` 各只有 **1** 个（即 2 个标记只锚住 1 个）。
+
+**根因**：标记 1 的字段本身就是一整条 pipe table 行（`\| t/s \| 0.1 \| 0.2 \| 0.3 \|`）。锚点注入把该行变成
+`` `<w:commentRangeStart/>`{=openxml} + 原文 + `<w:commentRangeEnd/>…`{=openxml} ``，
+行首的 `|` 不再是行首字符 ⇒ **表格丢了表头行**，只剩孤立的分隔行与后面的 `| y/cm | … |` ⇒ pandoc 塌表/丢单元格（在列表项缩进内尤其明显），该标记的 openxml 也随之丢失 ⇒ `missing_count=1` ⇒ 闸门按契约拒绝交付。**报告侧（verify）通过、Word 侧不可交付**是这次的准确状态，不是静默失败。
+
+**最小复现（`/tmp/tablex`，三层对照）**：
+
+| 形态 | `commentRangeStart` | `w:tbl` | 可见文本 |
+|---|---|---|---|
+| 现状：pipe table + 注入（无表头） | 1 | **0** | 竖线全部当文本渲染，表格完全没生成 |
+| grid table，锚点在同一单元格内 | 1 | 1 | 单元格齐全 |
+| **grid table，锚点跨单元格（1→4）** | **1（End/Reference 也各 1）** | **1** | `t/s \| 0.1 \| 0.2 \| 0.3`、`y/cm40-4` 全部保留 |
+
+⇒ **修复方向已验证**：把报告正文里的 pipe table 在注入前转成 grid table，锚点（含跨单元格）与表格结构都能保住。代码里 `_convert_multiline_tables`（`docx_report.py:806`）的注释早就写明了同一类根因——"pandoc 的 multiline table 单元格会丢弃 openxml raw；grid table 正常"——只是当时的兜底**只覆盖 multiline table，没覆盖 pipe table**，而 v2 报告正文是「原始源文逐字」，源文里出现 pipe table 时就会踩到。
+
+**这条同时构成「preset 该不该给父 agent shell」的直接证据**：上一会话已复现、已收窄到条件，却因为没有 shell、也没有任何能读 docx 内部 XML 的工具而无法完成根因定位，只能交接；本轮在有 shell 的会话里，解 XML + 三层最小对照一次做完。
+
+### 本轮未能验收 / 未执行（明确留痕）
+
+- **Word 侧反转义字面未被实测确认**：简报要求确认「Word/交付侧是反转义后的字面」，但 P6 材料的 Word 未生成、夹具那次只有 单元3 的引号标记（不含 `\|`），且如上无工具可读 docx 内部 XML。因此该条**只验证了报告侧与数据侧，Word 侧未验证**——不能按 `test_docx_report.py` 的单元测试结论冒充真机通过。
+- 夹具 `单元1` / `单元2` 是上一轮遗留的 `registered` 未复核状态，本轮**未动**（按简报「不要动回放材料既有留痕」）；它们被 `build-docx` 以「尚无当前版本的父代理复核」正当排除。
+- 双口径测试数字未产出：本 preset 无 shell，无法跑 `pytest`。本次为纯宿主侧验收，**未改 `jiaodui/` 代码**，测试口径应与上一批一致（1112 passed / 0 failed / 5 skipped / 4 subtests），但需在 standard preset 复核确认。
+- 未提交、未 push（简报禁止 push）。`docs/PROCESS_REWORK.md` 的本节由本会话写入，提交信息需另行补。
