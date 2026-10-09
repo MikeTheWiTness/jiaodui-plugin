@@ -70,11 +70,11 @@ jiaodui status <paper_dir> --json
 }
 ```
 
-无问题单元提交空 `corrections`、`summary: "无问题"` 和必要的证据对象。竖线或内联标记括号当前无法无损承载为一个标记原文字段时会拒绝提交，不会静默转义。旧 Markdown 报告仍可由 `verify-report` / `parse-report` 兼容读取；`repair-report` 仍只服务旧报告修复。
+无问题单元提交空 `corrections`、`summary: "无问题"` 和必要的证据对象。竖线与标记括号由 v2 转义无损承载（ADR 0006），不再因此拒绝提交；`_校对数据.json` 的 `marked_text` 保持报告字面（带转义），`corrections` 是反转义后的内容。旧 Markdown 报告仍可由 `verify-report` / `parse-report` 兼容读取；`repair-report` 仍只服务旧报告修复。
 
 ## 恢复与事件
 
-执行模式记录后，以 `unit-recovery` 按 `unit_id`、类别和64位小写SHA-256失败指纹消费有限预算；换 agent 或更换指纹不能重置同轮计数。`unit-event` 记录阶段、attempt、agent，以及明确的取消发起者和原因。user取消不重派；parent技术取消不得记作user取消。
+执行模式记录后，以 `unit-recovery` 按 `unit_id`、**失败错误码**和64位小写SHA-256失败指纹消费有限预算：恢复类别由错误码确定性决定，不由模型自选——`usage`/`not_found`/`unsupported`/`*stale` → `call_correction`；`calc_failed`/`calc-evidence-invalid`/`proposal.calc-*` → `calc_representation`；`verify_failed`/`contract`/`out-of-contract`/`syntax.*`/`integrity.*`/`original.*`/`locate.*`/`report.*` → `report_repair`；`images.*`/`images-invalid` → `image_schema_fix`；`env`/`host-timeout`/`host-crash`/`parent-technical-timeout` → `technical_redispatch`。未分类的错误码会被拒绝并给出相近的已知码；用户取消与权限拒绝**不可恢复、不消耗预算**；只有父代理判断类的 `targeted_review` 可以不带错误码，带了与映射不一致的类别会被拒绝。换 agent 或更换指纹不能重置同轮计数。`unit-event` 记录阶段、attempt、agent，以及明确的取消发起者和原因。user取消不重派；parent技术取消不得记作user取消。
 
 ## 父代理复核（第7项实验分支）
 

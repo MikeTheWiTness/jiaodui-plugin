@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .error_classification import (RECOVERY_BUDGETS, RECOVERY_CATEGORIES,
+                                  classify_error)
 from .errors import BusinessError, NotFoundError
 from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
@@ -171,14 +173,7 @@ def validate(root: Path, data: dict) -> dict:
 
 def _validate_execution_policy(policy: dict, run_id: str, root: Path) -> None:
     """校验绑定当前材料轮次的一次性执行授权。"""
-    expected = {
-        "call_correction": 2,
-        "calc_representation": 2,
-        "report_repair": 3,
-        "targeted_review": 2,
-        "technical_redispatch": 1,
-        "image_schema_fix": 2,
-    }
+    expected = dict(RECOVERY_BUDGETS)
     if (not isinstance(policy, dict)
             or policy.get("mode") not in {"automatic", "interactive"}
             or policy.get("origin") not in {"user", "confirmed"}
@@ -313,14 +308,7 @@ def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
         raise BusinessError("执行模式必须为 automatic 或 interactive", code="invalid-execution-mode")
     if origin not in {"user", "confirmed"}:
         raise BusinessError("执行模式来源必须为 user 或 confirmed", code="invalid-execution-origin")
-    budgets = {
-        "call_correction": 2,
-        "calc_representation": 2,
-        "report_repair": 3,
-        "targeted_review": 2,
-        "technical_redispatch": 1,
-        "image_schema_fix": 2,
-    }
+    budgets = dict(RECOVERY_BUDGETS)
     with locked(root):
         data = load(root)
         run = data["runs"][-1]
@@ -338,13 +326,39 @@ def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
         return policy
 
 
-def record_recovery_attempt(task_id: str, unit_id: str, category: str, fingerprint: str) -> dict:
-    """在当前轮次消费一个分类预算，并按失败指纹留痕。"""
-    allowed_categories = {"call_correction", "calc_representation", "report_repair",
-                          "targeted_review", "technical_redispatch", "image_schema_fix"}
-    if (category not in allowed_categories or not isinstance(fingerprint, str)
-            or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)):
-        raise BusinessError("恢复类别或SHA-256失败指纹无效", code="recovery-invalid")
+def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fingerprint: str,
+                            *, error_code: str | None = None) -> dict:
+    """在当前轮次消费一个分类预算，并按失败指纹留痕。
+
+    类别由错误码确定性决定（PLAN-rework-continuation P5 / `error_classification`）：
+    - 给了 `error_code`：类别取映射结果；同时给了 `category` 时必须与映射一致；
+    - 只给 `category`：仅允许父代理判断类的 `targeted_review`，其余必须给错误码；
+    - 未分类码、用户取消、权限拒绝一律拒绝，且不消耗任何预算。
+    """
+    if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        raise BusinessError("SHA-256失败指纹无效", code="recovery-invalid")
+    if category is not None and category not in RECOVERY_CATEGORIES:
+        raise BusinessError(f"未知恢复类别：{category!r}", code="recovery-invalid")
+    if error_code is None:
+        if category != "targeted_review":
+            raise BusinessError(
+                "错误驱动的恢复必须给出 --error-code，不能自选类别；"
+                "只有父代理判断类的 targeted_review 可以只给类别",
+                code="recovery-error-code-required")
+    else:
+        classified = classify_error(error_code)
+        if not classified["recoverable"]:
+            hint = classified.get("suggestion") or []
+            raise BusinessError(
+                f"错误码 {error_code!r} 不可用于恢复：{classified['reason']}"
+                + (f"；相近的已知码：{'、'.join(hint)}" if hint else ""),
+                code="recovery-forbidden" if classified["forbidden"] else "unclassified-error-code")
+        if category is not None and category != classified["category"]:
+            raise BusinessError(
+                f"类别与错误码不一致：{error_code!r} 属于 {classified['category']}，"
+                f"不能记为 {category}",
+                code="recovery-category-mismatch")
+        category = classified["category"]
     root, _ = find_unit_by_id(task_id, unit_id)
     with locked(root):
         data = load(root)
@@ -369,8 +383,8 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str, fingerpri
                       "fingerprint_attempts": state["fingerprints"][fingerprint]}
         run.setdefault("recovery_events", []).append({
             "at": now(), "unit_id": unit_id, "category": category,
-            "fingerprint": fingerprint, "allowed": result["allowed"],
-            "used": result["used"], "budget": budget,
+            "error_code": error_code, "fingerprint": fingerprint,
+            "allowed": result["allowed"], "used": result["used"], "budget": budget,
         })
         write(root, data)
         return result

@@ -166,17 +166,27 @@ function registerStructuredTools(ctx, cliTool) {
     '--proposal-json', JSON.stringify(args.proposal), '--expected-snapshot-sha256',
     args.expected_snapshot_sha256, ...(args.preview ? ['--preview'] : [])])
 
-  register('jiaodui_unit_recovery', '按单元与错误类别消费一次有限恢复预算。', {
+  register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定。', {
     type: 'object', additionalProperties: false,
-    required: ['task_id', 'unit_id', 'category', 'fingerprint'],
+    required: ['task_id', 'unit_id', 'fingerprint'],
     properties: {
       task_id: { type: 'string' }, unit_id: { type: 'string' },
-      category: { type: 'string', enum: ['call_correction', 'calc_representation', 'report_repair',
-        'targeted_review', 'technical_redispatch', 'image_schema_fix'] },
+      error_code: {
+        type: 'string',
+        description: '失败的工具/宿主错误码（如 usage / not_found / calc_failed / verify_failed / images.missing / host-timeout）。类别由它决定；未分类码会被拒绝。',
+      },
+      category: {
+        type: 'string',
+        enum: ['call_correction', 'calc_representation', 'report_repair',
+          'targeted_review', 'technical_redispatch', 'image_schema_fix'],
+        description: '只用于父代理判断类的 targeted_review；错误驱动的恢复必须给 error_code，给了 category 就必须与映射一致。',
+      },
       fingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$' },
     },
   }, args => ['unit-recovery', '--task-id', args.task_id, '--unit-id', args.unit_id,
-    '--category', args.category, '--fingerprint', args.fingerprint])
+    ...(args.error_code ? ['--error-code', args.error_code] : []),
+    ...(args.category ? ['--category', args.category] : []),
+    '--fingerprint', args.fingerprint])
 
   register('jiaodui_unit_event', '记录单元阶段心跳及取消发起者/原因。', {
     type: 'object', additionalProperties: false,

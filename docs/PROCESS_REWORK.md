@@ -15,7 +15,7 @@
 - **M2**：task/unit ID、源码SHA绑定、Unicode码点位置和重复词候选、安全公式/加粗范围；calc schema从核心元数据导出。**P4 已补齐父侧结构化工具**（准备 / 交付），正常路径不再手拼 argv，见下节。
 - **M3初版**：schema v2提交少量建议，程序生成全文；长度封套保护正文中的报告标题/装饰行；快照CAS和材料锁，异常回滚报告/数据/清单，登记为最后提交标志。初版不能无损承载原文字面含`|`/标记括号的内容，只能明确拒绝；**P3 已按 ADR 0006 补齐可逆特殊字符编码与正文/信封契约**，见下节。
 - **M4初版**：assumptions/symbols/images/calculations首轮证据、必需自查项；真实calc call_id与单元源码/轮次/结果关联；父复核绑定输入/建议/自查/报告hash。最新退回撤销旧接受。技术报告仍可汇总通读，但unreviewed时complete=false、Word拒绝。
-- **M5部分**：恢复类别累计、失败指纹、阶段事件、显式取消来源API。调度尚依赖宿主/父代理主动登记；插件中断来源不得猜为用户。预算耗尽留痕，不能换agent刷新额度。
+- **M5部分**：恢复类别累计、失败指纹、阶段事件、显式取消来源API。调度尚依赖宿主/父代理主动登记；插件中断来源不得猜为用户。预算耗尽留痕，不能换agent刷新额度。**P5a 已把「错误码 → 恢复类别」变成确定性映射**，见下节。
 - **M6部分**：Word与报告解析共享v2正文边界；旧parse/repair拒绝覆写v2数据。诊断文件生成与正式complete分离。双skill和bundle schema有漂移测试。
 
 ## P3无损契约（ADR 0006，已完成）
@@ -48,6 +48,20 @@
 
 口径：双口径全量 **1047 passed / 0 failed / 5 skipped**（P4 前 1045 + 5 skip）。
 
+## P5a确定性错误分类（已完成）
+
+背景：预算与指纹记账已经能防重复，但**类别由模型自选**，同类故障可能被记进不同预算——第 11/12 讲回放的 `unit_events[].source` 里出现整段散文就是征兆。本批把「这个错误该花哪一类额度」变成确定性映射，编排侧只报错误码。
+
+- 新增 `jiaodui/error_classification.py`（单一源）：`RECOVERY_CATEGORIES`、`RECOVERY_BUDGETS`、约 60 条精确码表、前缀规则（`proposal.` / `location.` / `calc*` / `images.` / `syntax.*` / `integrity.*` 等）、不可恢复集合，以及 `classify_error(code)` 的三向返回 `{recoverable, forbidden, category, reason, suggestion}`。
+- `material.py` 原先在 `_validate_execution_policy`、`set_execution_policy`、`record_recovery_attempt` 各写一份类别/额度清单（CLI 里还有第四份），现全部收敛到该模块。
+- `record_recovery_attempt(..., *, error_code=None)`：错误码决定类别；只给 `category` 时仅允许父代理判断类的 `targeted_review`；码与类别不一致拒绝；未分类码、用户取消、权限拒绝一律拒绝且**不消耗任何预算**；`recovery_events` 增加 `error_code` 留痕。
+- CLI `unit-recovery` 新增 `--error-code`、`--category` 改为可选；`jiaodui_unit_recovery` 工具 schema 同步（`required` 去掉 category、新增 error_code）。
+- 测试：新增 `tests/test_error_classification.py`（计划点名的四例 + 25 个真实错误码映射 + 取消/权限不可恢复 + 未分类给相近码建议 + 恢复入口三类拒绝 + 被拒绝不消耗预算 + `targeted_review` 免码）；`test_workflow_milestones` 的预算累计用例按新契约传码。
+- **顺带发现并加了守卫**：`.venv` 的 editable 安装指向根仓 main，因此 worktree 能 import 到**只有 main 才有的模块**（`jiaodui.execution_policy`）——P5a 第一次跑红测试时 ImportError 的路径指向根仓文件，差点把排查方向带偏，更危险的是会静默读到另一条线的代码。新增 `tests/test_module_integrity.py`：断言本包相对导入必须指向本包内真实存在的模块（按声明文件所在目录解析，`calc/*.py` 不被误判）。
+- 真机 CLI 冒烟（/tmp 临时材料 convert → split → execution-policy → unit-recovery）：`usage`/`verify_failed`/`images.missing`/`host-timeout` 分别记入 `call_correction`/`report_repair`/`image_schema_fix`/`technical_redispatch` 各 1 次；`user-cancel`、`no-such-code`、缺错误码的 `--category calc_representation` 三类被拒且 `recovery` 为空、无事件落盘。
+
+口径：双口径全量 **1084 passed / 0 failed / 5 skipped**（P5a 前 1047 + 5 skip）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
@@ -62,6 +76,6 @@
 
 ## 未完成与交付限制
 
-- 本轮尚不满足M0—M6全部验收：错误分类与自动心跳/取消闭环（P5）、实际安装方式、新会话父子catalog（P2）均需继续。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
+- 本轮尚不满足M0—M6全部验收：P5 余下三项（`unit-progress` 心跳与超时判据、窗口补位/取消闭环的可执行判据、8 单元并发登记压测）、实际安装方式、新会话父子catalog（P2）均需继续。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具，P5a 已收口错误分类。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。

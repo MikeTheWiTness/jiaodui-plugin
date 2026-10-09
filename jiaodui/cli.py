@@ -253,7 +253,8 @@ def cmd_unit_submit(args: argparse.Namespace) -> int:
 def cmd_unit_recovery(args: argparse.Namespace) -> int:
     from .material import record_recovery_attempt
 
-    _json_out(record_recovery_attempt(args.task_id, args.unit_id, args.category, args.fingerprint))
+    _json_out(record_recovery_attempt(args.task_id, args.unit_id, args.category,
+                                      args.fingerprint, error_code=args.error_code))
     return ExitCode.OK
 
 
@@ -601,8 +602,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("unit-recovery", help="消费当前轮次某类恢复预算并留痕")
     sp.add_argument("--task-id", required=True)
     sp.add_argument("--unit-id", required=True)
-    sp.add_argument("--category", choices=["call_correction", "calc_representation", "report_repair",
-                                           "targeted_review", "technical_redispatch", "image_schema_fix"], required=True)
+    from .error_classification import RECOVERY_CATEGORIES
+    sp.add_argument("--category", choices=list(RECOVERY_CATEGORIES),
+                    help="父代理判断类恢复（目前仅 targeted_review）；错误驱动的恢复改用 --error-code")
+    sp.add_argument("--error-code",
+                    help="失败的工具/宿主错误码；恢复类别由它确定性决定，未分类码会被拒绝")
     sp.add_argument("--fingerprint", required=True)
     sp.set_defaults(func=cmd_unit_recovery)
 

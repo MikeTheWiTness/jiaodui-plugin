@@ -109,6 +109,14 @@ await prepare.execute({operation:'precheck-split',path:'/tmp/units'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','precheck-split','/tmp/units']);
 await prepare.execute({operation:'execution-policy',path:'/tmp/mat',execution_mode:'automatic',origin:'user'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','execution-policy','/tmp/mat','--mode','automatic','--origin','user']);
+// P5：恢复入口按错误码分类，category 只留给父代理判断类
+const recovery=registered.get('jiaodui_unit_recovery');
+assert.equal(recovery.parameters.additionalProperties,false);
+assert.deepEqual(recovery.parameters.required,['task_id','unit_id','fingerprint']);
+await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),error_code:'usage',fingerprint:'f'.repeat(64)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--error-code','usage','--fingerprint','f'.repeat(64)]);
+await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),category:'targeted_review',fingerprint:'f'.repeat(64)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--category','targeted_review','--fingerprint','f'.repeat(64)]);
 // 未提供的可选参数不得拼进 argv（no_clean 省略时不能出现 --no-clean）
 await prepare.execute({operation:'split',path:'/tmp/a_raw.md',subject:'高中物理',mode:'lecture'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','split','/tmp/a_raw.md','--subject','高中物理','--mode','lecture']);
