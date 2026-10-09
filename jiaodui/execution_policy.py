@@ -38,6 +38,16 @@ BUDGETS: dict[str, int] = {
 MODES: tuple[str, ...] = ("automatic", "interactive")
 ORIGINS: tuple[str, ...] = ("user", "confirmed")
 
+LEGACY_BUDGETS: dict[str, int] = {
+    "entry_question": 2,
+    "call_correction": 2,
+    "report_correction": 3,
+    "unit_recovery": 2,
+    "technical_retry": 1,
+    "calculation_correction": 2,
+}
+"""main 时期的材料级聚合预算类别名（用于读旧清单）。"""
+
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -72,6 +82,57 @@ def is_current_policy(policy: object, run_id: str) -> bool:
             and policy.get("run_id") == run_id
             and isinstance(policy.get("confirmed_at"), str)
             and policy.get("budgets") == dict(BUDGETS))
+
+
+def is_readable_policy(value: object) -> bool:
+    """能否安全读入清单。
+
+    当前形态与**旧聚合形态**都算可读：升级时不能让旧清单连打开都失败。
+    可读不等于授权——是否授权由 `is_current_policy` 判定。
+    """
+    if not isinstance(value, dict):
+        return False
+    if value.get("mode") not in MODES or value.get("origin") not in ORIGINS:
+        return False
+    if not isinstance(value.get("confirmed_at"), str):
+        return False
+    budgets = value.get("budgets")
+    if not isinstance(budgets, dict):
+        return False
+    if set(budgets) == set(BUDGETS):
+        return all(type(budgets[key]) is int and budgets[key] == BUDGETS[key] for key in BUDGETS)
+    if set(budgets) == set(LEGACY_BUDGETS):
+        return all(type(budgets[key]) is int and 0 <= budgets[key] <= LEGACY_BUDGETS[key]
+                   for key in budgets)
+    return False
+
+
+def migrate_legacy_spent(policy: dict) -> dict[str, int]:
+    """旧聚合 spent → 当前类别计数（每个单元同值，由调用方按单元落账）。
+
+    旧轮次把额度记在材料级、无法归因到单元，按 main 的映射保守迁移：
+    `entry_question` 丢弃（它不是恢复额度）、`image_schema_fix` 由旧
+    `call_correction` 推（旧版把图像 schema 修正记在 call_correction）、
+    `technical_redispatch` 取 `unit_recovery` / `technical_retry` 的较大者；
+    最后按当前额度取 `min`，宁可少给不可多给。只返回非零项。
+    """
+    old = policy.get("spent") if isinstance(policy, dict) else None
+    if not isinstance(old, dict):
+        return {}
+
+    def count(key: str) -> int:
+        value = old.get(key, 0)
+        return value if type(value) is int and value > 0 else 0
+
+    mapped = {
+        "call_correction": count("call_correction"),
+        "calc_representation": count("calculation_correction"),
+        "report_repair": count("report_correction"),
+        "targeted_review": 0,
+        "technical_redispatch": max(count("unit_recovery"), count("technical_retry")),
+        "image_schema_fix": count("call_correction"),
+    }
+    return {key: min(value, BUDGETS[key]) for key, value in mapped.items() if value}
 
 
 def validate_fingerprint(fingerprint: object) -> str:

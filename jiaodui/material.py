@@ -12,8 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .error_classification import RECOVERY_CATEGORIES, classify_error
-from .execution_policy import (charge, is_current_policy, new_policy,
-                               validate_fingerprint)
+from .execution_policy import (charge, is_current_policy, is_readable_policy,
+                               migrate_legacy_spent, new_policy, validate_fingerprint)
 from .errors import BusinessError, NotFoundError
 from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
@@ -173,9 +173,21 @@ def validate(root: Path, data: dict) -> dict:
 
 
 def _validate_execution_policy(policy: dict, run_id: str, root: Path) -> None:
-    """校验绑定当前材料轮次的一次性执行授权（机制在 execution_policy）。"""
-    if not is_current_policy(policy, run_id):
+    """读盘门：只判「能否安全读入」，不判授权。
+
+    旧聚合形态（main 时期）必须可读——否则升级时连清单都打不开；它当然不授权本轮
+    工作，授权由 `require_current_policy` 判定。
+    """
+    if not is_readable_policy(policy):
         _invalid("执行模式授权无效或不属于当前轮次", root)
+
+
+def require_current_policy(run: dict, data: dict) -> dict:
+    """需要授权才能干活的入口共用：无策略、旧策略、非本轮策略一律拒绝。"""
+    policy = run.get("execution_policy")
+    if not is_current_policy(policy, run.get("run_id")):
+        raise BusinessError("当前轮次尚未确认执行模式", code="execution-policy-required")
+    return policy
 
 
 def load(root: Path) -> dict:
@@ -408,14 +420,26 @@ def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
         data = load(root)
         run = data["runs"][-1]
         existing = run.get("execution_policy")
-        if existing is not None:
+        if existing is not None and is_current_policy(existing, run["run_id"]):
             if existing["mode"] == mode and existing["origin"] == origin:
                 return existing
             raise BusinessError("本轮执行模式已确认；如需改变策略，请显式开启新轮次", code="execution-policy-locked")
+        # 无策略、旧聚合策略或非本轮策略：重授权，并把旧聚合计数按单元保守迁移，
+        # **不重置已花额度**（旧计数无法归因到单元，故每个单元同样迁移、取 min）。
+        migrated = migrate_legacy_spent(existing) if isinstance(existing, dict) else {}
+        if migrated:
+            ledger = run.setdefault("recovery", {})
+            for identity in (data.get("unit_ids") or {}).values():
+                state = ledger.setdefault(identity, {})
+                for category, used in migrated.items():
+                    state.setdefault(category, {"used": used, "fingerprints": {}})
         policy = new_policy(mode, origin, now(), run["run_id"])
         run["execution_policy"] = policy
-        run["actions"].append({"command": "execution-policy", "at": policy["confirmed_at"],
-                               "mode": mode, "origin": origin})
+        action = {"command": "execution-policy", "at": policy["confirmed_at"],
+                  "mode": mode, "origin": origin}
+        if migrated:
+            action["migrated_legacy_spent"] = sorted(migrated)
+        run["actions"].append(action)
         write(root, data)
         return policy
 
@@ -456,9 +480,7 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
     with locked(root):
         data = load(root)
         run = data["runs"][-1]
-        policy = run.get("execution_policy")
-        if policy is None:
-            raise BusinessError("当前轮次尚未确认执行模式", code="execution-policy-required")
+        require_current_policy(run, data)
         if run["run_id"] != data["current_run_id"]:
             raise BusinessError("恢复预算只能记入当前轮次", code="run-changed")
         unit_state = run.setdefault("recovery", {}).setdefault(unit_id, {})
@@ -514,8 +536,7 @@ def record_calc_call(task_id: str, unit_id: str, operation: str, params: dict, r
     with locked(root):
         data = load(root)
         run = data["runs"][-1]
-        if run.get("execution_policy") is None:
-            raise BusinessError("当前轮次尚未确认执行模式", code="execution-policy-required")
+        require_current_policy(run, data)
         inputs = unit_inputs(root, unit)
         if inputs != data["unit_inputs"].get(unit.name):
             raise BusinessError("calc调用时单元输入已改变", code="unit-input-mismatch")

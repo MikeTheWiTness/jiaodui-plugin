@@ -31,8 +31,7 @@ def _current(root: Path, unit: Path) -> tuple[dict, Path, str]:
         raise BusinessError("单元不属于当前材料单元集", code="unit-path-mismatch")
     if data.get("task_id") is None or unit.name not in data.get("unit_ids", {}):
         raise BusinessError("材料尚无task/unit身份，请重新拆分后再提交", code="identity-missing")
-    if data["runs"][-1].get("execution_policy") is None:
-        raise BusinessError("当前轮次尚未确认执行模式", code="execution-policy-required")
+    material.require_current_policy(data["runs"][-1], data)
     source = find_source_md(unit)
     if source is None or not source.is_file():
         raise NotFoundError("找不到单元源文", details={"unit": str(unit)})

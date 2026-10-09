@@ -275,6 +275,25 @@ PLAN-rework-continuation P2 的前置工作。**用户已选定「先做 P2，�
 
 **边界**：`validate_attempt`（B3 的 `attempt_id` 幂等）与 `migrate_legacy_spent`（B2 的旧清单迁移）**不在本批引入**，避免留下无调用方的死代码；它们各自在对应批次连同测试一起加。
 
+## B2：旧清单兼容——可读、未授权、重授权时按单元保守迁移（UNIFY-PLAN Phase 1 第 2 批）
+
+**缺口**：分支原先要求 `execution_policy.budgets` **精确等于**当前六类额度，于是 main 时期的旧聚合策略会被判成 `invalid-manifest`——**连清单都打不开**，升级无从谈起。main 的做法是「可读但未授权」+ 重授权时保守迁移。
+
+**改法**：
+
+- 纯模块 `execution_policy.py` 新增 `LEGACY_BUDGETS`、`is_readable_policy()`、`migrate_legacy_spent()`。迁移映射照 main：`entry_question` 丢弃（它不是恢复额度）、`image_schema_fix` 由旧 `call_correction` 推（旧版把图像 schema 修正记在 call_correction）、`technical_redispatch` 取 `max(unit_recovery, technical_retry)`、每项 `min` 到当前额度、只返回非零项。
+- `_validate_execution_policy` 的读盘门放宽为「**可读**」；新增 `material.require_current_policy(run, data)` 统一判定**授权**，并把 `record_recovery_attempt` / `record_calc_call` / `unit_delivery.submit` 三处 `policy is None` 改为调用它——旧策略、失效策略因此都**不再授权本轮工作**（这正是 main 那句「readable but not authorized」）。
+- `set_execution_policy`：遇到非当前策略（含旧聚合）→ 把旧聚合 `spent` 迁移到各单元账本、再安装新策略，并在轮次 action 里记 `migrated_legacy_spent`，便于审计。
+
+**先红后绿**：新增 `tests/test_policy_legacy_compat.py` 两例（缺策略：可读、操作被拒、重授权后可用；旧聚合：可读、仍不授权、迁移到各单元且**计数计入额度**）。修复前第二例因 `invalid-manifest` 直接失败。
+
+**真机验收**：
+
+- 工作区 6 份旧清单（`第 6 讲校对测试`、`-流程测试`、`-独立续测-02`、`-独立续测-03`、`_独立流程测试`、`_独立流程测试_重跑`）**全部可读、不再报 invalid-manifest**；它们属于更早形态（无 `task_id`/`unit_ids`），所以单元级迁移改用带 5 单元的真实材料**副本**（`/tmp`，原物未动）验证。
+- 副本上：旧聚合策略①可读 →② `record_recovery_attempt` 被拒 `execution-policy-required` →③ `set_execution_policy("interactive")` 后各单元账本为 `{call_correction:1, calc_representation:1, report_repair:2, technical_redispatch:1, image_schema_fix:1}`，action 记录迁移类别 →④ 迁移计数**计入额度**（call_correction 已用 1，再记一次变 `used=2/remaining=0`，第三次被拒 `blocked_category=call_correction`）。
+
+**口径**：双口径均 **1119 passed / 0 failed / 5 skipped / 4 subtests**（B2 前 1117，+2 例）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
