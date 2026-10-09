@@ -6,6 +6,7 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - 校对流程改造记录：[docs/PROCESS_REWORK.md](docs/PROCESS_REWORK.md)
 - 第7章结构化报告主链（实验分支，不部署）：`feature/structured-report-pipeline`；独立worktree位于本地 `.worktrees/structured-report/`
 - 执行顺序与完成判据：[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
+- M0—M6 收口计划：[docs/PLAN-rework-continuation.md](docs/PLAN-rework-continuation.md)
 - M5 架构决策：[ADR-0001：多学科入口与逐科落地](docs/adr/0001-m5-subject-entry-and-rollout.md)
 - 交付闸门：[ADR-0004：闸门单一实现（含图片资源）](docs/adr/0004-gate-single-implementation.md)
 - 学科工具：[ADR-0005：量纲校验的声明形态与多解判定](docs/adr/0005-dimensional-declaration-and-ambiguity.md)
