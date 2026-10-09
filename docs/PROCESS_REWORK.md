@@ -15,7 +15,7 @@
 - **M2**：task/unit ID、源码SHA绑定、Unicode码点位置和重复词候选、安全公式/加粗范围；calc schema从核心元数据导出。**P4 已补齐父侧结构化工具**（准备 / 交付），正常路径不再手拼 argv，见下节。
 - **M3初版**：schema v2提交少量建议，程序生成全文；长度封套保护正文中的报告标题/装饰行；快照CAS和材料锁，异常回滚报告/数据/清单，登记为最后提交标志。初版不能无损承载原文字面含`|`/标记括号的内容，只能明确拒绝；**P3 已按 ADR 0006 补齐可逆特殊字符编码与正文/信封契约**，见下节。
 - **M4初版**：assumptions/symbols/images/calculations首轮证据、必需自查项；真实calc call_id与单元源码/轮次/结果关联；父复核绑定输入/建议/自查/报告hash。最新退回撤销旧接受。技术报告仍可汇总通读，但unreviewed时complete=false、Word拒绝。
-- **M5部分**：恢复类别累计、失败指纹、阶段事件、显式取消来源API。调度尚依赖宿主/父代理主动登记；插件中断来源不得猜为用户。预算耗尽留痕，不能换agent刷新额度。**P5a 已把「错误码 → 恢复类别」变成确定性映射，P5b 已补心跳与超时判据**，见下节。
+- **M5部分**：恢复类别累计、失败指纹、阶段事件、显式取消来源API。调度尚依赖宿主/父代理主动登记；插件中断来源不得猜为用户。预算耗尽留痕，不能换agent刷新额度。**P5a 已把「错误码 → 恢复类别」变成确定性映射，P5b 已补心跳与超时判据，P5c 已收口并发登记与滑窗判据**，见下节。
 - **M6部分**：Word与报告解析共享v2正文边界；旧parse/repair拒绝覆写v2数据。诊断文件生成与正式complete分离。双skill和bundle schema有漂移测试。
 
 ## P3无损契约（ADR 0006，已完成）
@@ -74,6 +74,28 @@
 
 口径：双口径全量 **1092 passed / 0 failed / 5 skipped**（P5b 前 1084 + 5 skip）。入口 skill 8154 码点（余量 38，仍在 8192 阈值内）。
 
+## P5c并发登记与滑窗判据（已完成）
+
+**并发登记原子性（P5 第 4 项）**：新增 `tests/test_concurrency.py`，用线程与独立进程两条路径压 `material.locked`（`fcntl.flock` 锁材料目录 inode；清单原子替换不换锁对象）：
+
+- 8 单元 × 5 次 `unit-event`（线程）→ 每单元恰好 5 条、合计 40 条，`unit_state` 不互相覆盖；
+- 8 条独立 CLI 进程各登记 1 次 `unit-event` → 每单元恰好 1 条且 `attempt_id` 与进程一一对应（真实场景：8 个子 agent 各一条进程）；
+- 8 个并发 `unit-recovery` 抢同一单元的 `call_correction` 预算（2）→ 恰好 2 个 allowed、其余 `retryable=false`，`used==2` 且指纹计数为 2；
+- 8 单元并发 `unit-submit`（无问题报告）→ 全部 `registered`，`unit_records` 恰好 8 条，不丢不覆盖。
+
+**滑窗与停止判据（P5 第 3 项中可由 core 判定的部分）**：新增只读 `material.dispatch_plan(task_id, *, window=8)` 与 CLI `dispatch-plan` / 工具 `jiaodui_dispatch_plan`：
+
+- `dispatch` 只给下一批可派发单元，且**先排除在途单元**（`unit_progress.in_flight`），因此同一单元不会被重复派发；
+- 候选只取「未开始 / 已交付未过校验 / 本轮未完成」；`waiting` 是窗口外排队；
+- 任一单元被显式取消即 `stop=true`、`dispatch=[]`，候选留在 `waiting` 交人裁定，不为凑满窗口继续派发；父代理技术取消同样按停止处理，但不冒称用户取消；
+- 只读：不派发、不占预算、不改清单。
+
+边界说明：真实「补位、取消在途、确认停止后结束批次」的执行者仍是宿主/父代理——core 只提供可判定的输入与停止条件（本仓 PROCESS_REWORK 早已声明「本兼容核心只实现显式策略、按单元预算及事件记账，不声称完成真实 agent orchestration」）。取消来源分离与插件 `AbortError` 中性上报已分别由 `test_workflow_milestones`（parent 冒称 user_cancel 被拒）与 Node 行为测试锁定。
+
+测试与冒烟：`tests/test_unit_progress.py` 增补 3 例滑窗判据（空位补位且不重复派发、取消后停止、非法窗口与只读）；`tests/test_cli.py` 命令清单与 Node 行为测试同步补 `dispatch-plan`。真机 CLI 冒烟：5 单元材料 `window=8` → `dispatch=['单元3','单元4','单元5']`（已完成的两个不再派）；`window=1` → `dispatch=['单元3']`、`waiting=['单元4','单元5']`；带 parent 技术取消的材料 → `stop=true`、`dispatch=[]`、`cancelled` 暴露发起者与原因；`--window 0` → exit 6。
+
+口径：双口径全量 **1100 passed / 0 failed / 5 skipped**（P5c 前 1092 + 5 skip）。入口 skill 8164 码点（余量 28，仍 <8192）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
@@ -88,6 +110,6 @@
 
 ## 未完成与交付限制
 
-- 本轮尚不满足M0—M6全部验收：P5 余下两项（窗口补位/取消闭环的可执行判据、8 单元并发登记压测）、实际安装方式、新会话父子catalog（P2）均需继续。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具，P5a 已收口错误分类，P5b 已补心跳与超时判据。
+- 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**（错误分类、心跳与超时判据、并发登记原子性、滑窗与停止判据；真实派发执行者仍是宿主/父代理）；余下为 P6 回放收口、实际安装方式与新会话父子 catalog（P2）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。

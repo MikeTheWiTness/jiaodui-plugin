@@ -266,6 +266,13 @@ def cmd_unit_progress(args: argparse.Namespace) -> int:
     return ExitCode.OK
 
 
+def cmd_dispatch_plan(args: argparse.Namespace) -> int:
+    from .material import dispatch_plan
+
+    _json_out(dispatch_plan(args.task_id, window=args.window))
+    return ExitCode.OK
+
+
 def cmd_unit_event(args: argparse.Namespace) -> int:
     from .material import record_unit_event
 
@@ -624,6 +631,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--stale-after-seconds", type=int, default=900,
                     help="最后一次事件距今超过该秒数且仍在途 → stale=true（默认 900）")
     sp.set_defaults(func=cmd_unit_progress)
+
+    sp = sub.add_parser("dispatch-plan", help="按滑动窗口给出下一批可派发单元（只读）")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--window", type=int, default=8, help="滑动窗口上限，默认 8")
+    sp.set_defaults(func=cmd_dispatch_plan)
 
     sp = sub.add_parser("unit-event", help="记录单元阶段、attempt和取消来源")
     sp.add_argument("--task-id", required=True)

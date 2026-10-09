@@ -117,6 +117,12 @@ await progress.execute({task_id:'a'.repeat(32),stale_after_seconds:60},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-progress','--task-id','a'.repeat(32),'--stale-after-seconds','60']);
 await progress.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32)},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-progress','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--stale-after-seconds','900']);
+// P5c：滑动窗口判据也必须结构化传参
+const plan=registered.get('jiaodui_dispatch_plan');
+assert.equal(plan.parameters.additionalProperties,false);
+assert.deepEqual(plan.parameters.required,['task_id']);
+await plan.execute({task_id:'a'.repeat(32),window:4},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','dispatch-plan','--task-id','a'.repeat(32),'--window','4']);
 // P5：恢复入口按错误码分类，category 只留给父代理判断类
 const recovery=registered.get('jiaodui_unit_recovery');
 assert.equal(recovery.parameters.additionalProperties,false);

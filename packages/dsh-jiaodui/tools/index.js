@@ -203,6 +203,16 @@ function registerStructuredTools(ctx, cliTool) {
     ...(args.unit_id ? ['--unit-id', args.unit_id] : []),
     '--stale-after-seconds', String(args.stale_after_seconds ?? 900)])
 
+  register('jiaodui_dispatch_plan', '按滑动窗口给出下一批可派发单元；只读，不派发、不占预算。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id'],
+    properties: {
+      task_id: { type: 'string' },
+      window: { type: 'integer', minimum: 1, default: 8, description: '滑动窗口上限，默认 8。' },
+    },
+  }, args => ['dispatch-plan', '--task-id', args.task_id,
+    '--window', String(args.window ?? 8)])
+
   register('jiaodui_unit_event', '记录单元阶段心跳及取消发起者/原因。', {
     type: 'object', additionalProperties: false,
     required: ['task_id', 'unit_id', 'phase', 'attempt_id'],

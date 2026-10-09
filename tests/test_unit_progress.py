@@ -113,3 +113,42 @@ def test_unknown_task_or_unit_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(NotFoundError) as unknown_unit:
         material.unit_progress(task_id, unit_id="f" * 32)
     assert unknown_unit.value.code == "not_found"
+
+
+# ---- 滑动窗口判据（P5 第 3 项中可由 core 判定的部分） ----
+
+def test_dispatch_plan_fills_empty_slots_without_duplicating_in_flight(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    plan = material.dispatch_plan(task_id, window=1)
+    assert plan["in_flight"] == []
+    assert plan["dispatch"] == ["单元1"], "空窗口应补位"
+    assert plan["stop"] is False
+
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1")
+    busy = material.dispatch_plan(task_id, window=1)
+    assert busy["in_flight"] == ["单元1"]
+    assert busy["free_slots"] == 0
+    assert busy["dispatch"] == [], "在途单元不得被重复派发"
+
+
+def test_dispatch_plan_stops_after_explicit_cancellation(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1",
+                               cancel_initiator="parent", cancel_reason="technical_timeout")
+    plan = material.dispatch_plan(task_id, window=8)
+    assert plan["stop"] is True
+    assert plan["dispatch"] == []
+    assert plan["waiting"], "停止补位后候选应留在 waiting，不是消失"
+    assert plan["cancelled"][0]["initiator"] == "parent"
+    assert plan["cancelled"][0]["reason"] == "technical_timeout"
+
+
+def test_dispatch_plan_rejects_bad_window_and_is_read_only(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    with pytest.raises(BusinessError) as error:
+        material.dispatch_plan(task_id, window=0)
+    assert error.value.code == "policy-invalid"
+    manifest = root / material.MANIFEST
+    before = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    material.dispatch_plan(task_id, window=8)
+    assert hashlib.sha256(manifest.read_bytes()).hexdigest() == before

@@ -314,6 +314,39 @@ def unit_progress(task_id: str, *, unit_id: str | None = None,
             "units": units}
 
 
+def dispatch_plan(task_id: str, *, window: int = 8) -> dict:
+    """按滑动窗口给出下一批可派发单元；只读，不派发、不占预算。
+
+    - 在途单元占用窗口（`unit_progress` 的 `in_flight`），所以同一单元不会被重复派发；
+    - 候选只取「未开始 / 已交付未过校验 / 本轮未完成」，已完成与跳过不再派；
+    - 任一单元被显式取消（user / parent / host）即 `stop=True`：停止补位交人裁定，
+      不为「凑满窗口」继续派发；父代理技术取消同样按停止处理，但不冒称用户取消。
+    """
+    if type(window) is not int or window < 1:
+        raise BusinessError("window 必须为正整数", code="policy-invalid")
+    from .status import CURRENT_PENDING, DELIVERED_UNVERIFIED, NOT_STARTED, scan_status
+
+    root = _material_by_task(task_id)
+    data = load(root)
+    paper = relative_path(root, data["paths"]["paper"])
+    progress = unit_progress(task_id)
+    in_flight = [item["unit"] for item in progress["units"] if item["in_flight"]]
+    cancelled = [{"unit": item["unit"], **(item["cancelled"] or {})}
+                 for item in progress["units"] if item["cancelled"]]
+    report = scan_status(paper)
+    dispatchable = [item.unit for item in report.units
+                    if item.state in {NOT_STARTED, DELIVERED_UNVERIFIED, CURRENT_PENDING}
+                    and item.unit not in in_flight]
+    free = max(0, window - len(in_flight))
+    stopped = bool(cancelled)
+    return {"ok": True, "task_id": task_id, "run_id": progress["run_id"],
+            "window": window, "in_flight": in_flight, "free_slots": free,
+            "dispatch": [] if stopped else dispatchable[:free],
+            "waiting": dispatchable if stopped else dispatchable[free:],
+            "stop": stopped, "cancelled": cancelled,
+            "states": {item.unit: item.state for item in report.units}}
+
+
 def write(root: Path, data: dict) -> None:
     """同目录临时文件原子替换；临时文件不作为运行产物保留。"""
     path = ensure_inside(root / MANIFEST)
