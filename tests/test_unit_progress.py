@@ -200,3 +200,19 @@ def test_unit_event_rejects_late_event_from_previous_run(tmp_path, monkeypatch):
     event = material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1",
                                        expected_run_id=fresh)
     assert event["phase"] == "read"
+
+
+def test_unit_event_requires_execution_policy(tmp_path, monkeypatch):
+    """没有执行授权就不该留下工作痕迹（采纳 main：unit-event 也要求当前策略）。"""
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    with material.locked(root):
+        data = material.load(root)
+        data["runs"][-1].pop("execution_policy", None)
+        material.write(root, data)
+    before = (root / material.MANIFEST).read_bytes()
+
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1")
+
+    assert error.value.code == "execution-policy-required"
+    assert (root / material.MANIFEST).read_bytes() == before, "未授权时不得落盘"

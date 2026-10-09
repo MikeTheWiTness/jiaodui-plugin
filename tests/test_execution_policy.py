@@ -158,3 +158,16 @@ def test_policy_mechanism_lives_in_pure_module():
     source = Path(execution_policy.__file__).read_text(encoding="utf-8")
     for forbidden in ("open(", "json.load", "subprocess", "Path("):
         assert forbidden not in source, f"纯模块不得含 IO：{forbidden}"
+
+
+def test_fingerprint_error_code_is_specific():
+    """指纹非法用更具体的错误码（采纳 main 的 invalid-attempt-fingerprint）。"""
+    from jiaodui import execution_policy
+
+    for bad in ("not-a-hash", "A" * 64, "", None, 7):
+        with pytest.raises(BusinessError) as error:
+            execution_policy.validate_fingerprint(bad)
+        assert error.value.code == "invalid-attempt-fingerprint", bad
+    with pytest.raises(BusinessError) as error:
+        execution_policy.validate_attempt("", "a" * 64)
+    assert error.value.code == "invalid-attempt-id"

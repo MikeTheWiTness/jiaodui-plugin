@@ -551,6 +551,8 @@ def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str
             raise BusinessError("阶段事件只能记入调用方预期的轮次", code="run-changed",
                                 details={"expected_run_id": expected_run_id,
                                          "run_id": run["run_id"]})
+        # 采纳 main：没有当前执行授权就不该留下工作痕迹（顺序同 main，先判轮次再判授权）
+        require_current_policy(run, data)
         event = {"at": now(), "unit_id": unit_id, "phase": phase,
                  "attempt_id": attempt_id, "agent_id": agent_id}
         run.setdefault("unit_events", {}).setdefault(unit_id, []).append(event)

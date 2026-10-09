@@ -138,7 +138,8 @@ def migrate_legacy_spent(policy: dict) -> dict[str, int]:
 def validate_fingerprint(fingerprint: object) -> str:
     """失败指纹必须是小写 64 位 SHA-256。"""
     if not isinstance(fingerprint, str) or not _SHA256_RE.fullmatch(fingerprint):
-        raise BusinessError("SHA-256失败指纹无效", code="recovery-invalid")
+        # 采纳 main 的码：比笼统的 recovery-invalid 更能指认问题
+        raise BusinessError("SHA-256失败指纹无效", code="invalid-attempt-fingerprint")
     return fingerprint
 
 

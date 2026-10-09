@@ -392,6 +392,23 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 
 **口径**：分支双口径 **1128 passed / 0 failed / 5 skipped / 4 subtests**（本批 +2 例）。
 
+## Phase 2 合并中采纳 main 的另外两处更优语义（在分支上实现）
+
+**③ `unit-event` 要求当前执行授权**
+
+- main 的 `record_unit_event` 经 `_require_execution_policy` 要求当前策略；分支的心跳不要求 → 「没有授权就不留下工作痕迹」在分支里没有确定性落点 → 采纳（顺序与 main 一致：先判轮次 CAS，再判授权）。
+- 影响面先查过：分支所有 `record_unit_event` 调用点的 helper 都已先设执行模式，故无回归。
+- 红→绿：新增 `test_unit_event_requires_execution_policy`（无策略 → `execution-policy-required` 且**不落盘**）。
+
+**④ 指纹非法用更具体的错误码**
+
+- main 用 `invalid-attempt-fingerprint`，分支是笼统的 `recovery-invalid` → 采纳 main（更能指认问题）。未知**类别**仍是 `recovery-invalid`（既有断言不变）。
+- 红→绿：新增 `test_fingerprint_error_code_is_specific`（5 种非法形态 + attempt_id 仍为 `invalid-attempt-id`）。
+
+两处均在面板同步：CLI/插件 schema 无需改（无新参数），手册两份副本补「unit-event 要求已确认执行模式」与「指纹非法返回 `invalid-attempt-fingerprint`」。
+
+**口径**：分支双口径 **1130 passed / 0 failed / 5 skipped / 4 subtests**（本批 +2 例）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
