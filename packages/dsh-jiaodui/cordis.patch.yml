@@ -3,9 +3,14 @@
 # 它声明一个 `jiaodui` agent preset，并在 preset 的 plugins 里：
 #   1. 把随包的 skills/ 目录挂进 skill-filesystem（只对该 preset 生效）；
 #   2. 挂载 ./tools/index.js，注册 jiaodui 原生工具（argv 透传 CLI）。
-# 公共能力以 standard preset 为底座；此 profile 关闭 web / goal / plan / fork，
-# 保留 filesystem、图片读取、旧报告写入与 jiaodui CLI。子代理 toolFilter 仅按宿主暴露
-# 的工具目录过滤，不把它宣称为严格权限隔离；需等第 7 章独立实验完成再收紧。
+# 能力分层（真机验收后确定，见 docs/PROCESS_REWORK.md「P2 真机验收」）：
+#   父 agent：保留通用操作性——shell（按平台 bash/pwsh）与只读搜索 fs-search。
+#     理由是实测出来的：无 shell 的会话能复现 Word 锚点丢失、能收窄到条件，却因为
+#     没有任何读 docx 内部 XML 的通道而无法定位根因，只能交接。
+#   子 agent：工具目录仍是封闭的 20 项（见 delegation 的 toolFilter），无 shell、无
+#     write/edit——「模型不写报告、只交结构化提案」这条硬约束的落点在这里。
+# 注意：shell 里不要用 `python -m jiaodui`。editable 安装的查找器排在 PathFinder 之后，
+# cwd 决定导入哪条线的 core；确定性操作一律走原生 jiaodui_* 工具，shell 只用于观察与修复。
 #
 # 安装后可在「设置 → 通用 → agent preset」把默认 preset 换成「校对」，
 # 或在新会话里选择它。行 id preset-jiaodui 可被 profile patch 按 id 覆盖。
@@ -37,6 +42,7 @@
           - id: tool-pwsh
             name: '@deepseek-ai/dsh-tool-pwsh'
             disabled: !!js process.platform !== 'win32'
+          # 聚合fs暂保留：宿主read_image来自该插件。细粒度读写过滤尚待宿主支持。
           - id: tool-fs
             name: '@deepseek-ai/dsh-tool-fs'
           - id: tool-fs-search
@@ -49,7 +55,9 @@
             name: '@deepseek-ai/dsh-skill-filesystem'
             config:
               includeDefaultRoots: false
-              # preset 行挂载基准是 profile 根；只从本组合包 customSkillDirs 加载 skill。
+              # preset 行的挂载基准是 profile 根（agent-preset-registry 的 ctx.baseUrl），
+              # 不是本 patch 所在目录，所以不能用 ./skills；按 DSH 自带 bundle 的写法，
+              # 用 createRequire(baseUrl) 反查包的真实路径。
               customSkillDirs:
                 - !!js >-
                     process.getBuiltinModule('node:path').join(
@@ -58,6 +66,8 @@
                       'skills')
           - id: tool-skill
             name: '@deepseek-ai/dsh-tool-skill'
+          # jiaodui 原生工具：argv 透传 CLI。裸包名从 profile 解析（exports["."] = ./tools/index.js），
+          # 相对路径会以 profile 根为基准而 import 不到（never started）。
           - id: jiaodui-tools
             name: dsh-jiaodui
             config:
@@ -77,6 +87,19 @@
             config:
               - id: plan-mode
                 name: '@deepseek-ai/dsh-plan-mode'
+                config:
+                  section: |
+                    You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+                    Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+                    The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+                    Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+                    Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+                    When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
           - id: compaction
             name: cordis:group
             group: true
@@ -113,10 +136,31 @@
                   backgroundMode: continuable
                   maxDepth: 1
                   toolFilter:
-                    allow: [skill, read, read_image, write, edit, jiaodui]
+                    allow:
+                      - skill
+                      - read
+                      - read_image
+                      - jiaodui_unit_read
+                      - jiaodui_unit_locate
+                      - jiaodui_unit_snapshot
+                      - jiaodui_unit_submit
+                      - jiaodui_unit_event
+                      - jiaodui_unit_recovery
+                      - jiaodui_calc_evaluate
+                      - jiaodui_calc_simplify
+                      - jiaodui_calc_solve
+                      - jiaodui_calc_equality
+                      - jiaodui_calc_differentiate
+                      - jiaodui_calc_integrate
+                      - jiaodui_calc_formula
+                      - jiaodui_calc_dimensional
+                      - jiaodui_calc_limit
+                      - jiaodui_calc_geometry
+                      - jiaodui_calc_vector_ops
+                      - jiaodui_calc_circle_from_two_points
               - id: tool-subagent-fork
-                name: '@deepseek-ai/dsh-tool-subagent'
                 disabled: true
+                name: '@deepseek-ai/dsh-tool-subagent'
                 config:
                   provider: fork
                   toolName: subagent_fork

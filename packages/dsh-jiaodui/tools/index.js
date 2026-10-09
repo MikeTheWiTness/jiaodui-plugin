@@ -6,7 +6,7 @@
  * 本模块刻意不 import 任何 @deepseek-ai/* 包，避免 profile 内解析不到随 DSH
  * 安装的包；只用 Node 内建模块。
  */
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { isAbsolute } from 'node:path'
 
@@ -61,6 +61,302 @@ function render(args, value) {
   return [{ type: 'text', text: lines.join('\n') }]
 }
 
+const CALC_SCHEMAS = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./calc-schemas.json', import.meta.url)), 'utf8'),
+).operations
+const PROPOSAL_SCHEMA = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./proposal-schema.json', import.meta.url)), 'utf8'),
+).schema
+
+const TASK_PREPARE_OPERATIONS = ['check-env', 'inspect-source', 'convert', 'split',
+  'precheck-split', 'status', 'execution-policy']
+/** 准备阶段的子命令白名单：与 `jiaodui <command> --help` 实际注册一致。 */
+
+const DELIVERY_OPERATIONS = ['build-report', 'build-docx']
+/** 交付阶段的子命令白名单：整卷报告与 Word 批注版。 */
+
+/**
+ * 按 operation 拼 argv：未用到的参数一律不传给 CLI，缺参数也不在这里判，
+ * 让 CLI 出稳定的用法错误（exit 2）——判断留在 core，壳只做参数搬运。
+ */
+function taskPrepareArgs(args) {
+  const target = args.path ? [args.path] : []
+  const modeFlags = [
+    ...(args.mode ? ['--mode', args.mode] : []),
+    ...(args.mode_origin ? ['--mode-origin', args.mode_origin] : []),
+    ...(args.mode_reason ? ['--mode-reason', args.mode_reason] : []),
+  ]
+  switch (args.operation) {
+    case 'check-env':
+      return ['check-env']
+    case 'inspect-source':
+      return ['inspect-source', ...target,
+        ...(args.preview_chars === undefined || args.preview_chars === null
+          ? [] : ['--preview-chars', String(args.preview_chars)])]
+    case 'convert':
+      return ['convert', ...target, ...modeFlags,
+        ...(args.material_name ? ['--material-name', args.material_name] : [])]
+    case 'split':
+      return ['split', ...target,
+        ...(args.subject ? ['--subject', args.subject] : []), ...modeFlags,
+        ...(args.strategy ? ['--strategy', args.strategy] : []),
+        ...(args.no_clean ? ['--no-clean'] : [])]
+    case 'precheck-split':
+      return ['precheck-split', ...target]
+    case 'status':
+      return ['status', ...target]
+    case 'execution-policy':
+      return ['execution-policy', ...target,
+        ...(args.execution_mode ? ['--mode', args.execution_mode] : []),
+        ...(args.origin ? ['--origin', args.origin] : [])]
+    default:
+      // schema 的 enum 已限制取值；这里只做防御性兜底，交给 CLI 报非法子命令
+      return [args.operation]
+  }
+}
+
+function registerStructuredTools(ctx, cliTool) {
+  const register = (name, description, parameters, buildArgs) => ctx.tools.register({
+    name,
+    description,
+    parameters,
+    output: cliTool.output,
+    timeoutMs: cliTool.timeoutMs,
+    isConcurrencySafe: cliTool.isConcurrencySafe,
+    async execute(args, exec) {
+      return cliTool.execute({ args: ['--json', ...buildArgs(args)] }, exec)
+    },
+  })
+
+  register('jiaodui_unit_locate', '按task/unit身份查询源文短语位置和安全范围。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id', 'phrase'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' }, phrase: { type: 'string' },
+    },
+  }, args => ['unit-locate', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--phrase', args.phrase])
+
+  register('jiaodui_unit_read', '按task/unit身份分页读取当前单元源文和图片读取清单。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' },
+      start_line: { type: 'integer', minimum: 1, default: 1 },
+      max_lines: { type: 'integer', minimum: 1, maximum: 2000, default: 2000 },
+    },
+  }, args => ['unit-read', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--start-line', String(args.start_line ?? 1), '--max-lines', String(args.max_lines ?? 2000)])
+
+  register('jiaodui_unit_snapshot', '读取单元源文、轮次、报告和数据摘要组成的提交版本。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id'],
+    properties: { task_id: { type: 'string' }, unit_id: { type: 'string' } },
+  }, args => ['unit-snapshot', '--task-id', args.task_id, '--unit-id', args.unit_id])
+
+  register('jiaodui_unit_submit', '校验结构化修改建议并生成、登记完整报告。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' },
+      proposal: PROPOSAL_SCHEMA, expected_snapshot_sha256: { type: 'string' },
+      preview: { type: 'boolean', default: false },
+    },
+  }, args => ['unit-submit', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--proposal-json', JSON.stringify(args.proposal), '--expected-snapshot-sha256',
+    args.expected_snapshot_sha256, ...(args.preview ? ['--preview'] : [])])
+
+  register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定，attempt_id 作幂等键（重放不再扣费）。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id', 'attempt_id', 'fingerprint'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' },
+      error_code: {
+        type: 'string',
+        description: '失败的工具/宿主错误码（如 usage / not_found / calc_failed / verify_failed / images.missing / host-timeout）。类别由它决定；未分类码会被拒绝。',
+      },
+      category: {
+        type: 'string',
+        enum: ['call_correction', 'calc_representation', 'report_repair',
+          'targeted_review', 'technical_redispatch', 'image_schema_fix'],
+        description: '只用于父代理判断类的 targeted_review；错误驱动的恢复必须给 error_code，给了 category 就必须与映射一致。',
+      },
+      attempt_id: {
+        type: 'string', minLength: 1, maxLength: 200,
+        description: '本次尝试的幂等键：同 attempt 重放不再扣费；换指纹或换类别即 attempt-id-conflict。须与该单元 unit-event 的 attempt_id 一致。',
+      },
+      expected_run_id: {
+        type: 'string',
+        description: 'CAS 防护：与当前轮次不一致即 run-changed（可选）。',
+      },
+      fingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+    },
+  }, args => ['unit-recovery', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--attempt-id', args.attempt_id,
+    ...(args.error_code ? ['--error-code', args.error_code] : []),
+    ...(args.category ? ['--category', args.category] : []),
+    ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : []),
+    '--fingerprint', args.fingerprint])
+
+  register('jiaodui_unit_progress', '只读汇总单元心跳：阶段 / attempt / 最后事件时间 / 在途与超时判定。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id'],
+    properties: {
+      task_id: { type: 'string' },
+      unit_id: { type: 'string', description: '省略时汇总该材料当前轮次的全部单元。' },
+      stale_after_seconds: {
+        type: 'integer', minimum: 0, default: 900,
+        description: '最后一次事件距今超过该秒数且仍在途 → stale=true。',
+      },
+    },
+  }, args => ['unit-progress', '--task-id', args.task_id,
+    ...(args.unit_id ? ['--unit-id', args.unit_id] : []),
+    '--stale-after-seconds', String(args.stale_after_seconds ?? 900)])
+
+  register('jiaodui_dispatch_plan', '按滑动窗口给出下一批可派发单元；只读，不派发、不占预算。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id'],
+    properties: {
+      task_id: { type: 'string' },
+      window: { type: 'integer', minimum: 1, default: 8, description: '滑动窗口上限，默认 8。' },
+    },
+  }, args => ['dispatch-plan', '--task-id', args.task_id,
+    '--window', String(args.window ?? 8)])
+
+  register('jiaodui_unit_event', '记录单元阶段心跳及取消发起者/原因。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id', 'phase', 'attempt_id'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' }, attempt_id: { type: 'string' },
+      agent_id: { type: 'string' },
+      phase: { type: 'string', enum: ['prepared', 'read', 'images', 'calculated', 'proposed',
+        'self_checked', 'verified', 'registered', 'parent_reviewed', 'deliverable'] },
+      cancel_initiator: { type: 'string', enum: ['user', 'parent', 'host'] },
+      cancel_reason: { type: 'string', enum: ['user_cancel', 'technical_timeout', 'superseded'] },
+      expected_run_id: {
+        type: 'string',
+        description: 'CAS 防护：与当前轮次不一致即 run-changed，避免迟到事件写进新轮次（可选）。',
+      },
+    },
+  }, args => ['unit-event', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--phase', args.phase, '--attempt-id', args.attempt_id,
+    ...(args.agent_id ? ['--agent-id', args.agent_id] : []),
+    ...(args.cancel_initiator ? ['--cancel-initiator', args.cancel_initiator] : []),
+    ...(args.cancel_reason ? ['--cancel-reason', args.cancel_reason] : []),
+    ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : [])])
+
+  register('jiaodui_unit_review', '父代理按当前snapshot接受或退回结构化建议。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id', 'expected_snapshot_sha256', 'decision', 'reviewer_id'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' },
+      expected_snapshot_sha256: { type: 'string' },
+      decision: { type: 'string', enum: ['accepted', 'needs_revision'] },
+      reviewer_id: { type: 'string' }, issue: { type: 'string' },
+    },
+  }, args => ['unit-review', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--expected-snapshot-sha256', args.expected_snapshot_sha256, '--decision', args.decision,
+    '--reviewer-id', args.reviewer_id, ...(args.issue ? ['--issue', args.issue] : [])])
+
+  register('jiaodui_task_prepare', '准备阶段：环境预检 / 源文结构 / 转换 / 拆分 / 拆分预检 / 单元状态 / 执行模式登记。', {
+    type: 'object', additionalProperties: false,
+    required: ['operation'],
+    properties: {
+      operation: {
+        type: 'string', enum: TASK_PREPARE_OPERATIONS,
+        description: '要执行的准备步骤；未用到的参数会被忽略，缺失的参数由 CLI 报用法错误。',
+      },
+      path: {
+        type: 'string',
+        description: '位置参数：inspect-source/convert 传源文件；split 传 raw md；precheck-split/status 传单元根目录（units/<材料名>）；execution-policy 传材料目录。',
+      },
+      preview_chars: {
+        type: 'integer', minimum: 0, maximum: 2000,
+        description: '仅 inspect-source：有限正文节选字符数（默认不返回正文）。',
+      },
+      material_name: { type: 'string', description: '仅 convert：材料目录名。' },
+      subject: { type: 'string', enum: ['高中物理'], description: '仅 split：学科。' },
+      mode: { type: 'string', enum: ['lecture', 'exam'], description: '仅 convert/split：材料类型。' },
+      mode_origin: {
+        type: 'string', enum: ['user', 'structure', 'preview', 'confirmed'],
+        description: '仅 convert/split：材料类型判断来源。',
+      },
+      mode_reason: { type: 'string', description: '仅 convert/split：类型判断的简短依据（不超过500字符）。' },
+      strategy: { type: 'string', enum: ['rule', 'manual', 'none'], description: '仅 split：拆分策略，默认 rule。' },
+      no_clean: { type: 'boolean', description: '仅 split：跳过讲义导入清理（六步全不执行）。' },
+      execution_mode: {
+        type: 'string', enum: ['automatic', 'interactive'],
+        description: '仅 execution-policy：本轮执行模式。',
+      },
+      origin: { type: 'string', enum: ['user', 'confirmed'], description: '仅 execution-policy：模式来源。' },
+    },
+  }, taskPrepareArgs)
+
+  ctx.tools.register({
+    name: 'jiaodui_delivery',
+    description: [
+      '交付阶段：拼接整卷报告（build-report）或生成 Word 批注版（build-docx）。',
+      'stdout 是 CLI 的 --json 结果，含 ok / complete 与结构计数（marker_count / anchor_count /',
+      'formula_fallback_count / missing_count / over_count / heading_comment_count）；',
+      'json 字段是同一份结果的解析副本。只有 complete=true 且 ok=true 才可声称整卷交付完成。',
+    ].join(' '),
+    parameters: {
+      type: 'object', additionalProperties: false,
+      required: ['operation', 'paper_dir'],
+      properties: {
+        operation: { type: 'string', enum: DELIVERY_OPERATIONS },
+        paper_dir: { type: 'string', description: '拆分返回的单元根目录 units/<材料名>。' },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object', additionalProperties: false,
+        required: ['exitCode', 'stdout', 'stderr', 'truncated'],
+        properties: {
+          ...cliTool.output.schema.properties,
+          json: {
+            type: 'object', additionalProperties: true,
+            description: 'stdout 的 JSON 解析副本；stdout 不是 JSON 对象时缺省。',
+          },
+        },
+      },
+      render: cliTool.output.render,
+    },
+    timeoutMs: cliTool.timeoutMs,
+    isConcurrencySafe: cliTool.isConcurrencySafe,
+    async execute(args, exec) {
+      const value = await cliTool.execute(
+        { args: ['--json', args.operation, args.paper_dir] }, exec)
+      let parsed
+      try {
+        parsed = JSON.parse(value.stdout)
+      } catch {
+        parsed = undefined
+      }
+      // 只做协议转换：解析失败不改变工具结果，也不抛错
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? { ...value, json: parsed }
+        : value
+    },
+  })
+
+  for (const [operation, schema] of Object.entries(CALC_SCHEMAS)) {
+    const parameters = structuredClone(schema.parameters)
+    parameters.properties.subject = {
+      type: 'string', enum: ['高中物理'], description: '可选学科，用于校验学科工具白名单并注入物理量表。',
+    }
+    parameters.properties.task_id = { type: 'string', description: '记录calc证据时的材料task_id。' }
+    parameters.properties.unit_id = { type: 'string', description: '记录calc证据时的单元unit_id。' }
+    register(`jiaodui_calc_${operation}`, schema.description, parameters, args => {
+      if (Boolean(args.task_id) !== Boolean(args.unit_id)) throw new Error('task_id与unit_id必须同时提供')
+      const { subject, task_id, unit_id, ...values } = args
+      const params = Object.entries(values).flatMap(([key, value]) => ['--param', `${key}=${JSON.stringify(value)}`])
+      return ['calc', operation, ...(subject ? ['--subject', subject] : []),
+        ...(task_id ? ['--task-id', task_id, '--unit-id', unit_id] : []), ...params]
+    })
+  }
+}
+
 /**
  * 注册 jiaodui 工具。
  * @param ctx - 携带 tools / subprocess 服务的上下文。
@@ -71,7 +367,7 @@ export function apply(ctx, config = {}) {
   const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : 180000
   const maxOutputBytes = Number.isFinite(config.maxOutputBytes) && config.maxOutputBytes > 0 ? config.maxOutputBytes : 65536
 
-  ctx.tools.register({
+  const cliTool = {
     name: 'jiaodui',
     description: DESCRIPTION,
     parameters: {
@@ -188,5 +484,7 @@ export function apply(ctx, config = {}) {
         }
       }
     },
-  })
+  }
+  ctx.tools.register(cliTool)
+  registerStructuredTools(ctx, cliTool)
 }

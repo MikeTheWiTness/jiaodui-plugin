@@ -1,0 +1,180 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from jiaodui import material
+from jiaodui.errors import BusinessError
+from jiaodui.report import build_report
+from jiaodui.review import record_parent_review, review_current
+from jiaodui.source_index import query_locations, source_digest
+from jiaodui.unit_delivery import commit_unit_submission, read_unit_snapshot
+from jiaodui.workflow import convert_material, split_material
+
+
+def _prepared(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source = tmp_path / "lesson.md"
+    source.write_text("前言木板。第二段木板。末尾木板。", encoding="utf-8")
+    converted = convert_material(source, material_name="复核测试", mode="lecture")
+    split = split_material(converted.raw_md, subject="高中物理", mode="lecture", strategy="none")
+    root = workspace / "校对" / "复核测试"
+    material.set_execution_policy(root, "automatic")
+    data = material.load(root)
+    unit = Path(split.unit_dirs[0])
+    unit_id = data["unit_ids"][unit.name]
+    source_path = unit / f"{unit.name}.md"
+    text = source_path.read_bytes().decode("utf-8")
+    location = query_locations(text, source_digest(text), "木板")[-1]
+    proposal = {
+        "schema_version": 2, "task_id": data["task_id"], "unit_id": unit_id,
+        "run_id": data["current_run_id"], "source_sha256": source_digest(text),
+        "body_sha256": source_digest(text), "proposal_revision": 1,
+        "summary": "一般问题",
+        "corrections": [{"id": "c1", "location_id": location["location_id"],
+                         "expected_original": "木板", "replacement": "木块",
+                         "reason": "对象名称不一致。", "category": "term",
+                         "severity": "一般问题", "evidence_ids": ["e1"]}],
+        "evidence": {"assumptions": [{"id": "e1", "text": "对象定义为木块。", "source_locations": []}],
+                     "symbols": [], "images": {"status": "not_applicable", "reason": "无图片"},
+                     "calculations": {"status": "not_applicable", "reason": "无数值核验"}},
+        "self_check": {"status": "passed", "checks": ["real_issue", "replacement_semantics",
+                         "related_coverage", "scope_and_uncertainty", "severity"], "unresolved": []},
+    }
+    snapshot = read_unit_snapshot(data["task_id"], unit_id)
+    return root, unit, data, unit_id, proposal, snapshot
+
+
+def test_structured_delivery_requires_parent_review_for_exact_hashes(tmp_path, monkeypatch):
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+    manifest = material.load(root)
+    assert not review_current(root, manifest, unit.name)
+    report = build_report(root / "units" / root.name)
+    assert report.unreviewed and not report.complete
+    assert not report.failed and report.included
+    assert "父代理复核" in report.unreviewed[0]["reason"]
+
+    current = read_unit_snapshot(task_id, unit_id)
+    result = record_parent_review(task_id, unit_id,
+                                  expected_snapshot_sha256=current["snapshot_sha256"],
+                                  decision="accepted", reviewer_id="parent-1")
+    assert result["current"] is True
+    manifest = material.load(root)
+    assert review_current(root, manifest, unit.name)
+    accepted = build_report(root / "units" / root.name)
+    assert accepted.complete and not accepted.failed
+
+
+def test_report_or_input_hash_change_invalidates_parent_review(tmp_path, monkeypatch):
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+    current = read_unit_snapshot(task_id, unit_id)
+    record_parent_review(task_id, unit_id,
+                         expected_snapshot_sha256=current["snapshot_sha256"],
+                         decision="accepted", reviewer_id="parent-2")
+    assert review_current(root, material.load(root), unit.name)
+
+    report_path = unit / "_校对报告.md"
+    report_path.write_text(report_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    assert not review_current(root, material.load(root), unit.name)
+    with pytest.raises(BusinessError) as error:
+        record_parent_review(task_id, unit_id,
+                             expected_snapshot_sha256=current["snapshot_sha256"],
+                             decision="accepted", reviewer_id="parent-2")
+    assert error.value.code == "review-stale"
+
+
+def test_latest_rejection_revokes_acceptance_and_old_parse_cannot_bypass(tmp_path, monkeypatch):
+    from jiaodui.workflow import parse_unit
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+    current = read_unit_snapshot(task_id, unit_id)
+    record_parent_review(task_id, unit_id, expected_snapshot_sha256=current["snapshot_sha256"],
+                         decision="accepted", reviewer_id="parent")
+    record_parent_review(task_id, unit_id, expected_snapshot_sha256=current["snapshot_sha256"],
+                         decision="needs_revision", reviewer_id="parent", issue="关联用语需复查")
+    assert not review_current(root, material.load(root), unit.name)
+    before = (unit / "_校对数据.json").read_bytes()
+    with pytest.raises(BusinessError) as error:
+        parse_unit(unit)
+    assert error.value.code == "parse-v2-requires-submit"
+    assert (unit / "_校对数据.json").read_bytes() == before
+    assert not build_report(unit.parent).complete
+
+
+def test_parent_review_cli_accepts_current_registered_version(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    import json
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+    current = read_unit_snapshot(task_id, unit_id)
+    result = subprocess.run([sys.executable, "-m", "jiaodui", "unit-review", "--task-id", task_id,
+                             "--unit-id", unit_id, "--expected-snapshot-sha256", current["snapshot_sha256"],
+                             "--decision", "accepted", "--reviewer-id", "parent", "--json"],
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["current"] is True
+
+
+def test_successful_calc_cli_produces_a_bound_call_id(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    import json
+    from jiaodui.report_suggestions import render_suggestions
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    result = subprocess.run([sys.executable, "-m", "jiaodui", "calc", "evaluate", "--task-id", data["task_id"],
+                             "--unit-id", unit_id, "--param", "expression=1+2", "--json"],
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["call_id"]
+    proposal["evidence"]["calculations"] = [{"id": "calc1", "call_id": output["call_id"],
+                                             "expression": "1+2", "result": 3}]
+    current_data = material.load(root)
+    source = (unit / f"{unit.name}.md").read_bytes().decode("utf-8")
+    candidate = render_suggestions(source, proposal, expected_task_id=data["task_id"],
+                                   expected_unit_id=unit_id, expected_run_id=data["current_run_id"],
+                                   calc_calls=current_data["runs"][-1]["calc_calls"])
+    assert "核验说明：" in candidate.text
+
+
+def test_word_rejects_unreviewed_then_accepts_current_review(tmp_path, monkeypatch):
+    from jiaodui.docx_report import build_docx, find_pandoc
+    import zipfile
+    if not find_pandoc():
+        pytest.skip("pandoc不可用")
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+    rejected = build_docx(str(unit.parent))
+    assert not rejected.ok and rejected.excluded_units
+    current = read_unit_snapshot(task_id, unit_id)
+    record_parent_review(task_id, unit_id, expected_snapshot_sha256=current["snapshot_sha256"],
+                         decision="accepted", reviewer_id="parent")
+    accepted = build_docx(str(unit.parent))
+    assert accepted.ok, accepted.warnings
+    assert accepted.marker_count == 1
+    assert accepted.anchor_count + accepted.formula_fallback_count == 1
+    with zipfile.ZipFile(accepted.out_path) as archive:
+        assert "对象名称不一致" in archive.read("word/comments.xml").decode("utf-8")
+
+
+def test_parent_review_rejects_empty_issue_and_requires_decision(tmp_path, monkeypatch):
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+    current = read_unit_snapshot(task_id, unit_id)
+    with pytest.raises(BusinessError) as issue:
+        record_parent_review(task_id, unit_id,
+                             expected_snapshot_sha256=current["snapshot_sha256"],
+                             decision="needs_revision", reviewer_id="parent", issue=" ")
+    assert issue.value.code == "review-issue-required"

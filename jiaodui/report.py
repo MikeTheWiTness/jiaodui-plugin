@@ -14,6 +14,8 @@ from .verify import verify_unit
 @dataclass
 class BuildReportResult:
     out_path: str | None
+    complete: bool = False
+    unreviewed: list[dict] = field(default_factory=list)
     included: list[dict] = field(default_factory=list)
     failed: list[dict] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
@@ -22,8 +24,10 @@ class BuildReportResult:
     def to_dict(self) -> dict:
         return {
             "out_path": self.out_path,
+            # ok 只表示「诊断文件已生成」，与 complete 解耦（契约字段，来自 main）
             "ok": self.out_path is not None,
-            "complete": self.out_path is not None and not self.failed,
+            "complete": self.complete,
+            "unreviewed": self.unreviewed,
             "included": self.included,
             "failed": self.failed,
             "skipped": self.skipped,
@@ -84,6 +88,10 @@ def build_report(paper_dir: str | Path, out_path: str | Path | None = None,
         # 必须用完整闸门（含图片资源），否则 verify-report 判不合格的报告
         # 会被下游当成合格正文拼进整卷。
         vr = verify_unit(d)
+        review_missing = False
+        if body.startswith("<!-- jiaodui-report-v2 -->"):
+            from .review import review_current
+            review_missing = data is None or not review_current(root, data, d.name)
         if not vr.ok or (data is not None and not material.registered(root, data, d)):
             reason = "；".join(i.message for i in vr.errors[:3]) or "本轮未完成：尚未登记或摘要已改变"
             result.failed.append({"unit": name, "reason": reason})
@@ -92,6 +100,8 @@ def build_report(paper_dir: str | Path, out_path: str | Path | None = None,
             sections.append(f"> ⚠️ 该单元报告未通过交付校验，正文未拼入。原因：{reason}")
             sections.append("")
             continue
+        if review_missing:
+            result.unreviewed.append({"unit": name, "reason": "结构化建议尚无当前版本的父代理复核"})
         body = body.strip()
         result.included.append({"unit": name, "markers": vr.marker_count})
         sections.append(f"## {name}")
@@ -99,6 +109,8 @@ def build_report(paper_dir: str | Path, out_path: str | Path | None = None,
         sections.append(body)
         sections.append("")
 
+    result.complete = (not result.failed and not result.unreviewed
+                       and len(result.included) + len(result.skipped) == len(dirs))
     out_path = ensure_inside(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")

@@ -11,11 +11,10 @@
     packages/dsh-jiaodui/
       package.json           dsh.bundle.patch = ./cordis.patch.yml；同时是可挂载的插件入口
       cordis.patch.yml       自带组合包：插入 preset-jiaodui（含 skill 挂载 + 原生工具行）
-      tools/index.js         宿主半侧插件：注册 jiaodui 原生工具（argv 透传 CLI）
+      tools/index.js         宿主适配：注册校对及强类型工具
+      tools/calc-schemas.json 由计算核心元数据导出的operation schema
+      tools/proposal-schema.json 结构化建议schema v2
       skills/jiaodui/        随包 skill（仓库 skills/jiaodui 的副本，测试守一致性）
-        SKILL.md            入口：流程 + 硬约束，必须 ≤ 8192 码点（宿主修剪阈值，有测试锁）
-        references/         按需参考：operation-manual（命令与操作细节）、report-contract、
-                            failure-modes、subject-matrix、material-types、vision-probe、subjects/
         assets/             固定读图探针（SVG 源、透明 PNG、预合成白底 PNG）
       locale/{zh,en}.json    插件管理页的标题与描述
       icon.svg               插件卡片图标
@@ -23,15 +22,12 @@
 
 ## 它做了什么
 
-- **agent preset「校对」（id `jiaodui`）**：显式维护完整 plugins 列表；DSH preset 不提供 standard 继承。工具呈现为 `native`，保留 bash / filesystem / skill / spawn 子代理 / todo / present / compaction 与旧 jiaodui CLI；显式关闭 web、goal、plan、fork。
-  - `tool-fs` 保留 `read`、`read_image`（宿主 attachments 可用时）与旧报告所需 `write` / `edit`；不挂载新的报告提交工具。
-  - `skill-filesystem` 只从本包 `skills/` custom 目录加载，不读取默认 skill roots。
-  - spawn 子代理限制 `maxDepth: 1`，工具目录 allowlist 为 `skill/read/read_image/write/edit/jiaodui`。宿主 `toolFilter` 不能据此视作严格权限隔离；待第 7 章依赖/子权限实验后再收紧。
+- **实验分支preset「校对」（id `jiaodui`）**：保留结构化单元读取/定位/提交、真实read_image、单层子agent和交付能力，关闭shell、web、goal、plan与fork。父侧暂保留聚合fs，子侧通过toolFilter只允许读取/计算/提交，不暴露write/edit、argv退路或父复核。
+  - `skill-filesystem` 的 `customSkillDirs` 指向本包 `skills/`，用于发现随包 jiaodui skill。
   - `./tools/index.js` 注册原生工具 `jiaodui`。
-  工具直接接收 JSON 参数，不要求生成 `run_code` 程序。子代理只开放单层 spawn 与并行派发，PTC workflow 引擎保持禁用。
-- **原生工具 `jiaodui`**：参数 `args: string[]` 原样透传给 CLI（如
-  `["verify-report", "--unit", "<单元目录>"]`），返回 `exitCode / stdout / stderr / truncated`。
-  它走宿主平面的 `ctx.subprocess`（子进程服务会清洗环境变量），不是 bash。
+  实际宿主源码已确认支持 `includeDefaultRoots:false`、子代理 `toolFilter.allow` 和 `maxDepth:1`；本实验preset已配置这些字段。静态结构检查不替代新会话父子实际catalog验收，也不将开发会话CLI回放当作安装验证。
+- **原生工具 `jiaodui`**：旧命令 `args: string[]` 透传入口继续保留，作为兼容CLI退路。
+- **结构化工具**：按task/unit ID提供位置查询、版本快照、建议提交、恢复预算和阶段/取消事件；14个计算operation使用独立JSON Schema。calc schema从Python核心 `OPERATIONS` 元数据生成，打包测试核对副本漂移。
 
 ## 安装
 
@@ -65,7 +61,7 @@ Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要
 
 1. 安装后确认 bundle 在「插件」页列出、行 `preset-jiaodui` 激活。
 2. **新开**一个会话，在 agent preset 里选「校对」（或在「设置 → 通用」把它设为之后会话的默认）。
-3. 验证模式与 skill：重新加载组合包后新开「校对」会话，工具目录应包含 `read`、`read_image`（attachments 已挂载时）、`write`、`edit`、`jiaodui`、`subagent` 等；不应有 web/goal/plan/fork。子代理工具目录按 allowlist 配置，但这不是严格权限隔离证明。会话的 skill 目录里应出现 `jiaodui`；加载它应返回完整 SKILL.md 正文（≤8192 码点）。若正文里出现 `[... tool result middle pruned ...]`，说明宿主压缩时按工具结果预算裁掉了入口中段：重新加载该 skill，或用 `read` 按 offset/limit 分页读取 `skills/jiaodui/SKILL.md`。已有会话不作为模式切换成功的证明；若新会话仍仅暴露 `run_code`，先重启 DSH 以重新加载 preset。
+3. 验证新会话工具目录包含 `jiaodui`、`jiaodui_unit_read`、`jiaodui_unit_locate`、`jiaodui_unit_snapshot`、`jiaodui_unit_submit`、`jiaodui_calc_evaluate` 和 `subagent`；随包 `jiaodui` skill可加载。当前preset不挂载通用shell/fs bundle工具，但宿主可能额外注入默认 skill 或其他工具；须记录实际目录，不能以静态配置声称强隔离。
 4. 验证工具：让 agent 调用 `jiaodui` 工具，例如 `args: ["check-env"]`，应看到退出码与输出。
 5. 视觉门槛使用随包 `skills/jiaodui/assets/vision-probe.png`，不依赖待校对文件有没有图片，不需要现场绘图。按 skill 的 `references/vision-probe.md` 派发不带答案的观察任务；DSH `read_image` 使用 `file_path`，应先核对工具 schema。同一会话和模型/工具配置通过一次即可复用。
 
@@ -83,7 +79,7 @@ Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要
 若包被**复制**进 profile（而非 `file:` 链接回仓库），该路径不存在，就回退 `jiaodui`，
 此时须安装 wheel 并让 PATH 包含 pipx bin，或显式给 `command`。
 
-每次调用从会话读取工作区 W，并同时设置 cwd 与 `JIAODUI_WORK_ROOT`；会话缺少工作区时拒绝执行。产物默认位于 `W/校对/<材料名>/`，不会随源文件位置或宿主进程 cwd 改变。标准输出和错误在进程结束后收集，超时仍保留已收集诊断；`exec.signal` 中止可能来自用户、父代理或宿主，插件以中性文案抛出 `AbortError`，不包装为普通技术失败或触发技术重派。取消来源须由上层编排显式调用 `unit-event` 记录；插件不会从 signal 推断来源或自动持久化事件。普通调用只传 `args`（及必要的 cwd 兼容字段），不要主动填写权限升级字段。
+每次调用从会话读取工作区 W，并同时设置 cwd 与 `JIAODUI_WORK_ROOT`；会话缺少工作区时拒绝执行。产物默认位于 `W/校对/<材料名>/`，不会随源文件位置或宿主进程 cwd 改变。标准输出和错误在进程结束后收集，超时仍保留已收集诊断；外部用户取消传播取消语义，不包装为普通技术失败，也不触发主 agent 重派。普通调用只传 `args`（及必要的 cwd 兼容字段），不要主动填写权限升级字段。
 
 ## 讲义与试卷
 
@@ -93,9 +89,8 @@ skill 优先采用用户指定类型；未指定时调用 `inspect-source` 读�
 
 ## 已知限制
 
-- preset 的公共 plugins 列表以内置 `standard` preset 为参考：DSH 的 preset 不提供继承，
-  公共能力行变更时需要同步。这是「薄适配」当前最脆的一处。
-- 只声明高中物理（skill 学科矩阵中其余 6 科尚未落地）。未落地学科不得回退套用物理流程。
-- Desktop profile 已安装本 bundle，`node_modules/dsh-jiaodui` 指向仓库 `packages/dsh-jiaodui`；新会话 tool catalog/profile 重载及实际读图、写报告仍需宿主验收。
-- 已通过打包契约、原生工具行为测试及仓库外 wheel 的确定性链路验证；自动测试不替代 DSH 实际会话验收。
+- preset 必须自带完整 plugins 列表，当前按校对流程显式维护。skill默认发现和子代理工具范围依赖宿主，仓内静态测试不能替代真实会话验收。
+- 只声明高中物理（skill 的学科矩阵里其余 6 科仍为 M5 待落地）。未落地学科不得回退套用物理流程。
+- 已通过打包契约、原生工具行为测试及仓库外 wheel 的确定性链路验证；
+  DSH 实际会话中的子 agent 读图、落盘和整卷校对质量仍需宿主验收，自动测试不替代它。
 - 原生工具**不是** bash 沙箱的替代：它只调用受信任的本地 CLI，不应对它传任意 shell。

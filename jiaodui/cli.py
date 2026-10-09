@@ -105,6 +105,13 @@ def _split(args: argparse.Namespace) -> int:
                             strategy=args.strategy)
     payload = {"ok": True, "units": result.units, "unit_dirs": result.unit_dirs,
                "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
+    if result.unit_dirs:
+        from .material import find_material, load
+        root = find_material(result.unit_dirs[0])
+        if root is not None:
+            identity = load(root)
+            payload["task_id"] = identity.get("task_id")
+            payload["unit_ids"] = identity.get("unit_ids", {})
     if args.json:
         _json_out(payload)
     else:
@@ -129,6 +136,13 @@ def cmd_slice(args: argparse.Namespace) -> int:
         return ExitCode.OK
     payload = {"ok": True, "unit_dirs": result.unit_dirs, "units": result.units,
                "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
+    if result.unit_dirs:
+        from .material import find_material, load
+        root = find_material(result.unit_dirs[0])
+        if root is not None:
+            identity = load(root)
+            payload["task_id"] = identity.get("task_id")
+            payload["unit_ids"] = identity.get("unit_ids", {})
     if args.json:
         _json_out(payload)
     else:
@@ -165,6 +179,129 @@ def cmd_status(args: argparse.Namespace) -> int:
         for warning in result.warnings:
             log(f" ⚠️ {warning}")
         print(json.dumps(result.counts(), ensure_ascii=False))
+    return ExitCode.OK
+
+
+def cmd_execution_policy(args: argparse.Namespace) -> int:
+    from .material import set_execution_policy
+    from .workdir import input_path
+
+    root = input_path(args.material_dir)
+    policy = set_execution_policy(root, args.mode, args.origin)
+    payload = {"ok": True, "material_dir": str(root), "execution_policy": policy}
+    if args.json:
+        _json_out(payload)
+    else:
+        print(json.dumps(payload, ensure_ascii=False))
+    return ExitCode.OK
+
+
+def cmd_unit_locate(args: argparse.Namespace) -> int:
+    from .material import find_unit_by_id, sha256
+    from .paths import find_source_md
+    from .source_index import LocationError, query_locations
+
+    root, unit = find_unit_by_id(args.task_id, args.unit_id)
+    source = find_source_md(unit)
+    if source is None or not source.is_file():
+        raise NotFoundError("找不到登记单元的源文", details={"unit_id": args.unit_id})
+    text = source.read_bytes().decode("utf-8")
+    digest = sha256(source)
+    try:
+        locations = query_locations(text, digest, args.phrase)
+    except LocationError as exc:
+        raise BusinessError(str(exc), code=exc.code) from exc
+    payload = {"ok": True, "task_id": args.task_id, "unit_id": args.unit_id,
+               "source_sha256": digest, "body_sha256": digest, "index_version": 1,
+               "material_dir": str(root), "unit": unit.name, "locations": locations}
+    _json_out(payload)
+    return ExitCode.OK
+
+
+def cmd_unit_read(args: argparse.Namespace) -> int:
+    from .unit_reader import read_unit_source
+
+    _json_out(read_unit_source(args.task_id, args.unit_id,
+                               start_line=args.start_line, max_lines=args.max_lines))
+    return ExitCode.OK
+
+
+def cmd_unit_snapshot(args: argparse.Namespace) -> int:
+    from .unit_delivery import read_unit_snapshot
+
+    _json_out({"ok": True, "snapshot": read_unit_snapshot(args.task_id, args.unit_id)})
+    return ExitCode.OK
+
+
+def cmd_unit_submit(args: argparse.Namespace) -> int:
+    from .unit_delivery import commit_unit_submission, preview_unit_submission
+
+    try:
+        proposal = json.loads(args.proposal_json)
+    except json.JSONDecodeError as exc:
+        raise BusinessError("proposal-json不是有效JSON", code="proposal-json-invalid") from exc
+    if args.preview:
+        payload = preview_unit_submission(args.task_id, args.unit_id, proposal,
+                                          args.expected_snapshot_sha256)
+    else:
+        payload = commit_unit_submission(args.task_id, args.unit_id, proposal,
+                                         args.expected_snapshot_sha256)
+    _json_out(payload)
+    return ExitCode.OK
+
+
+def cmd_unit_recovery(args: argparse.Namespace) -> int:
+    from .material import record_recovery_attempt
+
+    _json_out(record_recovery_attempt(args.task_id, args.unit_id, args.category,
+                                      args.fingerprint, attempt_id=args.attempt_id,
+                                      error_code=args.error_code,
+                                      expected_run_id=args.expected_run_id))
+    return ExitCode.OK
+
+
+def cmd_unit_progress(args: argparse.Namespace) -> int:
+    from .material import unit_progress
+
+    _json_out(unit_progress(args.task_id, unit_id=args.unit_id,
+                            stale_after_seconds=args.stale_after_seconds))
+    return ExitCode.OK
+
+
+def cmd_dispatch_plan(args: argparse.Namespace) -> int:
+    from .material import dispatch_plan
+
+    _json_out(dispatch_plan(args.task_id, window=args.window))
+    return ExitCode.OK
+
+
+def cmd_unit_event(args: argparse.Namespace) -> int:
+    from .material import record_unit_event
+
+    payload = record_unit_event(args.task_id, args.unit_id, phase=args.phase,
+                                attempt_id=args.attempt_id, agent_id=args.agent_id,
+                                cancel_initiator=args.cancel_initiator,
+                                cancel_reason=args.cancel_reason,
+                                expected_run_id=args.expected_run_id)
+    _json_out({"ok": True, "event": payload})
+    return ExitCode.OK
+
+
+def cmd_unit_schema(args: argparse.Namespace) -> int:
+    from .report_suggestions import proposal_json_schema
+
+    _json_out({"schema": proposal_json_schema()})
+    return ExitCode.OK
+
+
+def cmd_unit_review(args: argparse.Namespace) -> int:
+    from .review import record_parent_review
+
+    payload = record_parent_review(args.task_id, args.unit_id,
+                                   expected_snapshot_sha256=args.expected_snapshot_sha256,
+                                   decision=args.decision, reviewer_id=args.reviewer_id,
+                                   issue=args.issue or "")
+    _json_out(payload)
     return ExitCode.OK
 
 
@@ -260,6 +397,19 @@ CALC_ALIASES = {
 CALC_REQUIRED_OPS = ["evaluate", "solve", "formula", "dimension", "vector", "circle", "equality"]
 
 
+def cmd_calc_schema(args: argparse.Namespace) -> int:
+    from .calc.schema import all_json_schemas, json_schema_for
+    from .calc import OPERATIONS
+
+    if args.operation:
+        payload = {"operation": args.operation, "description": OPERATIONS[args.operation]["summary"],
+                   "parameters": json_schema_for(args.operation)}
+    else:
+        payload = {"operations": all_json_schemas()}
+    _json_out(payload)
+    return ExitCode.OK
+
+
 def cmd_calc(args: argparse.Namespace) -> int:
     from .calc import OPERATIONS, run_operation
 
@@ -277,9 +427,17 @@ def cmd_calc(args: argparse.Namespace) -> int:
         if internal == "dimensional":
             params.setdefault("quantities", config.get("quantities") or {})
     result = run_operation(internal, **params)
+    call_id = None
+    if bool(getattr(args, "task_id", None)) != bool(getattr(args, "unit_id", None)):
+        raise UsageError("calc记录证据时必须同时提供--task-id和--unit-id")
+    if getattr(args, "task_id", None):
+        from .material import record_calc_call
+        call_id = record_calc_call(args.task_id, args.unit_id, internal, params, result)
     if not result.get("code") or not args.show_code:
         result = {k: v for k, v in result.items() if k != "code"}
     payload = {"ok": bool(result.get("success")), "op": op, "result": result}
+    if call_id is not None:
+        payload["call_id"] = call_id
     if args.json:
         _json_out(payload)
     else:
@@ -310,6 +468,7 @@ def cmd_build_report(args: argparse.Namespace) -> int:
     result = build_report(args.paper_dir, out_path=args.out, legacy_layout=args.legacy_layout)
     payload = result.to_dict()
     payload["ok"] = result.out_path is not None
+    payload["deliverable"] = result.complete
     if args.json:
         _json_out(payload)
     else:
@@ -318,34 +477,6 @@ def cmd_build_report(args: argparse.Namespace) -> int:
     if not result.out_path:
         raise BusinessError("整卷报告未生成：没有可处理的单元",
                             code="build_report_failed", details={"warnings": result.warnings})
-    return ExitCode.OK
-
-
-def cmd_execution_policy(args: argparse.Namespace) -> int:
-    from .workflow import set_execution_policy
-    payload = {"ok": True, "execution_policy": set_execution_policy(
-        args.unit, mode=args.mode, origin=args.origin, expected_run_id=args.expected_run_id)}
-    _json_out(payload)
-    return ExitCode.OK
-
-
-def cmd_unit_event(args: argparse.Namespace) -> int:
-    from .workflow import record_unit_event
-    payload = {"ok": True, "event": record_unit_event(
-        args.unit, phase=args.phase, event=args.event, source=args.source,
-        category=args.category, attempt_id=args.attempt_id, fingerprint=args.fingerprint,
-        expected_run_id=args.expected_run_id)}
-    _json_out(payload)
-    return ExitCode.OK
-
-
-def cmd_unit_recovery(args: argparse.Namespace) -> int:
-    from .workflow import recover_unit
-    payload = {"ok": True, "recovery": recover_unit(
-        args.unit, source=args.source, phase=args.phase,
-        attempt_id=args.attempt_id, fingerprint=args.fingerprint,
-        expected_run_id=args.expected_run_id)}
-    _json_out(payload)
     return ExitCode.OK
 
 
@@ -454,6 +585,90 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("paper_dir")
     sp.set_defaults(func=cmd_status)
 
+    sp = sub.add_parser("execution-policy", help="为当前材料轮次确认自动/交互执行模式")
+    sp.add_argument("material_dir")
+    sp.add_argument("--mode", choices=["automatic", "interactive"], required=True)
+    sp.add_argument("--origin", choices=["user", "confirmed"], default="user")
+    sp.set_defaults(func=cmd_execution_policy)
+
+    sp = sub.add_parser("unit-locate", help="按task/unit身份查询原文位置")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--phrase", required=True)
+    sp.set_defaults(func=cmd_unit_locate)
+
+    sp = sub.add_parser("unit-read", help="按task/unit身份分页只读源文和图片清单")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--start-line", type=int, default=1)
+    sp.add_argument("--max-lines", type=int, default=2000)
+    sp.set_defaults(func=cmd_unit_read)
+
+    sp = sub.add_parser("unit-snapshot", help="读取提交前的单元版本快照")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.set_defaults(func=cmd_unit_snapshot)
+
+    sp = sub.add_parser("unit-submit", help="从结构化建议生成并提交完整报告")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--proposal-json", required=True)
+    sp.add_argument("--expected-snapshot-sha256", required=True)
+    sp.add_argument("--preview", action="store_true", help="只预览，不写入报告或数据")
+    sp.set_defaults(func=cmd_unit_submit)
+
+    sp = sub.add_parser("unit-recovery", help="消费当前轮次某类恢复预算并留痕")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    from .error_classification import RECOVERY_CATEGORIES
+    sp.add_argument("--category", choices=list(RECOVERY_CATEGORIES),
+                    help="父代理判断类恢复（目前仅 targeted_review）；错误驱动的恢复改用 --error-code")
+    sp.add_argument("--error-code",
+                    help="失败的工具/宿主错误码；恢复类别由它确定性决定，未分类码会被拒绝")
+    sp.add_argument("--attempt-id", required=True,
+                    help="本次尝试的幂等键（须与该单元 unit-event 登记的 attempt_id 一致）")
+    sp.add_argument("--fingerprint", required=True)
+    sp.add_argument("--expected-run-id",
+                    help="CAS 防护：与当前轮次不一致即 run-changed")
+    sp.set_defaults(func=cmd_unit_recovery)
+
+    sp = sub.add_parser("unit-progress", help="只读汇总单元心跳与在途/超时判定")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", help="省略时汇总该材料当前轮次的全部单元")
+    sp.add_argument("--stale-after-seconds", type=int, default=900,
+                    help="最后一次事件距今超过该秒数且仍在途 → stale=true（默认 900）")
+    sp.set_defaults(func=cmd_unit_progress)
+
+    sp = sub.add_parser("dispatch-plan", help="按滑动窗口给出下一批可派发单元（只读）")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--window", type=int, default=8, help="滑动窗口上限，默认 8")
+    sp.set_defaults(func=cmd_dispatch_plan)
+
+    sp = sub.add_parser("unit-event", help="记录单元阶段、attempt和取消来源")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--phase", choices=["prepared", "read", "images", "calculated", "proposed",
+                                        "self_checked", "verified", "registered", "parent_reviewed",
+                                        "deliverable"], required=True)
+    sp.add_argument("--attempt-id", required=True)
+    sp.add_argument("--agent-id")
+    sp.add_argument("--cancel-initiator", choices=["user", "parent", "host"])
+    sp.add_argument("--cancel-reason", choices=["user_cancel", "technical_timeout", "superseded"])
+    sp.add_argument("--expected-run-id", help="CAS 防护：与当前轮次不一致即 run-changed")
+    sp.set_defaults(func=cmd_unit_event)
+
+    sp = sub.add_parser("unit-schema", help="输出结构化建议schema v2")
+    sp.set_defaults(func=cmd_unit_schema)
+
+    sp = sub.add_parser("unit-review", help="按snapshot接受或退回当前结构化建议")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--expected-snapshot-sha256", required=True)
+    sp.add_argument("--decision", choices=["accepted", "needs_revision"], required=True)
+    sp.add_argument("--reviewer-id", required=True)
+    sp.add_argument("--issue")
+    sp.set_defaults(func=cmd_unit_review)
+
     sp = sub.add_parser("verify-report", help="交付即校验")
     sp.add_argument("--unit", required=True)
     sp.add_argument("--source")
@@ -471,11 +686,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--apply", action="store_true", help="原子替换报告并运行完整 verify-unit 复验")
     sp.set_defaults(func=cmd_repair_report)
 
+    sp = sub.add_parser("calc-schema", help="导出计算operation参数schema")
+    sp.add_argument("--operation", choices=sorted(__import__("jiaodui.calc", fromlist=["OPERATIONS"]).OPERATIONS))
+    sp.set_defaults(func=cmd_calc_schema)
+
     sp = sub.add_parser("calc", help="符号计算沙箱（evaluate/solve/formula/dimension/vector/circle/equality）")
     sp.add_argument("op")
     sp.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
     sp.add_argument("--show-code", action="store_true", help="回显生成的代码（默认不回显）")
     sp.add_argument("--subject", help="学科；提供后按学科配置的工具集白名单校验 calc 是否可用")
+    sp.add_argument("--task-id", help="记录calc证据时的材料task_id")
+    sp.add_argument("--unit-id", help="记录calc证据时的单元unit_id")
     sp.set_defaults(func=cmd_calc)
 
     sp = sub.add_parser("quantities", help="列出学科物理量表（只读，供量纲声明核对用词）")
@@ -492,34 +713,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("paper_dir")
     sp.add_argument("--out-dir")
     sp.set_defaults(func=cmd_build_docx)
-
-    sp = sub.add_parser("execution-policy", help="记录当前轮次执行模式与确认来源")
-    sp.add_argument("--unit", required=True)
-    sp.add_argument("--mode", required=True, choices=["automatic", "interactive"])
-    sp.add_argument("--origin", required=True, choices=["user", "confirmed"])
-    sp.add_argument("--expected-run-id", required=True)
-    sp.set_defaults(func=cmd_execution_policy)
-
-    sp = sub.add_parser("unit-event", help="记录当前轮次单元阶段事件")
-    sp.add_argument("--unit", required=True)
-    sp.add_argument("--phase", required=True)
-    sp.add_argument("--event", required=True)
-    sp.add_argument("--source")
-    sp.add_argument("--category", choices=["call_correction", "calc_representation", "report_repair",
-                                            "targeted_review", "technical_redispatch", "image_schema_fix"])
-    sp.add_argument("--attempt-id", required=True)
-    sp.add_argument("--fingerprint", required=True, help="不含 attempt_id 的请求载荷 SHA256")
-    sp.add_argument("--expected-run-id", required=True)
-    sp.set_defaults(func=cmd_unit_event)
-
-    sp = sub.add_parser("unit-recovery", help="按当前轮次预算记录单元恢复")
-    sp.add_argument("--unit", required=True)
-    sp.add_argument("--source", required=True)
-    sp.add_argument("--phase", required=True)
-    sp.add_argument("--attempt-id", required=True)
-    sp.add_argument("--fingerprint", required=True, help="不含 attempt_id 的请求载荷 SHA256")
-    sp.add_argument("--expected-run-id", required=True)
-    sp.set_defaults(func=cmd_unit_recovery)
 
     # 每个子命令都接受 --json / --quiet（默认 SUPPRESS，保留顶层取值）
     for sp in sub.choices.values():

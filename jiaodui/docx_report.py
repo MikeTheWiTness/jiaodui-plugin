@@ -30,7 +30,8 @@ from .errors import BusinessError
 from .log import log
 from .image_utils import rewrite_inline_images
 from .markers import (INLINE_MARKER_CAPTURE_RE, MARKER_NOOP,
-                      MARKER_RESTORE_NEW, audit_markers)
+                      MARKER_RESTORE_NEW, audit_markers, is_v2_report,
+                      unescape_marker_field)
 from .markers import scan_math_spans as _scan_math_spans
 from .report_parse import parse_reasons, strip_reference_preamble
 
@@ -139,24 +140,30 @@ class DocxBuildResult:
                 and not self.excluded_units)
 
 
+def _report_sections(part: str) -> tuple[str, str | None]:
+    """所有Word消费者共用版本化报告边界，旧报告仍沿用兼容清理。"""
+    from .report_parse import split_sections
+    _, body, reasons = split_sections(part)
+    if body is None or reasons is None:
+        return part, None
+    if part.startswith("<!-- jiaodui-report-v2 -->"):
+        return body, reasons
+    return _audit_body(body), reasons
+
+
 def _report_marker_counts(questions) -> dict:
     """按单元统计报告「标记原文」段里的内联标记总数（jiaodui.markers 单一源）。"""
     counts = {}
     for qid, part in questions:
-        marker_idx = part.find("### 标记原文")
-        reason_idx = part.find("### 修改原因")
-        has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
-        mark_seg = _audit_body(part[marker_idx:reason_idx]) if has_sections else part
+        mark_seg, _ = _report_sections(part)
         counts[qid] = len(_PAT.findall(mark_seg))
     return counts
 
 
 def _is_included_unit(part: str) -> bool:
     """与 generate_combined_docx 同口径：含标记但缺分段的单元被跳过。"""
-    marker_idx = part.find("### 标记原文")
-    reason_idx = part.find("### 修改原因")
-    has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
-    mark_seg = _audit_body(part[marker_idx:reason_idx]) if has_sections else part
+    mark_seg, reasons = _report_sections(part)
+    has_sections = reasons is not None
     if _PAT.search(mark_seg) and not has_sections:
         return False
     return True
@@ -359,10 +366,15 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
     for qid, part in questions_all:
         # 走完整闸门（含图片资源），与 verify-report 同一口径
         verdict = verify_unit(paper_path / qid)
-        if verdict.ok and (data is None or material.registered(root, data, paper_path / qid)):
+        current_review = True
+        if part.startswith("<!-- jiaodui-report-v2 -->"):
+            from .review import review_current
+            current_review = data is not None and review_current(root, data, qid)
+        if verdict.ok and current_review and (data is None or material.registered(root, data, paper_path / qid)):
             questions.append((qid, part))
             continue
-        reason = "；".join(i.message for i in verdict.errors[:2]) or "本轮尚未登记或摘要已改变"
+        reason = ("结构化建议尚无当前版本的父代理复核" if not current_review else
+                  "；".join(i.message for i in verdict.errors[:2]) or "本轮尚未登记或摘要已改变")
         result.excluded_units.append({"unit": qid, "reason": reason})
         result.warnings.append(f"{qid}: 未通过 verify-report，已排除出 Word 交付（{reason}）")
         log(f"⛔ {qid}: 未通过 verify-report，排除出 Word 交付")
@@ -557,16 +569,16 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
         skipped_broken = 0
 
         for qid, part in questions:
-            marker_idx = part.find("### 标记原文")
-            reason_idx = part.find("### 修改原因")
-            has_sections = marker_idx != -1 and reason_idx != -1 and reason_idx >= marker_idx
+            mark_seg, reason_section = _report_sections(part)
+            has_sections = reason_section is not None
+            # v2 报告的字段带转义（ADR 0006）：审计与渲染都必须先反转义
+            escaped = is_v2_report(part)
 
             # 无标记（【N|原|改】）即视为「无问题」单元：
             # - 无分段形态：LLM 判定无问题时只输出「无问题 + 工具日志 + 思考过程」；
             # - 有分段形态：LLM 按完整分段输出（标记原文 = 无标记全文，修改原因 = 无）。
             # 两种形态都插入单元原文 + 「无问题」批注（锚定标题）。
             # 含标记却缺分段才可疑（批注可能丢失），单独警示。
-            mark_seg = part[marker_idx:reason_idx] if has_sections else part
             if _PAT.search(mark_seg):
                 if not has_sections:
                     skipped_broken += 1
@@ -592,16 +604,16 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
                 else:
                     all_bodies.append(f"# {qid}\n\n无问题\n\n{_PAGE_BREAK}")
                 continue
-            reasons = parse_reasons(part[reason_idx:])
-            body = _audit_body(part[marker_idx:reason_idx])
+            reasons = parse_reasons(reason_section)
+            body = mark_seg
             # 标记真实性审计必须在重写图片引用与 LaTeX 预处理之前做：
             # 审计要把「重建正文」与单元源文逐字比对，而这两步都会改写正文字面
-            audits = audit_markers(body, _read_unit_source(paper_path, qid))
+            audits = audit_markers(body, _read_unit_source(paper_path, qid), escaped=escaped)
             body = _rewrite_images(body, paper_path / qid, img_root, stats)
             body = _convert_multiline_tables(body)
             # 标记字段先摘出再预处理正文：字段里的 \[ 多为待修改的转义错误，
             # 套用正文的「\[…\] → $…$」还原会打乱字段内 $ 配对（见 _mask_markers）
-            body, marker_fields = _mask_markers(body)
+            body, marker_fields = _mask_markers(body, escaped=escaped)
             body = _preprocess_latex(body)
 
             # 行内公式区间（$...$ 配对），锚点落在公式内部的标记跳过——
@@ -653,6 +665,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
 
             unit_body = _MARKER_SLOT_RE.sub(_anchor_markup, body)
             unit_body = _textify_skipped_formulas(unit_body, skipped_anchors)
+            # 必须排在锚点注入与公式兜底之后：此时单元格文字已定型，列宽才算得准
+            unit_body = _gridify_marked_tables(unit_body)
             all_bodies.append(f"# {qid}\n\n{unit_body}\n\n{_PAGE_BREAK}")
 
         if not all_bodies:
@@ -791,6 +805,95 @@ def _rewrite_images(body: str, q_dir: Path, img_root: Path,
     return rewrite_inline_images(body, _repl)
 
 
+_ANCHOR_RAW_RE = re.compile(r"`[^`]*<w:commentRange(?:Start|End)[^`]*`\{=openxml\}")
+"""锚点 openxml raw 的反引号码段（`<w:commentRangeStart .../>`{=openxml}）。"""
+
+_TABLE_ROW_RE = re.compile(r"^\s*\|.*\|\s*$")
+_GRID_BORDER_RE = re.compile(r"^\s*\+[-=+]+\+\s*$")
+"""grid table 的边框行；用于识别「这块已经是 grid table」。"""
+_TABLE_RULE_CELL_RE = re.compile(r"^:?-{2,}:?$")
+
+
+def _pipe_row(line: str) -> list[str] | None:
+    """一行（锚点 raw 已摘掉）是 pipe table 行时返回单元格，分隔行返回空列表。
+
+    返回 None 表示这行不属于表格。分隔行用空列表区分，调用方丢弃。
+    """
+    if not _TABLE_ROW_RE.match(line):
+        return None
+    cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip()[1:-1])]
+    if cells and all(_TABLE_RULE_CELL_RE.match(cell) for cell in cells if cell):
+        return []
+    return cells
+
+
+def _gridify_marked_tables(text: str) -> str:
+    """含锚点 raw 的 pipe table → grid table。
+
+    pandoc 的 pipe table 要求表头行紧邻分隔行；当标记字段本身就是一整条表格行时，
+    注入的 openxml raw 会顶到行首，该行不再是表格行 ⇒ 表格塌掉并丢掉 raw（锚点数
+    少一个）⇒ build-docx 判 docx_incomplete。grid table 按 `+---+` 定列，单元格内的
+    openxml raw 能保留（跨单元格锚点也成立），所以在这里把整块重排。
+
+    只重排**含锚点 raw** 的表格块；没有锚点的表格原样保留，避免改变既有 Word 版式。
+    必须在锚点注入之后调用：此时单元格文字已定型，列宽才能算准。
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    index = 0
+    total = len(lines)
+    while index < total:
+        if _pipe_row(_ANCHOR_RAW_RE.sub("", lines[index])) is None:
+            out.append(lines[index])
+            index += 1
+            continue
+        end = index
+        while end < total and _pipe_row(_ANCHOR_RAW_RE.sub("", lines[end])) is not None:
+            end += 1
+        block = lines[index:end]
+        neighbour_before = out[-1] if out else ""
+        neighbour_after = lines[end] if end < total else ""
+        already_grid = bool(_GRID_BORDER_RE.match(neighbour_before)
+                            or _GRID_BORDER_RE.match(neighbour_after))
+        if already_grid or not any(_ANCHOR_RAW_RE.search(line) for line in block):
+            # 已经是 grid table（_convert_multiline_tables 的产物）不得二次重排：
+            # 它的边框行不匹配 pipe 行，重排会把边框留在外面、表格拆坏。
+            out.extend(block)
+            index = end
+            continue
+        rows: list[list[str]] = []
+        for line in block:
+            cells = _pipe_row(_ANCHOR_RAW_RE.sub("", line))
+            if not cells:  # None 或分隔行
+                continue
+            for match in _ANCHOR_RAW_RE.finditer(line):
+                before = len(re.findall(r"(?<!\\)\|", line[:match.start()]))
+                if before == 0:                     # 行首锚点：并入第一个单元格
+                    cells[0] = match.group(0) + cells[0]
+                elif before >= len(cells) + 1:      # 行尾锚点：并入最后一个单元格
+                    cells[-1] = cells[-1] + match.group(0)
+                else:                               # 单元格内锚点：留在本单元格
+                    cells[before - 1] = cells[before - 1] + match.group(0)
+            rows.append(cells)
+        if not rows:
+            out.extend(block)
+            index = end
+            continue
+        width = max(len(row) for row in rows)
+        rows = [row + [""] * (width - len(row)) for row in rows]
+        widths = [max(len(row[column]) for row in rows) for column in range(width)]
+
+        def border(character: str = "-") -> str:
+            return "+" + "+".join(character * (item + 2) for item in widths) + "+"
+
+        out.append(border())
+        for row in rows:
+            out.append("| " + " | ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) + " |")
+            out.append(border())
+        index = end
+    return "\n".join(out)
+
+
 def _convert_multiline_tables(text: str) -> str:
     """多行表格（长 --- 线包裹，pandoc multiline table）→ grid table。
 
@@ -885,7 +988,7 @@ def _strip_wrapping_fence(text: str) -> str:
     return "\n".join(lines)
 
 
-def _mask_markers(body: str) -> tuple[str, list[tuple[int, str, str]]]:
+def _mask_markers(body: str, *, escaped: bool = False) -> tuple[str, list[tuple[int, str, str]]]:
     """把内联标记整段摘成占位符，返回 (掩码文本, [(编号, 原文, 改为), ...])。
 
     标记字段必须与正文的 LaTeX 预处理隔离：字段里的 `\\[`、`\\]` 多半是待修改的
@@ -897,7 +1000,10 @@ def _mask_markers(body: str) -> tuple[str, list[tuple[int, str, str]]]:
     fields: list[tuple[int, str, str]] = []
 
     def _sub(m):
-        fields.append((int(m.group(1)), m.group(2), m.group(3)))
+        # 字段进入「内容」语义：v2 报告先反转义（ADR 0006 §4）
+        original = unescape_marker_field(m.group(2)) if escaped else m.group(2)
+        replacement = unescape_marker_field(m.group(3)) if escaped else m.group(3)
+        fields.append((int(m.group(1)), original, replacement))
         return f"【MARKSLOT{len(fields) - 1}Z】"
 
     return _PAT.sub(_sub, body), fields
