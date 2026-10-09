@@ -96,6 +96,24 @@
 
 口径：双口径全量 **1100 passed / 0 failed / 5 skipped**（P5c 前 1092 + 5 skip）。入口 skill 8164 码点（余量 28，仍 <8192）。
 
+## P6两项失败单元根因（第 2 项，已完成）
+
+按 PLAN-rework-continuation P6 第 2 项：只修根因、写能先失败的回归测试，**不重跑、不开新轮次、不动旧留痕**（两份 `_校对失败.md` 原样保留）。
+
+**4讲 单元10（练9）——计算证据绑定**
+- 现象：`{"code": "proposal.calc-call-mismatch", "message": "计算证据未绑定当前单元源文的成功calc调用"}`，exit 6；留痕列出 6 个已登记 `call_id`。
+- 定位：核对材料记录里这 6 条调用——`run_id`/`source_sha256` 都与留痕一致、`success` 全为 true；其中 `fbedf055`、`d7cee961` 两条是 `dimensional`，`result.result` 是**对象**（`{consistent, left_dimensions, …}`）。原实现把 7 个绑定条件（call_id 存在、task/unit、run、源文摘要、success、expression 逐字、result 逐字）压成一句「未绑定」，因此无法判断当时是抄了布尔/部分对象，还是 expression 有空白差异；提案按设计不落盘，重放会话 dump 已不在，无法回放确切条件。
+- 修复（core）：`_validate_calculation_evidence` 逐条件自报——call_id 不存在 / 属于别的单元 / 记录在另一轮次 / 绑定另一份源文摘要 / `success=false`（附 error）/ expression 与记录参数不逐字一致（附实际参数）/ result 与 `result.result` 不一致（附实际返回）；`details` 不便承载时信息进 message。
+- 回归（先红）：`tests/test_report_suggestions.py` 新增 7 个条件各一例 + 1 个反向契约（逐字抄回含 `dimensional` 对象结果必须通过）。
+
+**5讲 单元2（练1）——图片证据格式**
+- 现象：`proposal-json-invalid`（把文件路径当 JSON 传）→ 改传 JSON 文本后 `{"code": "proposal.evidence-images", "message": "images须为证据数组或带原因的not_applicable"}`，exit 6。
+- 定位：**契约缺口**。`_validate_first_pass_evidence` 只接受「数组」或 `{"status":"not_applicable","reason":…}`，而 `operation-manual.md` 的示例只示范了 `not_applicable` 形态——带图单元没有可照抄的数组样例；报错也不说收到的形状，模型只能猜。附带一条：`unit-submit --proposal-json` 只吃 JSON 文本，不吃文件路径，这也该在文档里写明。
+- 修复（core + 文档）：拒绝信息改为列出两种合法形态 + 该键的数组项字段清单 + 实际收到的形状（对象列键、其他给类型）；`operation-manual.md` 的证据示例补上带图/带算的数组形态，并写明 `expression`/`result` 必须与记录逐字一致、`dimensional` 返回对象而非布尔。
+- 回归（先红）：非法形状被拒且报错含「数组」「not_applicable」与实际键名；合法数组被接受。
+
+口径：双口径全量 **1103 passed / 0 failed / 5 skipped**（P6 第 2 项前 1100 + 5 skip）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
@@ -110,6 +128,6 @@
 
 ## 未完成与交付限制
 
-- 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**（错误分类、心跳与超时判据、并发登记原子性、滑窗与停止判据；真实派发执行者仍是宿主/父代理）；余下为 P6 回放收口、实际安装方式与新会话父子 catalog（P2）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
+- 本轮尚不满足M0—M6全部验收：**P5 已按 core 可见口径收口**；**P6 第 2 项（两个失败单元根因 + 回归）已完成**，余下 P6 的两块按用户 6C 决定执行——① 确定性链路验收（合成材料 e2e：P3 转义边界 + Word v2 端到端结构计数 + `complete` 判定；计划 §0 记录 Word-v2 端到端回归在实验分支缺失，须补）；② 最小真实校对 1–2 个单元（图片证据型 + 转义边界型，需用户授权范围）。再往后是实际安装方式与新会话父子 catalog（P2）。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -130,13 +131,33 @@ def _validate_first_pass_evidence(evidence: dict) -> set[str]:
         raise _error("proposal.evidence-symbols", "symbols须显式列出或为空数组")
     images = evidence.get("images")
     calculations = evidence.get("calculations")
+    item_fields = {
+        "images": ("id", "reference_index", "original_path", "actual_read_path",
+                   "position", "readable", "semantic", "verdict"),
+        "calculations": ("id", "call_id", "expression", "result"),
+    }
     for key, value in (("images", images), ("calculations", calculations)):
         if isinstance(value, list):
             continue
         if (not isinstance(value, dict) or value.get("status") != "not_applicable"
                 or not isinstance(value.get("reason"), str) or not value["reason"].strip()):
-            raise _error(f"proposal.evidence-{key}", f"{key}须为证据数组或带原因的not_applicable")
+            # 5讲 单元2 的根因：契约只示范了 not_applicable，模型带图时无从照抄形态
+            raise _error(
+                f"proposal.evidence-{key}",
+                f"{key} 只接受两种形态：① 证据数组，每项含 "
+                f"{'、'.join(item_fields[key])}；"
+                f"② {{\"status\": \"not_applicable\", \"reason\": \"<原因>\"}}（确实不适用时才用）。"
+                f"实际收到：{_shape_of(value)}")
     return identities | _collect_evidence_ids(evidence)
+
+
+def _shape_of(value: Any, limit: int = 140) -> str:
+    """诊断用的短形态描述：对象列出键名，其他给类型与值。"""
+    if isinstance(value, dict):
+        return ("对象，键=" + "、".join(sorted(str(key) for key in value)))[:limit]
+    if isinstance(value, list):
+        return f"数组，长度 {len(value)}"
+    return f"{type(value).__name__}: {value!r}"[:limit]
 
 
 def _contains_string(value: Any, expected: str) -> bool:
@@ -163,11 +184,38 @@ def _validate_calculation_evidence(evidence: dict, calls: list[dict] | None, *, 
                 or "result" not in item):
             raise _error("proposal.evidence-calculation", "计算证据须含id、call_id、expression和result")
         call = calls_by_id.get(item["call_id"])
-        if (call is None or call.get("task_id") != task_id or call.get("unit_id") != unit_id
-                or call.get("run_id") != run_id or call.get("source_sha256") != source_sha256
-                or not call.get("success") or not _contains_string(call.get("params"), item["expression"])
-                or call.get("result", {}).get("result") != item["result"]):
-            raise _error("proposal.calc-call-mismatch", "计算证据未绑定当前单元源文的成功calc调用")
+        if call is None:
+            # 4讲 单元10 的根因：7 个绑定条件只报一句「未绑定」，无法定位
+            raise _error("proposal.calc-call-mismatch",
+                         f"call_id {item['call_id']!r} 不在当前轮次的 calc 记账里；"
+                         f"请用带 --task-id/--unit-id 的实际调用返回的 call_id")
+        if call.get("task_id") != task_id or call.get("unit_id") != unit_id:
+            raise _error("proposal.calc-call-mismatch",
+                         f"call_id {item['call_id']!r} 属于另一个单元或另一份材料，不能作为本单元证据")
+        if call.get("run_id") != run_id:
+            raise _error("proposal.calc-call-mismatch",
+                         f"call_id {item['call_id']!r} 记录在另一轮次（记录 run={call.get('run_id')!r}，"
+                         f"当前 run={run_id!r}）；请在本轮用带身份的 calc 重新实算")
+        if call.get("source_sha256") != source_sha256:
+            raise _error("proposal.calc-call-mismatch",
+                         f"call_id {item['call_id']!r} 绑定的是另一份源文摘要"
+                         f"（记录 {str(call.get('source_sha256'))[:12]}…，当前 {source_sha256[:12]}…）；"
+                         f"源文变化后必须重新实算")
+        if not call.get("success"):
+            raise _error("proposal.calc-call-mismatch",
+                         f"call_id {item['call_id']!r} 未成功（success=false，"
+                         f"error={str((call.get('result') or {}).get('error'))[:80]!r}），"
+                         f"失败的计算不能作为证据")
+        if not _contains_string(call.get("params"), item["expression"]):
+            raise _error("proposal.calc-call-mismatch",
+                         f"expression 必须与调用时传入的参数逐字一致（含空格与大小写）；"
+                         f"你写的是 {item['expression']!r}，该调用记录的是 "
+                         f"{json.dumps(call.get('params'), ensure_ascii=False)[:120]}")
+        recorded = (call.get("result") or {}).get("result")
+        if recorded != item["result"]:
+            raise _error("proposal.calc-call-mismatch",
+                         f"result 必须与调用返回的 result.result 逐字一致；"
+                         f"你写的是 {item['result']!r}，该调用返回的是 {recorded!r}")
         identifiers.update((item["id"], item["call_id"]))
     return identifiers
 

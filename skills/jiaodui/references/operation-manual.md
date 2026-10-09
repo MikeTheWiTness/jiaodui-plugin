@@ -59,8 +59,22 @@ jiaodui status <paper_dir> --json
   "evidence": {
     "assumptions": [{"id": "e1", "text": "依据摘要", "source_locations": []}],
     "symbols": [],
-    "images": {"status": "not_applicable", "reason": "无配图"},
-    "calculations": {"status": "not_applicable", "reason": "无数值或公式核验"}
+    "images": [{
+      "id": "img1",
+      "reference_index": 1,
+      "original_path": "unit-locate/inspect-images 给出的原图绝对路径",
+      "actual_read_path": "同一份清单里的实际读取路径（透明图用白底副本）",
+      "position": {"line": 3, "column": 1},
+      "readable": true,
+      "semantic": "图上看到了什么（含关键坐标/方向/标注）",
+      "verdict": "与题干和解析是否一致"
+    }],
+    "calculations": [{
+      "id": "k1",
+      "call_id": "calc 返回的 call_id（必须带 --task-id/--unit-id 调用）",
+      "expression": "逐字抄调用时传入的参数，含空格",
+      "result": "逐字抄返回的 result.result（dimensional 返回对象，不是布尔）"
+    }]
   },
   "self_check": {
     "status": "passed",
@@ -69,6 +83,8 @@ jiaodui status <paper_dir> --json
   }
 }
 ```
+
+`images` / `calculations` 只有两种形态：**证据数组**，或确实不适用时写 `{"status": "not_applicable", "reason": "<原因>"}`——写成其它对象会被拒绝并回报实际形状。`calculations` 的 `expression` / `result` 必须与记录逐字一致：空白差异、只抄对象的一部分、或引用上一轮/上一份源文的 `call_id` 都会绑定失败，且报错会指明是哪一条不满足。
 
 无问题单元提交空 `corrections`、`summary: "无问题"` 和必要的证据对象。竖线与标记括号由 v2 转义无损承载（ADR 0006），不再因此拒绝提交；`_校对数据.json` 的 `marked_text` 保持报告字面（带转义），`corrections` 是反转义后的内容。旧 Markdown 报告仍可由 `verify-report` / `parse-report` 兼容读取；`repair-report` 仍只服务旧报告修复。
 

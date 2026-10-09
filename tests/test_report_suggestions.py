@@ -340,3 +340,84 @@ def test_v2_report_does_not_strip_preamble_like_source_lines():
     assert marked == source
     assert split_marked_body(marked, escaped=True) == source
     assert verify_report_text(candidate.text, source).ok
+
+
+# ---- P6：两个回放失败单元的根因回归（诊断必须指到具体条件） ----
+
+def _calc_call(source: str, **overrides) -> dict:
+    """一条与 material.record_calc_call 同形的记账记录（供校验器直接消费）。"""
+    call = {
+        "call_id": "call-1", "task_id": "a" * 32, "unit_id": "b" * 32, "run_id": "run-1",
+        "source_sha256": digest(source), "operation": "evaluate",
+        "params": {"expression": "1+2"}, "success": True,
+        "result": {"success": True, "result": 3.0, "error": None},
+    }
+    call.update(overrides)
+    return call
+
+
+def _payload_with_calc(source: str, **calc_overrides) -> tuple[dict, list[dict]]:
+    payload = _scaffold(source, [_correction(source, "木板", "木块")])
+    item = {"id": "k1", "call_id": "call-1", "expression": "1+2", "result": 3.0}
+    item.update(calc_overrides)
+    payload["evidence"]["calculations"] = [item]
+    payload["corrections"][0]["evidence_ids"] = ["e1", "k1"]
+    return payload, [_calc_call(source, **({} if calc_overrides.get("_call") is None else {}))]
+
+
+def test_calc_evidence_mismatch_names_the_failing_condition():
+    """4讲单元10 的根因：绑定失败必须说清是哪一条不满足，而不是一句「未绑定」。"""
+    source = "木板。"
+    cases = [
+        ({"expression": "1 + 2"}, None, "expression"),                 # 空白差异
+        ({"result": True}, None, "result"),                            # dimensional 返回对象却写了布尔
+        ({}, {"success": False}, "成功"),                               # 未成功的调用不能当证据
+        ({}, {"run_id": "run-2"}, "轮次"),                              # 绑定的是另一轮
+        ({}, {"source_sha256": "0" * 64}, "源文"),                      # 绑定的是另一份源文
+        ({"call_id": "missing"}, None, "call_id"),                      # 不存在的调用
+        ({"result": {"consistent": True}}, None, "result"),             # 只抄了对象的一部分
+    ]
+    for item_overrides, call_overrides, expected in cases:
+        payload, _ = _payload_with_calc(source, **item_overrides)
+        calls = [_calc_call(source, **(call_overrides or {}))]
+        with pytest.raises(ValueError) as error:
+            render_suggestions(source, payload, expected_task_id="a" * 32,
+                               expected_unit_id="b" * 32, expected_run_id="run-1",
+                               calc_calls=calls)
+        assert error.value.code == "proposal.calc-call-mismatch"
+        assert expected in str(error.value), (item_overrides, call_overrides, str(error.value))
+
+
+def test_calc_evidence_accepts_verbatim_copy_of_recorded_call():
+    """反向契约：逐字抄回记录（含 dimensional 的对象结果）必须通过。"""
+    source = "木板。"
+    recorded_result = {"consistent": True, "ambiguous": False, "left_dimensions": "T"}
+    payload, _ = _payload_with_calc(source, result=recorded_result)
+    calls = [_calc_call(source, operation="dimensional",
+                        params={"expression": "T = lam/v"}, success=True,
+                        result={"success": True, "result": recorded_result, "error": None})]
+    payload["evidence"]["calculations"][0]["expression"] = "T = lam/v"
+    candidate = render_suggestions(source, payload, expected_task_id="a" * 32,
+                                   expected_unit_id="b" * 32, expected_run_id="run-1",
+                                   calc_calls=calls)
+    assert candidate.summary == "一般问题"
+
+
+def test_image_evidence_error_lists_accepted_shapes():
+    """5讲单元2 的根因：images 只接受数组或 not_applicable，报错必须给出可照抄的形态。"""
+    source = "木板。"
+    payload = _scaffold(source, [_correction(source, "木板", "木块")])
+    payload["evidence"]["images"] = {"status": "ok", "reference_index": 1}
+    with pytest.raises(ValueError) as error:
+        _render(source, payload)
+    assert error.value.code == "proposal.evidence-images"
+    message = str(error.value)
+    assert "数组" in message and "not_applicable" in message
+    assert "reference_index" in message, "报错要指出实际收到的形状，便于照契约改写"
+
+    payload["evidence"]["images"] = [{
+        "id": "img1", "reference_index": 1, "original_path": "/tmp/a.png",
+        "actual_read_path": "/tmp/a-whitebg.png", "position": {"line": 3, "column": 1},
+        "readable": True, "semantic": "波形图", "verdict": "与题干一致",
+    }]
+    assert _render(source, payload).summary == "一般问题"
