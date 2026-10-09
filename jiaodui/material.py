@@ -242,6 +242,78 @@ def find_unit_by_id(task_id: str, unit_id: str) -> tuple[Path, Path]:
     raise NotFoundError("当前工作区中不存在此task_id", details={"task_id": task_id})
 
 
+TERMINAL_PHASES: frozenset[str] = frozenset({"registered", "parent_reviewed", "deliverable"})
+"""到达这些阶段即为终态：不再是在途单元，也不会被判超时。"""
+
+
+def _material_by_task(task_id: str) -> Path:
+    """只读解析task_id对应的材料目录，找不到就报 not_found。"""
+    materials = workspace_root() / "校对"
+    if materials.is_dir():
+        for root in sorted(materials.iterdir()):
+            if not root.is_dir() or not (root / MANIFEST).is_file():
+                continue
+            ensure_inside(root)
+            if load(root).get("task_id") == task_id:
+                return root
+    raise NotFoundError("当前工作区中不存在此task_id", details={"task_id": task_id})
+
+
+def unit_progress(task_id: str, *, unit_id: str | None = None,
+                  stale_after_seconds: int = 900) -> dict:
+    """只读汇总当前轮次的单元心跳：阶段、attempt、最后事件时间与在途/超时判定。
+
+    父代理据此判超时，不再靠「沉默多久没消息」猜崩溃；本函数不取锁、不写盘。
+    - `in_flight`：有事件、最后阶段不是终态、且未被取消；
+    - `stale`：在途且最后事件距今超过 `stale_after_seconds`；
+    - `cancelled`：最后一次显式取消的发起者与原因（parent 技术取消不得记作 user）。
+    """
+    if type(stale_after_seconds) is not int or stale_after_seconds < 0:
+        raise BusinessError("stale_after_seconds 必须为非负整数", code="progress-invalid")
+    root = _material_by_task(task_id)
+    data = load(root)
+    run = data["runs"][-1]
+    state_map = run.get("unit_state", {}) or {}
+    events_map = run.get("unit_events", {}) or {}
+    cancellations = run.get("cancellations", []) or []
+    identities = data.get("unit_ids", {}) or {}
+    selected = [(name, identity) for name, identity in identities.items()
+                if unit_id is None or identity == unit_id]
+    if unit_id is not None and not selected:
+        raise NotFoundError("当前材料中不存在此unit_id", details={"task_id": task_id})
+    current = datetime.now(timezone.utc)
+    units: list[dict] = []
+    for name, identity in selected:
+        state = state_map.get(identity) or {}
+        last_event_at = state.get("last_event_at")
+        cancel = next((item for item in reversed(cancellations)
+                       if item.get("unit_id") == identity), None)
+        in_flight = bool(state) and state.get("phase") not in TERMINAL_PHASES and cancel is None
+        age: int | None = None
+        if isinstance(last_event_at, str):
+            try:
+                age = max(0, int((current - datetime.fromisoformat(last_event_at)).total_seconds()))
+            except ValueError:
+                age = None
+        units.append({
+            "unit": name,
+            "unit_id": identity,
+            "phase": state.get("phase"),
+            "attempt_id": state.get("attempt_id"),
+            "agent_id": state.get("agent_id"),
+            "last_event_at": last_event_at,
+            "age_seconds": age,
+            "event_count": len(events_map.get(identity, []) or []),
+            "in_flight": in_flight,
+            "stale": bool(in_flight and age is not None and age > stale_after_seconds),
+            "cancelled": ({"initiator": cancel.get("initiator"), "reason": cancel.get("reason"),
+                           "at": cancel.get("at")} if cancel else None),
+        })
+    return {"ok": True, "task_id": task_id, "run_id": run.get("run_id"),
+            "material_dir": str(root), "stale_after_seconds": stale_after_seconds,
+            "units": units}
+
+
 def write(root: Path, data: dict) -> None:
     """同目录临时文件原子替换；临时文件不作为运行产物保留。"""
     path = ensure_inside(root / MANIFEST)

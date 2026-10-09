@@ -1,0 +1,115 @@
+"""M5 调度闭环：`unit-progress` 心跳与超时判据（PLAN-rework-continuation P5 第 2 项）。
+
+父代理据此判超时，不再靠「沉默多久没消息」猜崩溃：只看单元是否在途、最后一次
+事件是什么、距今多久，以及是否已被显式取消。全程只读，不改材料记录。
+"""
+from __future__ import annotations
+
+import hashlib
+
+import pytest
+
+from jiaodui import material
+from jiaodui.errors import BusinessError, NotFoundError
+from jiaodui.workflow import convert_material, split_material
+
+
+def _unit(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source = tmp_path / "lesson.md"
+    source.write_text("第一节\n正文。\n", encoding="utf-8")
+    converted = convert_material(source, material_name="进度测试", mode="lecture")
+    split = split_material(converted.raw_md, subject="高中物理", mode="lecture", strategy="none")
+    root = workspace / "校对" / "进度测试"
+    material.set_execution_policy(root, "automatic")
+    data = material.load(root)
+    return root, data["task_id"], data["unit_ids"][data["unit_set"][0]]
+
+
+def _age_last_event(root, unit_id, seconds):
+    """把最后一次事件的时间改成过去，用于构造「沉默过久」的现场。"""
+    from datetime import datetime, timedelta, timezone
+
+    with material.locked(root):
+        data = material.load(root)
+        run = data["runs"][-1]
+        old = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+        for event in run["unit_events"][unit_id]:
+            event["at"] = old
+        run["unit_state"][unit_id]["last_event_at"] = old
+        material.write(root, data)
+
+
+def test_no_events_means_not_in_flight(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    progress = material.unit_progress(task_id)
+    entry = next(item for item in progress["units"] if item["unit_id"] == unit_id)
+    assert entry["phase"] is None
+    assert entry["in_flight"] is False
+    assert entry["stale"] is False
+    assert entry["event_count"] == 0
+
+
+def test_in_flight_unit_exposes_phase_attempt_and_last_event(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1", agent_id="ag1")
+    progress = material.unit_progress(task_id, unit_id=unit_id)
+    entry = progress["units"][0]
+    assert entry["phase"] == "read"
+    assert entry["attempt_id"] == "a1"
+    assert entry["agent_id"] == "ag1"
+    assert entry["last_event_at"]
+    assert entry["in_flight"] is True
+    assert entry["stale"] is False
+
+
+def test_terminal_phase_is_not_in_flight_even_when_old(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="registered", attempt_id="a1")
+    _age_last_event(root, unit_id, 10_000)
+    entry = material.unit_progress(task_id, unit_id=unit_id)["units"][0]
+    assert entry["in_flight"] is False
+    assert entry["stale"] is False, "已完成的单元不该被判为超时"
+
+
+def test_silent_in_flight_unit_becomes_stale(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1")
+    _age_last_event(root, unit_id, 10_000)
+    fresh = material.unit_progress(task_id, unit_id=unit_id, stale_after_seconds=60)["units"][0]
+    assert fresh["in_flight"] is True and fresh["stale"] is True
+    relaxed = material.unit_progress(task_id, unit_id=unit_id, stale_after_seconds=999_999)["units"][0]
+    assert relaxed["stale"] is False
+
+
+def test_cancelled_unit_is_not_in_flight_and_reports_origin(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1",
+                               cancel_initiator="parent", cancel_reason="technical_timeout")
+    _age_last_event(root, unit_id, 10_000)
+    entry = material.unit_progress(task_id, unit_id=unit_id, stale_after_seconds=60)["units"][0]
+    assert entry["in_flight"] is False, "已取消的单元不得再被判为在途或超时"
+    assert entry["cancelled"]["initiator"] == "parent"
+    assert entry["cancelled"]["reason"] == "technical_timeout"
+
+
+def test_progress_is_read_only(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1")
+    manifest = root / material.MANIFEST
+    before = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    material.unit_progress(task_id, stale_after_seconds=60)
+    material.unit_progress(task_id, unit_id=unit_id)
+    assert hashlib.sha256(manifest.read_bytes()).hexdigest() == before
+
+
+def test_unknown_task_or_unit_is_rejected(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    with pytest.raises(NotFoundError) as unknown_task:
+        material.unit_progress("f" * 32)
+    assert unknown_task.value.code == "not_found"
+    with pytest.raises(NotFoundError) as unknown_unit:
+        material.unit_progress(task_id, unit_id="f" * 32)
+    assert unknown_unit.value.code == "not_found"

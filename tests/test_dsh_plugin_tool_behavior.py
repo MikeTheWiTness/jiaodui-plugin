@@ -109,6 +109,14 @@ await prepare.execute({operation:'precheck-split',path:'/tmp/units'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','precheck-split','/tmp/units']);
 await prepare.execute({operation:'execution-policy',path:'/tmp/mat',execution_mode:'automatic',origin:'user'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','execution-policy','/tmp/mat','--mode','automatic','--origin','user']);
+// P5b：心跳查询必须只读，且 stale 阈值可按次调整
+const progress=registered.get('jiaodui_unit_progress');
+assert.equal(progress.parameters.additionalProperties,false);
+assert.deepEqual(progress.parameters.required,['task_id']);
+await progress.execute({task_id:'a'.repeat(32),stale_after_seconds:60},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-progress','--task-id','a'.repeat(32),'--stale-after-seconds','60']);
+await progress.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-progress','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--stale-after-seconds','900']);
 // P5：恢复入口按错误码分类，category 只留给父代理判断类
 const recovery=registered.get('jiaodui_unit_recovery');
 assert.equal(recovery.parameters.additionalProperties,false);

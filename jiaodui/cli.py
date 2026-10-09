@@ -258,6 +258,14 @@ def cmd_unit_recovery(args: argparse.Namespace) -> int:
     return ExitCode.OK
 
 
+def cmd_unit_progress(args: argparse.Namespace) -> int:
+    from .material import unit_progress
+
+    _json_out(unit_progress(args.task_id, unit_id=args.unit_id,
+                            stale_after_seconds=args.stale_after_seconds))
+    return ExitCode.OK
+
+
 def cmd_unit_event(args: argparse.Namespace) -> int:
     from .material import record_unit_event
 
@@ -609,6 +617,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="失败的工具/宿主错误码；恢复类别由它确定性决定，未分类码会被拒绝")
     sp.add_argument("--fingerprint", required=True)
     sp.set_defaults(func=cmd_unit_recovery)
+
+    sp = sub.add_parser("unit-progress", help="只读汇总单元心跳与在途/超时判定")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", help="省略时汇总该材料当前轮次的全部单元")
+    sp.add_argument("--stale-after-seconds", type=int, default=900,
+                    help="最后一次事件距今超过该秒数且仍在途 → stale=true（默认 900）")
+    sp.set_defaults(func=cmd_unit_progress)
 
     sp = sub.add_parser("unit-event", help="记录单元阶段、attempt和取消来源")
     sp.add_argument("--task-id", required=True)

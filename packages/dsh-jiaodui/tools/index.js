@@ -188,6 +188,21 @@ function registerStructuredTools(ctx, cliTool) {
     ...(args.category ? ['--category', args.category] : []),
     '--fingerprint', args.fingerprint])
 
+  register('jiaodui_unit_progress', '只读汇总单元心跳：阶段 / attempt / 最后事件时间 / 在途与超时判定。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id'],
+    properties: {
+      task_id: { type: 'string' },
+      unit_id: { type: 'string', description: '省略时汇总该材料当前轮次的全部单元。' },
+      stale_after_seconds: {
+        type: 'integer', minimum: 0, default: 900,
+        description: '最后一次事件距今超过该秒数且仍在途 → stale=true。',
+      },
+    },
+  }, args => ['unit-progress', '--task-id', args.task_id,
+    ...(args.unit_id ? ['--unit-id', args.unit_id] : []),
+    '--stale-after-seconds', String(args.stale_after_seconds ?? 900)])
+
   register('jiaodui_unit_event', '记录单元阶段心跳及取消发起者/原因。', {
     type: 'object', additionalProperties: false,
     required: ['task_id', 'unit_id', 'phase', 'attempt_id'],

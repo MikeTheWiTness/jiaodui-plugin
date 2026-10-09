@@ -13,7 +13,7 @@ PY = sys.executable
 
 V1_COMMANDS = ["check-env", "inspect-source", "inspect-images", "convert", "split", "slice", "precheck-split",
                "status", "execution-policy", "unit-read", "unit-locate", "unit-snapshot", "unit-submit",
-               "unit-recovery", "unit-event", "unit-schema", "calc-schema", "verify-report",
+               "unit-recovery", "unit-progress", "unit-event", "unit-schema", "calc-schema", "verify-report",
                "parse-report", "repair-report", "calc", "build-report", "build-docx"]
 
 

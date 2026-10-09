@@ -15,7 +15,7 @@
 - **M2**：task/unit ID、源码SHA绑定、Unicode码点位置和重复词候选、安全公式/加粗范围；calc schema从核心元数据导出。**P4 已补齐父侧结构化工具**（准备 / 交付），正常路径不再手拼 argv，见下节。
 - **M3初版**：schema v2提交少量建议，程序生成全文；长度封套保护正文中的报告标题/装饰行；快照CAS和材料锁，异常回滚报告/数据/清单，登记为最后提交标志。初版不能无损承载原文字面含`|`/标记括号的内容，只能明确拒绝；**P3 已按 ADR 0006 补齐可逆特殊字符编码与正文/信封契约**，见下节。
 - **M4初版**：assumptions/symbols/images/calculations首轮证据、必需自查项；真实calc call_id与单元源码/轮次/结果关联；父复核绑定输入/建议/自查/报告hash。最新退回撤销旧接受。技术报告仍可汇总通读，但unreviewed时complete=false、Word拒绝。
-- **M5部分**：恢复类别累计、失败指纹、阶段事件、显式取消来源API。调度尚依赖宿主/父代理主动登记；插件中断来源不得猜为用户。预算耗尽留痕，不能换agent刷新额度。**P5a 已把「错误码 → 恢复类别」变成确定性映射**，见下节。
+- **M5部分**：恢复类别累计、失败指纹、阶段事件、显式取消来源API。调度尚依赖宿主/父代理主动登记；插件中断来源不得猜为用户。预算耗尽留痕，不能换agent刷新额度。**P5a 已把「错误码 → 恢复类别」变成确定性映射，P5b 已补心跳与超时判据**，见下节。
 - **M6部分**：Word与报告解析共享v2正文边界；旧parse/repair拒绝覆写v2数据。诊断文件生成与正式complete分离。双skill和bundle schema有漂移测试。
 
 ## P3无损契约（ADR 0006，已完成）
@@ -62,6 +62,18 @@
 
 口径：双口径全量 **1084 passed / 0 failed / 5 skipped**（P5a 前 1047 + 5 skip）。
 
+## P5b心跳与超时判据（已完成）
+
+背景：编排侧原先只能靠「沉默多久没消息」猜崩溃。`record_unit_event` 早已维护 `run["unit_state"][unit_id] = {phase, attempt_id, agent_id, last_event_at}`，本批把它变成只读投影 + 确定性判定。
+
+- `material.unit_progress(task_id, *, unit_id=None, stale_after_seconds=900)`：只读（不取锁、不写盘），按 task_id 解析材料，返回每单元的 `phase` / `attempt_id` / `agent_id` / `last_event_at` / `age_seconds` / `event_count` / `in_flight` / `stale` / `cancelled`。
+- 判据：终态为 `registered` / `parent_reviewed` / `deliverable`，到终态即不在途；被显式取消（`unit-event --cancel-initiator/--cancel-reason`）的单元不再算在途，因此**父代理技术取消不会被误判为超时**；`stale` 只在「在途且最后事件距今超过阈值」时为真。
+- CLI `unit-progress --task-id T [--unit-id U] [--stale-after-seconds N]`；原生工具 `jiaodui_unit_progress`（父侧，不在子代理 allowlist 内）。
+- 测试：新增 `tests/test_unit_progress.py`（无事件不在途、在途暴露 phase/attempt/时间、终态即便陈旧也不超时、沉默过久转 stale、取消后不在途且暴露发起者与原因、只读不改清单、未知 task/unit 报 not_found）。`tests/test_cli.py` 命令清单与 Node 行为测试同步补 `unit-progress`。
+- 真机 CLI 冒烟（/tmp 临时材料）：① 无事件 → `in_flight=false`；② 记 `read` 心跳 → `in_flight=true`；③ 记终态 `registered` → `in_flight=false`（阈值 0 也不超时）；④ `--cancel-initiator parent --cancel-reason technical_timeout` → `in_flight=false` 且 `cancelled={'initiator':'parent','reason':'technical_timeout'}`；⑤ 未知 unit_id → exit 5 `not_found`；⑥ 负阈值 → exit 6 `progress-invalid`；正常查询 exit 0。
+
+口径：双口径全量 **1092 passed / 0 failed / 5 skipped**（P5b 前 1084 + 5 skip）。入口 skill 8154 码点（余量 38，仍在 8192 阈值内）。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。
@@ -76,6 +88,6 @@
 
 ## 未完成与交付限制
 
-- 本轮尚不满足M0—M6全部验收：P5 余下三项（`unit-progress` 心跳与超时判据、窗口补位/取消闭环的可执行判据、8 单元并发登记压测）、实际安装方式、新会话父子catalog（P2）均需继续。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具，P5a 已收口错误分类。
+- 本轮尚不满足M0—M6全部验收：P5 余下两项（窗口补位/取消闭环的可执行判据、8 单元并发登记压测）、实际安装方式、新会话父子catalog（P2）均需继续。P3 已收口特殊字符无损编码与正文/信封契约，P4 已补齐父侧结构化工具，P5a 已收口错误分类，P5b 已补心跳与超时判据。
 - 整份回放必须所有必需单元技术通过、父复核当前版本且Word结构/图片/批注记账通过才可交付；有未开始、失败或unreviewed时只交诊断，不生成冒充完整的Word。
 - 不渲染最终Word、不检查分页截图、不提供视觉免责声明；仍保留题图真实读取和首次探针。
