@@ -1,6 +1,6 @@
 ---
 name: jiaodui
-description: K-12 试卷/讲义校对总入口。优先采用用户指定学科与材料类型；未指定时检查 Word 嵌套表格或有限节选，不确定则询问，再组织对应导入拆分及共用校对交付。v1 预设学科只落地高中物理，其余 M5 待落地。
+description: K-12 试卷/讲义校对总入口。优先采用用户指定学科与材料类型；未指定时检查 Word 嵌套表格或有限节选，不确定则询问，再组织对应导入拆分及共用校对交付。当前只落地高中物理，其余学科尚未落地。
 ---
 
 # jiaodui 校对总入口
@@ -8,13 +8,13 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 ## 1. 何时使用与目标
 - 输入为 K-12 试卷/讲义源文件（docx / doc / idml / md）或已拆分单元目录，需要逐题校对并交付 Word 批注版时使用。
 - 分工：**判断交给 agent，确定性交给 jiaodui CLI**。CLI 只做转换 / 拆分 / 校验 / 计算 / 拼装，不调用任何模型。
-- v1 范围：只做**试卷 + 讲义**主链路；批注评审、自由校对、独立解题（冻结）、classics 古籍检索均后置。学科预设 v1 只落地**高中物理**，其余 6 科见 `references/subject-matrix.md`（M5 待落地）。
+- v1 范围：只做**试卷 + 讲义**主链路；批注评审、自由校对、独立解题（冻结）、classics 古籍检索均后置。学科预设 v1 只落地**高中物理**，其余 6 科见 `references/subject-matrix.md`（尚未落地）。
 - 不做：GUI、LaTeX/PDF、自动改源文。
 
 ## 2. 入口判断与前置硬门槛
 
 ### 2.1 分别确定学科和材料类型
-- 先确定**学段 + 学科 + 材料类型（讲义 lecture / 试卷 exam）**。用户已明确的项直接采用，**跳过该项识别，不重复询问，不让文件名或检测结果覆盖用户指定**。学科已知但类型未知，只补类型；反之只补学科。两项都已知直接进入导入。入口只询问缺失或尚未确认的选项；记录 `execution-policy` 后按已确认模式执行，不反复询问模式。
+- 先确定**学段 + 学科 + 材料类型（讲义 lecture / 试卷 exam）**。用户已明确的项直接采用，**跳过该项识别，不重复询问，不让文件名或检测结果覆盖用户指定**。学科已知但类型未知，只补类型；反之只补学科。两项都已知直接进入导入。入口只询问缺失或尚未确认的选项；执行模式未知时询问用户，不默认 automatic。完成导入拆分后，必须用 `execution-policy` 显式记录本轮模式与来源；策略缺失时 unit-event/recovery 会拒绝写入或恢复。
 - 类型未指定时，先用 `jiaodui inspect-source <源文件> --json` 检查 Word 结构（默认不返回正文）。**大量重复嵌套表格承载主要正文时标记为讲义**；看嵌套数量、深度和正文分布，普通评分表、平铺表格或偶发嵌套不能单独判讲义。没有该特征也不能自动判试卷。
 - 结构不足以判断时结合文件名，再按需 `inspect-source <文件> --preview-chars <额度> --json` 查看标题和少量正文；知识讲解/例练组织支持讲义，试卷标题/时间分值/连续题型组织支持试卷，孤立题号不够。信息不足或冲突时询问用户类型，不能靠反复转换或猜默认值推进。DOC/IDML 等无法取得 Word 结构时按工具告警处理，不把未知当试卷。详见 [`references/material-types.md`](references/material-types.md)。
 - 未明确学科时先看用户描述与文件名，不足再节选。**类型和学科识别合计每份材料最多 2,000 字符**，共享一次有限预览，不各读一遍；批量先设总额度，够用即停。节选在进入主上下文前截断，不先读全文再截取，不进行逐题校对。必要时可先做公共 `convert`，再有限预览 raw；确定类型后补 `convert --mode`，学科未定前不清理或拆分。
@@ -62,8 +62,8 @@ jiaodui build-docx "${paper_dir}" --work-root "${W}" --json
    3. 主 agent 执行 `jiaodui slice --boundaries <清单.json> --mode <mode> --subject <学科>`——**必须与预览完全同一组参数**。
    - 讲义先清理再切，预览与执行须使用完全相同的 mode/subject/清理参数。新布局未知 mode 不再默认试卷；清单类型与显式类型冲突会拒绝。修改类型先重新 convert 再预览，不沿用旧类型的行号。
 4. 扫描：`jiaodui status <paper_dir> --json`（传拆分返回的单元根目录，不传材料根目录），派发未开始 / 未过校验 / 本轮未完成的单元。每个单元派发前先运行只读的 `jiaodui inspect-images --unit <dir> --json`；清单按正文引用顺序绑定引用序号、位置、原图和实际读取图，缺图/无效/不支持远程引用先停止该单元。
-5. 拆分完成后从材料 `_校对记录.json` 读取当前 `current_run_id`，按本次确认的模式调用 `jiaodui execution-policy --unit <已登记单元路径> --mode automatic|interactive --origin user|confirmed --expected-run-id <当前run>`。同一轮相同设置幂等，不再重复询问。每个单元阶段变化用 `unit-event --unit <已登记单元路径> --phase <阶段> --event <事件> --expected-run-id <当前run>` 留痕；所有恢复必须带当前 `expected-run-id`，用户取消与权限拒绝只记事件、不调用恢复。随后按滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。输入包必须显式携带 `references/failure-modes.md` 路径，并列出本轮允许修正的类别、次数和停止范围。
-6. 子 agent：按清单顺序逐条读取源文图片；每次调用和观察都携带引用序号、原图路径、实际读取路径和正文行列位置。再读学科 references → 校对 → 写 `_校对报告.md` → `jiaodui verify-report --unit <dir>`；报告格式/正文机械修正最多 3 次并记入 `report_correction`，修正后重跑 verify。工具参数或 schema 的纯机械修正最多 2 次并记入 `call_correction`；`read_image` schema 修正也共用这同一预算，不额外叠加。计算工具的纯机械输入修正最多 2 次并记入 `calculation_correction`。不得借修正改变题意、假设或结论。interactive 模式下遇到实质性判断分歧须询问用户；automatic 模式按其确认范围和预算处理。超预算、权限拒绝、用户取消不得继续重试。其余完整性修复（缺段/多段/未标记正文被转录改动）可先运行 `jiaodui repair-report --unit <dir>` 预览：它只从单元源文重建标记原文段，原文字段必须唯一、逐字、顺序不重叠才可修复；确认定位正确后用 `--apply` 原子替换报告，再重跑 verify-report。重复或模糊定位交人工，不得靠放宽校验通过。通过后必须 `jiaodui parse-report --unit <dir> --work-root <W>` 登记当前轮次；登记成功才回报完成。报告只保存当前交付，不追加旧轮完整报告。
+5. 拆分完成后从材料 `_校对记录.json` 读取当前 `current_run_id`，执行模式未确认则先询问用户，再调用 `jiaodui execution-policy --unit <已登记单元路径> --mode automatic|interactive --origin user|confirmed --expected-run-id <当前run>`。同一轮相同设置幂等，不再重复询问；新 run 不自动授权。每个 `unit-event` / `unit-recovery` 必须带唯一 `--attempt-id` 和请求载荷的 SHA256 `--fingerprint`（不含 attempt_id/时间戳），同 attempt 重放幂等；新 attempt 即使 fingerprint 相同也消耗该单元预算，不能因换 agent 清零。阶段事件同样记录 attempt/fingerprint。用户取消与权限拒绝只记录事件，不调用恢复。随后按滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。输入包必须显式携带 `references/failure-modes.md` 路径，并列出本轮允许修正的类别、次数和停止范围。
+6. 子 agent：按清单顺序逐条读取源文图片；每次调用和观察都携带引用序号、原图路径、实际读取路径和正文行列位置。再读学科 references → 校对 → 写 `_校对报告.md` → `jiaodui verify-report --unit <dir>`；报告修复最多 3 次并记入 `report_repair`，修正后重跑 verify。工具参数/schema 的纯机械修正最多 2 次并记入 `call_correction`；计算表达式表示的机械修正最多 2 次并记入 `calc_representation`。`read_image` schema 修正必须同时记一次 `image_schema_fix` 和 `call_correction`，属于同一次 attempt，额度不能相加成 4 次。定向复核记入 `targeted_review`，最多 2 次；技术性重派记入 `technical_redispatch`，最多 1 次。以上额度均按单元分别计算，未知或策略未登记不得执行。不得借修正改变题意、假设或结论。interactive 模式下遇到实质性判断分歧须询问用户；automatic 模式按已确认范围和单元预算处理。超预算、权限拒绝、用户取消不得继续重试。完整性失败（缺段/多段/未标记正文被转录改动）可先运行 `jiaodui repair-report --unit <dir>` 预览：它只从单元源文重建标记原文段，原文字段必须唯一、逐字、顺序不重叠才可修复；确认定位正确后用 `--apply` 原子替换报告，再重跑 verify-report。重复或模糊定位交人工，不得靠放宽校验通过。通过后必须 `jiaodui parse-report --unit <dir> --work-root <W>` 登记当前轮次；登记成功才回报完成。报告只保存当前交付，不追加旧轮完整报告。
 7. `jiaodui build-report <paper_dir>` 拼接整卷报告。输出 JSON 的 `ok` 仅表示诊断文件已生成；`complete` 才表示所有必需单元通过或显式跳过。旧 Markdown 报告按原校验规则读取，不因新增 complete 门槛倒推判为不合格；`ok=true` 且 `complete=false` 时不得声称整卷交付完成。
 8. 主 agent 通读整卷报告全文（整体把关）：个别单元漏检 → 按该单元剩余预算重派；系统性问题或 interactive 实质争议 → 询问用户。
 9. `jiaodui build-docx <paper_dir>`，只复核结构计数 **错误标记数 = 批注锚点数 + 公式兜底数，且缺失数为 0**（无问题单元标题批注单列）；不做最终 Word 视觉验收。首次探针及真实题图视觉检查仍是门槛。
@@ -83,7 +83,7 @@ jiaodui build-docx "${paper_dir}" --work-root "${W}" --json
 
 ## 6. 硬约束
 - `verify-report` 不通过**不算完成**；不合格报告不得进入汇总或交付。修复只允许 `repair-report --apply` 从源文重建正文，不放宽完整性契约；修复后仍须 verify-report 通过才可 parse-report，主流程不自动登记。- 完整性修复只写单元内 `_校对报告.md`：不改源文、不改写修改后/原因、不生成 attempt/副本；重复或无法唯一定位的字段交人工。
-- `call_correction` 工具参数/schema 修正最多 2 次（含 read_image schema，不另叠额度）；`calculation_correction` 计算输入机械修正最多 2 次；`report_correction` 报告机械修正最多 3 次；技术性恢复最多 1 次并同时受 unit_recovery 预算限制。修正不得改变题意、计算假设或报告结论。interactive 实质争议询问用户。用户取消、权限拒绝不得恢复或重派；预算耗尽即停止该单元并留痕。提前失败、读图失败、图片归属不明和批次取消都必须留痕，记录 run、单元、失败阶段、完整工具错误与产物摘要；未执行 verify 时明确写“未执行”。
+- 预算固定为：`call_correction=2`、`calc_representation=2`、`report_repair=3`、`targeted_review=2`、`technical_redispatch=1`、`image_schema_fix=2`；按单元、按 run 计数。一次 image schema 修正同时各消耗 `image_schema_fix` 与 `call_correction` 一次，不可把两类额度相加。`entry_question` 不属于执行预算。仅首次未确认项可询问；interactive 实质争议询问用户。新 run 未显式记录 execution-policy 前禁止记录校对尝试或恢复。相同 attempt_id/fingerprint 重放幂等；同 fingerprint 的不同 attempt_id 仍消费预算，不因换 agent 重置。用户取消、权限拒绝不得恢复或重派；预算耗尽即停止该单元并留痕，记录 run、单元、attempt、失败阶段、完整工具错误与产物摘要；未执行 verify 时明确写“未执行”。
 - 技术性崩溃 / 超时 / 限流 → 主 agent 自动重派 **1 次**（仅一次）；读图参数修正最多 2 次，报告自修最多 3 轮，用户更严格要求优先。
 - 不自动改源文；失败单元批次结束后交人裁定。
 
@@ -103,8 +103,8 @@ jiaodui slice --raw R --mode lecture [--subject 学科] --preview   # 拆分子 
 jiaodui status <paper_dir> --json   # 单元根目录：W/校对/<材料名>/units/<材料名>/
 jiaodui verify-report --unit <dir> [--source S]
 jiaodui execution-policy --unit <registered_unit_dir> --mode automatic|interactive --origin user|confirmed --expected-run-id <run>
-jiaodui unit-event --unit <registered_unit_dir> --phase <phase> --event <event> [--source S] [--category C] --expected-run-id <run>
-jiaodui unit-recovery --unit <registered_unit_dir> --source technical_crash|timeout|rate_limit --phase <phase> --expected-run-id <run>
+jiaodui unit-event --unit <registered_unit_dir> --phase <phase> --event <event> --attempt-id <attempt> --fingerprint <sha256> [--source S] [--category call_correction|calc_representation|report_repair|targeted_review|technical_redispatch|image_schema_fix] --expected-run-id <run>
+jiaodui unit-recovery --unit <registered_unit_dir> --source technical_crash|timeout|rate_limit --phase <phase> --attempt-id <attempt> --fingerprint <sha256> --expected-run-id <run>
 jiaodui parse-report --unit <dir> [--source S] [--legacy]
 jiaodui repair-report --unit <dir> [--source S] [--apply]   # 显式完整性修复；--apply 才原子写报告
 jiaodui calc <op> --param NAME=VALUE … [--show-code] [--subject <学科>]

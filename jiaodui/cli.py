@@ -333,7 +333,8 @@ def cmd_unit_event(args: argparse.Namespace) -> int:
     from .workflow import record_unit_event
     payload = {"ok": True, "event": record_unit_event(
         args.unit, phase=args.phase, event=args.event, source=args.source,
-        category=args.category, expected_run_id=args.expected_run_id)}
+        category=args.category, attempt_id=args.attempt_id, fingerprint=args.fingerprint,
+        expected_run_id=args.expected_run_id)}
     _json_out(payload)
     return ExitCode.OK
 
@@ -342,6 +343,7 @@ def cmd_unit_recovery(args: argparse.Namespace) -> int:
     from .workflow import recover_unit
     payload = {"ok": True, "recovery": recover_unit(
         args.unit, source=args.source, phase=args.phase,
+        attempt_id=args.attempt_id, fingerprint=args.fingerprint,
         expected_run_id=args.expected_run_id)}
     _json_out(payload)
     return ExitCode.OK
@@ -503,8 +505,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--phase", required=True)
     sp.add_argument("--event", required=True)
     sp.add_argument("--source")
-    sp.add_argument("--category", choices=["entry_question", "call_correction", "report_correction",
-                                            "unit_recovery", "technical_retry", "calculation_correction"])
+    sp.add_argument("--category", choices=["call_correction", "calc_representation", "report_repair",
+                                            "targeted_review", "technical_redispatch", "image_schema_fix"])
+    sp.add_argument("--attempt-id", required=True)
+    sp.add_argument("--fingerprint", required=True, help="不含 attempt_id 的请求载荷 SHA256")
     sp.add_argument("--expected-run-id", required=True)
     sp.set_defaults(func=cmd_unit_event)
 
@@ -512,6 +516,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--unit", required=True)
     sp.add_argument("--source", required=True)
     sp.add_argument("--phase", required=True)
+    sp.add_argument("--attempt-id", required=True)
+    sp.add_argument("--fingerprint", required=True, help="不含 attempt_id 的请求载荷 SHA256")
     sp.add_argument("--expected-run-id", required=True)
     sp.set_defaults(func=cmd_unit_recovery)
 

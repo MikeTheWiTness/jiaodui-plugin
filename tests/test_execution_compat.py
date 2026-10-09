@@ -21,32 +21,40 @@ def _material(tmp_path, monkeypatch):
     return workspace, Path(split.unit_dirs[0]), workspace / "校对" / "卷" / "_校对记录.json"
 
 
-def test_manifest_run_has_valid_idempotent_execution_policy(tmp_path, monkeypatch):
-    workspace, unit, manifest = _material(tmp_path, monkeypatch)
+def test_manifest_run_requires_explicit_idempotent_execution_policy(tmp_path, monkeypatch):
+    _, unit, manifest = _material(tmp_path, monkeypatch)
     data = json.loads(manifest.read_text(encoding="utf-8"))
-    policy = data["runs"][-1]["execution_policy"]
+    assert "execution_policy" not in data["runs"][-1]
+    from jiaodui.workflow import set_execution_policy
+    before = manifest.read_bytes()
+    policy = set_execution_policy(unit, mode="automatic", origin="confirmed",
+                                 expected_run_id=data["current_run_id"])
     assert policy["mode"] == "automatic"
     assert policy["origin"] == "confirmed"
     assert policy["confirmed_at"]
     assert policy["budgets"] == {
-        "entry_question": 2,
         "call_correction": 2,
-        "report_correction": 3,
-        "unit_recovery": 2,
-        "technical_retry": 1,
-        "calculation_correction": 2,
+        "calc_representation": 2,
+        "report_repair": 3,
+        "targeted_review": 2,
+        "technical_redispatch": 1,
+        "image_schema_fix": 2,
     }
-    assert set(policy["spent"].values()) == {0}
-    from jiaodui.workflow import set_execution_policy
-    before = manifest.read_bytes()
-    set_execution_policy(unit, mode="automatic", origin="confirmed", expected_run_id=data["current_run_id"])
-    assert manifest.read_bytes() == before
+    assert policy["spent"] == {}
+    after_confirmation = manifest.read_bytes()
+    assert after_confirmation != before
+    set_execution_policy(unit, mode="automatic", origin="confirmed",
+                         expected_run_id=data["current_run_id"])
+    assert manifest.read_bytes() == after_confirmation
 
 
 def test_execution_policy_validation_rejects_budget_drift(tmp_path, monkeypatch):
-    _, _, manifest = _material(tmp_path, monkeypatch)
+    _, unit, manifest = _material(tmp_path, monkeypatch)
     data = json.loads(manifest.read_text(encoding="utf-8"))
-    data["runs"][-1]["execution_policy"]["budgets"]["report_correction"] = 99
+    from jiaodui.workflow import set_execution_policy
+    set_execution_policy(unit, mode="automatic", origin="user", expected_run_id=data["current_run_id"])
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data["runs"][-1]["execution_policy"]["budgets"]["report_repair"] = 99
     manifest.write_text(json.dumps(data), encoding="utf-8")
     from jiaodui import material
     with pytest.raises(JiaoduiError) as err:
@@ -54,20 +62,30 @@ def test_execution_policy_validation_rejects_budget_drift(tmp_path, monkeypatch)
     assert err.value.code == "invalid-manifest"
 
 
-def test_unit_events_require_expected_run_and_reject_cancel_recovery(tmp_path, monkeypatch):
+def test_unit_events_require_policy_attempt_and_expected_run(tmp_path, monkeypatch):
     _, unit, manifest = _material(tmp_path, monkeypatch)
     data = json.loads(manifest.read_text(encoding="utf-8"))
-    from jiaodui.workflow import record_unit_event, recover_unit
-    with pytest.raises(TypeError):
-        record_unit_event(unit, phase="verify", event="started")
+    from jiaodui.workflow import record_unit_event, recover_unit, set_execution_policy
     run_id = data["current_run_id"]
-    record_unit_event(unit, phase="verify", event="started", expected_run_id=run_id)
-    with pytest.raises(JiaoduiError):
-        recover_unit(unit, source="user_cancel", phase="verify", expected_run_id=run_id)
-    with pytest.raises(JiaoduiError):
-        recover_unit(unit, source="permission_denied", phase="verify", expected_run_id=run_id)
+    before = manifest.read_bytes()
+    with pytest.raises(JiaoduiError) as err:
+        record_unit_event(unit, phase="verify", event="started", expected_run_id=run_id,
+                          attempt_id="attempt-1", fingerprint="a" * 64)
+    assert err.value.code == "execution-policy-required"
+    assert manifest.read_bytes() == before
+
+    set_execution_policy(unit, mode="automatic", origin="user", expected_run_id=run_id)
+    record_unit_event(unit, phase="verify", event="started", expected_run_id=run_id,
+                      attempt_id="attempt-1", fingerprint="a" * 64)
+    for source in ("user_cancel", "permission_denied"):
+        with pytest.raises(JiaoduiError) as err:
+            recover_unit(unit, source=source, phase="verify", expected_run_id=run_id,
+                         attempt_id=f"{source}-1", fingerprint="b" * 64)
+        assert err.value.code == "recovery-forbidden"
     changed = json.loads(manifest.read_text(encoding="utf-8"))
-    assert [e["event"] for e in changed["runs"][-1]["unit_events"]] == ["started"]
+    events = changed["runs"][-1]["unit_events"]
+    assert [e["event"] for e in events] == ["started"]
+    assert changed["runs"][-1]["execution_policy"]["spent"] == {}
 
 
 def test_late_unit_event_cannot_write_to_new_run(tmp_path, monkeypatch):
@@ -75,7 +93,8 @@ def test_late_unit_event_cannot_write_to_new_run(tmp_path, monkeypatch):
     data = json.loads(manifest.read_text(encoding="utf-8"))
     from jiaodui.workflow import record_unit_event
     with pytest.raises(JiaoduiError) as err:
-        record_unit_event(unit, phase="校对", event="finished", expected_run_id="stale-run")
+        record_unit_event(unit, phase="校对", event="finished", expected_run_id="stale-run",
+                          attempt_id="attempt-stale", fingerprint="a" * 64)
     assert err.value.code == "run-changed"
 
 
@@ -143,8 +162,10 @@ def test_cli_registers_policy_and_unit_recovery_commands():
     assert "unit-recovery" in subcommands
     assert "unit-event" in subcommands
     args = parser.parse_args(["unit-event", "--unit", "第1题", "--phase", "verify",
-                              "--event", "started", "--expected-run-id", "run"])
+                              "--event", "started", "--attempt-id", "attempt-1",
+                              "--fingerprint", "a" * 64, "--expected-run-id", "run"])
     assert args.expected_run_id == "run"
+    assert args.attempt_id == "attempt-1"
 
 
 def test_changing_mode_preserves_spent_budget(tmp_path, monkeypatch):
@@ -153,28 +174,35 @@ def test_changing_mode_preserves_spent_budget(tmp_path, monkeypatch):
     from jiaodui.workflow import record_unit_event, set_execution_policy
 
     run_id = data["current_run_id"]
-    record_unit_event(unit, phase="call", event="schema_fix", category="call_correction",
-                      expected_run_id=run_id)
+    set_execution_policy(unit, mode="automatic", origin="user", expected_run_id=run_id)
+    record_unit_event(unit, phase="call", event="schema_fix", category="calc_representation",
+                      attempt_id="calc-1", fingerprint="a" * 64, expected_run_id=run_id)
     changed = set_execution_policy(unit, mode="interactive", origin="user", expected_run_id=run_id)
     assert changed["mode"] == "interactive"
-    assert changed["spent"]["call_correction"] == 1
+    assert changed["spent"][unit.name]["calc_representation"] == 1
 
 
 def test_event_budget_is_idempotent_and_cancel_cannot_consume_it(tmp_path, monkeypatch):
     _, unit, manifest = _material(tmp_path, monkeypatch)
     data = json.loads(manifest.read_text(encoding="utf-8"))
-    from jiaodui.workflow import record_unit_event
+    from jiaodui.workflow import record_unit_event, set_execution_policy
 
     run_id = data["current_run_id"]
+    set_execution_policy(unit, mode="automatic", origin="user", expected_run_id=run_id)
     record_unit_event(unit, phase="call", event="schema_fix", source="image_schema",
-                      category="call_correction", expected_run_id=run_id)
+                      category="image_schema_fix", attempt_id="image-1", fingerprint="a" * 64,
+                      expected_run_id=run_id)
     before = manifest.read_bytes()
     record_unit_event(unit, phase="call", event="schema_fix", source="image_schema",
-                      category="call_correction", expected_run_id=run_id)
+                      category="image_schema_fix", attempt_id="image-1", fingerprint="a" * 64,
+                      expected_run_id=run_id)
     assert manifest.read_bytes() == before
     with pytest.raises(JiaoduiError) as err:
         record_unit_event(unit, phase="call", event="cancelled", source="user_cancel",
-                          category="call_correction", expected_run_id=run_id)
+                          attempt_id="cancel-1", fingerprint="b" * 64, category="image_schema_fix",
+                          expected_run_id=run_id)
     assert err.value.code == "recovery-forbidden"
     after = json.loads(manifest.read_text(encoding="utf-8"))
-    assert after["runs"][-1]["execution_policy"]["spent"]["call_correction"] == 1
+    spent = after["runs"][-1]["execution_policy"]["spent"][unit.name]
+    assert spent["call_correction"] == 1
+    assert spent["image_schema_fix"] == 1

@@ -457,7 +457,7 @@ def _current_unit_root(unit: str | Path, expected_run_id: str) -> tuple[Path, Pa
 
 def set_execution_policy(unit: str | Path, *, mode: str, origin: str,
                          expected_run_id: str) -> dict:
-    from .execution_policy import new_policy
+    from .execution_policy import is_current_policy, migrate_legacy_spent, new_policy
 
     root, _ = _current_unit_root(unit, expected_run_id)
     with material.locked(root):
@@ -466,69 +466,71 @@ def set_execution_policy(unit: str | Path, *, mode: str, origin: str,
             raise BusinessError("轮次已改变，拒绝迟到的策略写入", code="run-changed")
         run = data["runs"][-1]
         current = run.get("execution_policy")
-        if current and current["mode"] == mode and current["origin"] == origin:
+        if (is_current_policy(current) and current["mode"] == mode
+                and current["origin"] == origin):
             return current
         policy = new_policy(mode=mode, origin=origin, confirmed_at=material.now())
-        if current:
-            policy["spent"] = dict(current["spent"])
+        if is_current_policy(current):
+            policy["spent"] = {name: dict(counts) for name, counts in current["spent"].items()}
+        elif current is not None:
+            policy["spent"] = migrate_legacy_spent(current, data["unit_set"])
         run["execution_policy"] = policy
         material.write(root, data)
         return policy
 
 
+def _require_execution_policy(run: dict) -> dict:
+    from .execution_policy import is_current_policy
+
+    policy = run.get("execution_policy")
+    if not is_current_policy(policy):
+        raise BusinessError("本轮尚未显式确认 execution-policy", code="execution-policy-required")
+    return policy
+
+
 def record_unit_event(unit: str | Path, *, phase: str, event: str,
-                      expected_run_id: str, source: str | None = None,
-                      category: str | None = None) -> dict:
-    from .execution_policy import new_policy, spend
+                      expected_run_id: str, attempt_id: str, fingerprint: str,
+                      source: str | None = None, category: str | None = None) -> dict:
+    from .execution_policy import spend, validate_attempt
 
     root, unit = _current_unit_root(unit, expected_run_id)
     if not phase.strip() or not event.strip():
         raise UsageError("phase 与 event 不能为空")
+    attempt_id, fingerprint = validate_attempt(attempt_id, fingerprint)
     if source in {"user_cancel", "cancel", "permission_denied", "permission"} and category is not None:
-        raise BusinessError("用户取消与权限拒绝事件不能消耗恢复预算", code="recovery-forbidden",
+        raise BusinessError("用户取消与权限拒绝事件不能消耗预算", code="recovery-forbidden",
                             details={"source": source, "phase": phase})
-    key = {"unit": unit.name, "phase": phase, "event": event,
-           "source": source, "category": category}
+    identity = {"unit": unit.name, "phase": phase, "event": event,
+                "category": category, "attempt_id": attempt_id, "fingerprint": fingerprint}
     with material.locked(root):
         data = material.load(root)
         if data["current_run_id"] != expected_run_id:
             raise BusinessError("轮次已改变，拒绝迟到的单元事件", code="run-changed")
         run = data["runs"][-1]
+        policy = _require_execution_policy(run)
         events = run.setdefault("unit_events", [])
-        for previous in events:
-            if all(previous.get(name) == value for name, value in key.items()):
-                return {**key, "at": previous["at"]}
-        policy = run.setdefault("execution_policy", new_policy(confirmed_at=run["started_at"]))
+        prior = next((item for item in events
+                      if item.get("unit") == unit.name and item.get("attempt_id") == attempt_id), None)
+        if prior is not None:
+            if any(prior.get(name) != value for name, value in identity.items()):
+                raise BusinessError("attempt_id 已用于不同事件或 fingerprint", code="attempt-id-conflict",
+                                    details={"unit": unit.name, "attempt_id": attempt_id})
+            return dict(prior)
         if category is not None:
-            spend(policy, category)
-        record = {**key, "at": material.now()}
+            spend(policy, unit.name, category)
+        record = {**identity, "source": source, "at": material.now()}
         events.append(record)
         material.write(root, data)
         return record
 
 
 def recover_unit(unit: str | Path, *, source: str, phase: str,
-                 expected_run_id: str) -> dict:
-    from .execution_policy import spend
-
+                 expected_run_id: str, attempt_id: str, fingerprint: str) -> dict:
     if source in {"user_cancel", "cancel", "permission_denied", "permission"}:
         raise BusinessError("用户取消与权限拒绝不得自动恢复", code="recovery-forbidden",
                             details={"source": source, "phase": phase})
     if source not in {"technical_crash", "timeout", "rate_limit"}:
         raise UsageError("恢复来源只允许 technical_crash / timeout / rate_limit")
-    root, unit = _current_unit_root(unit, expected_run_id)
-    with material.locked(root):
-        data = material.load(root)
-        if data["current_run_id"] != expected_run_id:
-            raise BusinessError("轮次已改变，拒绝迟到的恢复", code="run-changed")
-        run = data["runs"][-1]
-        from .execution_policy import new_policy
-        policy = run.setdefault("execution_policy", new_policy(confirmed_at=run["started_at"]))
-        spend(policy, "unit_recovery")
-        spend(policy, "technical_retry")
-        run.setdefault("unit_events", []).append({
-            "unit": unit.name, "phase": phase, "event": "recovery_started",
-            "source": source, "category": "unit_recovery", "at": material.now(),
-        })
-        material.write(root, data)
-        return run["unit_events"][-1]
+    return record_unit_event(unit, phase=phase, event="recovery_started", source=source,
+                             category="technical_redispatch", attempt_id=attempt_id,
+                             fingerprint=fingerprint, expected_run_id=expected_run_id)

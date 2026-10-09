@@ -112,16 +112,32 @@ def validate(root: Path, data: dict) -> dict:
             events = run["unit_events"]
             if (not isinstance(events, list) or any(
                     not isinstance(event, dict)
-                    or set(event) - {"unit", "phase", "event", "source", "category", "at"}
-                    or event.get("unit") not in names
+                    or set(event) - {"unit", "phase", "event", "source", "category", "at",
+                                     "attempt_id", "fingerprint"}
+                    or not isinstance(event.get("unit"), str)
+                    or not re.fullmatch(r"(?:第\d+题|单元\d+|板块\d+)", event["unit"])
                     or not isinstance(event.get("phase"), str) or not event["phase"]
                     or not isinstance(event.get("event"), str) or not event["event"]
                     or not isinstance(event.get("at"), str) or not event["at"]
                     or (event.get("source") is not None and not isinstance(event["source"], str))
                     or (event.get("category") is not None and (
                         not isinstance(event["category"], str) or event["category"] not in {
-                            "entry_question", "call_correction", "report_correction", "unit_recovery",
-                            "technical_retry", "calculation_correction"}))
+                            "call_correction", "calc_representation", "report_repair", "targeted_review",
+                            "technical_redispatch", "image_schema_fix", "entry_question",
+                            "report_correction", "unit_recovery", "technical_retry",
+                            "calculation_correction"}
+                        or ("attempt_id" in event and event["category"] not in {
+                            "call_correction", "calc_representation", "report_repair", "targeted_review",
+                            "technical_redispatch", "image_schema_fix"})))
+                    or (isinstance(event.get("category"), str) and event["category"] in {
+                        "call_correction", "calc_representation", "report_repair", "targeted_review",
+                        "technical_redispatch", "image_schema_fix"} and "attempt_id" not in event)
+                    or (("attempt_id" in event) != ("fingerprint" in event))
+                    or ("attempt_id" in event and (
+                        not isinstance(event["attempt_id"], str) or not event["attempt_id"].strip()
+                        or len(event["attempt_id"]) > 200
+                        or not isinstance(event["fingerprint"], str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", event["fingerprint"])))
                     for event in events)):
                 _invalid("轮次单元事件无效", root)
         for r in run["resources"]:
@@ -236,10 +252,8 @@ def new_run(data: dict, params: dict, associated: list[dict]) -> str:
     data["params"] = params
     data["resources"] = associated
     started_at = now()
-    from .execution_policy import new_policy
     data["runs"].append({"run_id": run_id, "started_at": started_at, "status": "in_progress",
-                         "params": params, "resources": associated, "actions": [],
-                         "execution_policy": new_policy(confirmed_at=started_at), "unit_events": []})
+                         "params": params, "resources": associated, "actions": [], "unit_events": []})
     return run_id
 
 

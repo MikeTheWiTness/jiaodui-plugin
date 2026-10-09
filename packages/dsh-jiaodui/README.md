@@ -92,7 +92,7 @@ skill 优先采用用户指定类型；未指定时调用 `inspect-source` 读�
 
 - preset 的公共 plugins 列表以内置 `standard` preset 为参考：DSH 的 preset 不提供继承，
   公共能力行变更时需要同步。这是「薄适配」当前最脆的一处。
-- 只声明高中物理（skill 的学科矩阵里其余 6 科仍为 M5 待落地）。未落地学科不得回退套用物理流程。
-- 已通过打包契约、原生工具行为测试及仓库外 wheel 的确定性链路验证；
-  DSH 实际会话中的子 agent 读图、落盘和整卷校对质量仍需宿主验收，自动测试不替代它。
+- 只声明高中物理（skill 学科矩阵中其余 6 科尚未落地）。未落地学科不得回退套用物理流程。
+- Desktop profile 已安装本 bundle，`node_modules/dsh-jiaodui` 指向仓库 `packages/dsh-jiaodui`；新会话 tool catalog/profile 重载及实际读图、写报告仍需宿主验收。
+- 已通过打包契约、原生工具行为测试及仓库外 wheel 的确定性链路验证；自动测试不替代 DSH 实际会话验收。
 - 原生工具**不是** bash 沙箱的替代：它只调用受信任的本地 CLI，不应对它传任意 shell。

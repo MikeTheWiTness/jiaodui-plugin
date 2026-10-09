@@ -1,6 +1,6 @@
 # 失败模式与自修指引
 
-`verify-report` 的每个失败都带结构化 code 与位置。子 agent 拿到原因后只改 `_校对报告.md`，按 `report_correction` 预算最多机械修正 3 次，改完重跑 `jiaodui verify-report --unit <dir>`；仍不过写 `_校对失败.md`，不阻塞批次。通用动作：按报错编号定位 → 不改变题意地修正 → 重跑；不要为了过闸门而删改真实发现（057 教训）。工具参数/schema 的机械修正最多 2 次并记 `call_correction`，read_image schema 修正也计入此预算、不附加额外次数；计算输入的机械修正最多 2 次并记 `calculation_correction`。实质性判断争议在 interactive 模式询问用户。用户取消与权限拒绝不恢复、不重派，立即停止并留痕。
+`verify-report` 的每个失败都带结构化 code 与位置。报告机械修复最多 3 次并记 `report_repair`；工具参数/schema 修正最多 2 次并记 `call_correction`；计算输入的表示/传输机械修正最多 2 次并记 `calc_representation`；定向复核最多 2 次并记 `targeted_review`；技术性重派最多 1 次并记 `technical_redispatch`。read_image schema 修正同一次 attempt 同时扣 `image_schema_fix` 与 `call_correction`，两类各计一次、不能合并成 4 次额度。六类预算都按单元、按 run 独立；入口提问不占这些预算。新 run 未显式执行 `execution-policy` 前，unit-event/recovery 必须拒绝写入。每次 event/recovery 都带 `attempt_id` 与请求载荷的 64 位小写 SHA256 fingerprint（不含 attempt_id/时间戳）：相同 attempt 重放幂等；相同 fingerprint 的不同 attempt 仍扣预算，不能因 agent 变化刷新。实质性判断争议在 interactive 模式询问用户。用户取消与权限拒绝只记录、不恢复、不重派。
 
 ## 一、格式型失败（最常见）
 | 症状（code / 现象） | 自修动作 |
@@ -57,8 +57,8 @@
 | Harness `run_code` 外层参数校验失败（如 `invalid justification`） | 内层程序和工具尚未执行；按当前外层 schema 检查必填字段，`justification` 用非空完整句子。保留完整错误并注明实际阶段；用户要求遇错即停时不重试，也不记作 CLI 执行失败 |
 | 找不到单元源文（`integrity.no-source`，**error → 拒绝**） | 确认单元目录名与源文名匹配（`第N题.md` / `单元N.md`）；必要时用 `--source` 指定 |
 | 工具参数校验错误 | 若修正只是恢复 schema 所需字段、类型或 JSON 格式，最多 2 次并记 `call_correction`；不可更换题意或命令来绕过失败。超过预算停止并留痕 |
-| 计算输入解析错误 | 仅对缺字段、类型或表达式传输格式做最多 2 次机械修正，记 `calculation_correction`；不得更换题意、假设或目标来绕过失败。实质性计算争议按模式处理 |
-| 读图参数错误（missing required property / invalid arguments） | 核对当前工具 schema，DSH read_image 使用 `file_path` 而非 `path`；机械修正最多 2 次，计入 `call_correction`，不叠加图片重试额度。用户取消或权限拒绝立即停止 |
+| 计算输入解析错误 | 仅对缺字段、类型或表达式表示/传输格式做最多 2 次机械修正，记 `calc_representation`；不得更换题意、假设或目标来绕过失败。实质性计算争议按模式处理 |
+| 读图参数错误（missing required property / invalid arguments） | 核对当前工具 schema，DSH read_image 使用 `file_path` 而非 `path`；每次图像 schema 修正同时扣 `image_schema_fix` 和 `call_correction` 各 1 次，总共最多 2 次尝试，不可将两个额度相加。用户取消或权限拒绝立即停止 |
 | 固定读图探针失败 | 按 vision-probe.md 检查随包 assets/vision-probe.png 的绝对路径与实际图像返回；不依赖教材图片，不重复建立随机探针目录。有限修正后仍无法确认视觉能力 → 按 D14 停止校对 |
 | 实际材料图片读不到（图片显示失败、模型看不到配图） | 先确认是否透明底 PNG：合成白底后重读；完成白底合成仍读不到 → 回报失败，由主 agent 按 D14 拒绝 / 重派；不得静默跳过图片内容检查 |
 | 权限拒绝（permission denied / authorization required） | 不是参数错误，不用同一权限重复尝试；停止本次工具调用，说明需要宿主授权或用户处理，并写入失败留痕 |
