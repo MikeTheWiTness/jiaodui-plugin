@@ -470,6 +470,23 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 | `tests/test_skill_docs.py` 重写 | main 版断言 SKILL.md 出现 `jiaodui repair-report` | 改文档而非改测试：SKILL 补 `jiaodui ` 前缀，断言原样通过 |
 | `failure-modes.md` / `subject-matrix.md` 重写（两份副本） | main 的版本更完整地写了六类预算、连带扣费、attempt 幂等 | 取 main 版（与合并后语义一致） |
 
+## Phase 3：收尾（2026-10-10，已完成）
+
+| 项 | 动作与证据 |
+|---|---|
+| main 落地 | `git merge --ff-only integration/structured-into-main` → `main` = `98a7ac8`；根仓树与合并树 `git rev-parse main^{tree}` 均为 `a9251fd…`（**逐字节一致**） |
+| 全量口径 | 根仓默认口径与清空 addopts 口径均 **1158 passed / 0 failed / 4 subtests**（worktree 里的 5 条 skip 在根仓转为通过：它们依赖根仓 `.venv` 与随包 skill 的实体） |
+| 冻结语料 | `JIAODUI_LEGACY_CORPUS=../JiaoDuiAgent/output` → `tests/test_legacy_corpus.py` **4/4 通过** |
+| 真机冒烟 | 用 P6 回放材料（仍在根仓 `校对/`，未随 worktree 删除）：`status` 已完成 1；`build-report` → `ok=true, complete=true`（拼入 1、失败 0）；`build-docx` → **标记 2 = 锚点 2 + 公式兜底 0、缺失 0**；解包 docx 正文含转义后的表格行文字 `t/s0.10.20.3y/cm40-4`，旧的错误形态 `t/s0.1y/cm40` 已不存在 |
+| profile | 三处切回仓库根包（`package.json` 链接、`pnpm-lock.yaml`、`node_modules/dsh-jiaodui` 软链），worktree 引用残留 **0/0**；Node `createRequire` 解析包、`skills/jiaodui/SKILL.md`、`.venv/bin/jiaodui` 三处均落到根仓 |
+| 环境 | `.venv` 本就是指向已验证独立环境 `.venv-cli` 的软链（AGENTS 允许），editable 安装自动跟踪合并后代码，故**不需要**重建；根仓测试直接用 `.venv-cli/bin/python` 跑通 |
+| worktree | 删 `.worktrees/structured-report`（含 255M venv）与 `.worktrees/integration`；`git worktree list` 只剩根仓；`.worktrees` 占用 267M → 148K（剩余为历史遗留的 `host-inspection`） |
+| 分支 | 删临时集成分支 `integration/structured-into-main`（与 main 同内容、独有提交 0）；`feature/structured-report-pipeline`（`3f7c734`）**保留为历史标记**，相对 main 独有提交 0 |
+| 文档 | `AGENTS.md` 契约段补「正常路径 = 结构化提交」「恢复预算与阶段事件由 core 强制」；`README.md` 状态段改写；`IMPLEMENTATION.md` 加条目 + 更新状态行；`PLAN-rework-continuation.md` 加「已被 UNIFY-PLAN 取代、隔离策略已终结」抬头；`UNIFY-PLAN.md` 标记 Phase 2/3 完成 |
+| 未做 | 全程**未 push**（本地领先 `origin/main` 39 个提交）；未重跑 DSH 新会话真机验收（profile 已切回，需用户重启 DSH 后换「校对」preset 会话复验） |
+
+**遗留与提醒**：① `feature/structured-report-pipeline` 分支保留但已完全并入 main，可随时删；② 桌面 profile 指向根包，**下次 DSH 重启后**插件加载的就是合并后的主链（preset 仍是「校对」；`agent-preset-registry` 默认仍是 `standard`，新会话需手动选）；③ `.worktrees/host-inspection` 是更早会话的遗留，与本轮无关。
+
 ## 安全复核
 
 发现并修复：父复核CLI参数接线错误；旧parse会丢proposal并绕复核；同hash退回未撤销接受；Word按首次报告标题切段吞标记；移除fs会丢read_image。通用兼容修复由独立工作树处理，不要求合并实验审查功能才能使用main。

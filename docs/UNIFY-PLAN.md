@@ -147,6 +147,12 @@ Phase 1 全部在**分支**上做，main 不动。已完成 B1/B2/B3（见 `PROC
 
 ### Phase 2：集成分支落地（一次性合并 + 按类裁决）
 
+> **✅ 已完成（2026-10-10）**：合并提交 `98a7ac8`（双父：`e3deab4` main + `3f7c734` 分支；分支已成为祖先），已 `--ff-only` 快进到 `main`，临时集成分支与两个 worktree 已删除。
+>
+> 实际冲突 **28 处**（19 content + 7 modify/delete + 2 add/add，多于本计划原写的 25 处），另 19 处静默变更全部按 §6.1 处置。结果：根仓双口径 **1158 passed / 0 failed**、冻结语料 4/4、P6 材料真机 `build-report`/`build-docx` 通过（标记 2 = 锚点 2 + 兜底 0）。`jiaodui/`、`packages/`、`skills/` 与分支的差异只剩 4 份 main 重写文档（0 个 .py）。
+>
+> **映射 main 测试时额外采纳了六处 main 更优语义**（详见 `PROCESS_REWORK.md` 的 Phase 2 记录）：`report.to_dict()` 暴露 `ok`、`unit-event` 轮次 CAS、`unit-event` 要求当前授权、指纹错误码 `invalid-attempt-fingerprint`、**幂等重放不写盘**、**被拒 attempt 不写盘**（后两条同源：不改变状态就不写盘）。
+
 1. 从 main 建集成分支：`integration/structured-into-main`
 2. `git merge feature/structured-report-pipeline`（预期 25 处冲突）
 3. 按 §6 的裁决规则逐类处理；**先做 §4 决策 1–3，再动冲突文件**（否则两套预算语义会在结果里共存）
@@ -154,6 +160,8 @@ Phase 1 全部在**分支**上做，main 不动。已完成 B1/B2/B3（见 `PROC
 5. 验收：双口径全量 + 冻结语料 + `git diff --check` + 用 P6 两份材料与夹具做一次真机冒烟（`status`/`build-report`/`build-docx`）
 
 ### Phase 3：收尾
+
+> **✅ 已完成（2026-10-10）**：profile 三处（`package.json` / `pnpm-lock.yaml` / `node_modules/dsh-jiaodui` 软链）已切回仓库根包并做 Node 解析自检（包、skills、插件 CLI 三处均解析到根仓，零 worktree 残留）；`.venv` 本就是指向已验证独立环境 `.venv-cli` 的软链（AGENTS 允许），editable 自动跟踪合并后的代码，故无需重建；`.worktrees/structured-report`（含其 255M venv）与 `.worktrees/integration` 已删除；临时集成分支已删（`feature/structured-report-pipeline` 保留为历史标记）；`AGENTS.md`/`README.md`/`IMPLEMENTATION.md` 已同步为「正常路径 = 结构化、旧链只读兼容」；P6 回放材料与 `archive/structured-pipeline-safety` tag 原样保留；全程未 push（本地领先 `origin/main` 39 个提交）。
 
 | 项 | 动作 |
 |---|---|
