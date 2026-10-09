@@ -3,6 +3,11 @@
 文档与 CLI 是两份人工维护的清单，已经漂移过一次（速查表漏记
 --out-dir/--base-name/--mathjax/--no-clean/--rerun/--version）。这里把
 "文档提到的参数必须真实存在""两份副本必须字节一致"钉成测试。
+
+入口体积另有一条硬约束：DSH 预设的 tool-result-pruner 阈值是 8192 个 Unicode 码点，
+压缩触发时会把超预算的工具结果裁成「前 4096 + 标记 + 后 1024」。`skill` 工具把整份
+SKILL.md 当单个文本块返回，所以入口必须留在阈值内；命令速查等细节放在
+`references/operation-manual.md`，参数与命令断言因此覆盖整个 skill 目录。
 """
 from __future__ import annotations
 
@@ -14,12 +19,23 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILL_DIR = ROOT / "skills" / "jiaodui"
 PACKAGED_DIR = ROOT / "packages" / "dsh-jiaodui" / "skills" / "jiaodui"
 
-# 曾被文档漏记、必须出现在 SKILL.md 里的实参
+# 入口正文必须留在宿主工具结果修剪阈值内（Unicode 码点）
+SKILL_ENTRY_MAX_CHARS = 8192
+
+# 曾被文档漏记、必须出现在 skill 文档（入口或 references）里的实参
 MUST_BE_DOCUMENTED = (
     "--out-dir", "--base-name", "--mathjax", "--no-clean", "--rerun",
     "--version", "--out-root", "--work-root", "--replace-units", "--adopt-units",
     "--apply",
 )
+
+
+def _skill_docs() -> dict[str, str]:
+    """入口与全部 references 的文本（键为相对 SKILL_DIR 的路径）。"""
+    return {
+        str(path.relative_to(SKILL_DIR)): path.read_text(encoding="utf-8")
+        for path in sorted(SKILL_DIR.rglob("*.md"))
+    }
 
 
 def _cli_options() -> set[str]:
@@ -40,18 +56,42 @@ def _cli_options() -> set[str]:
 
 
 def test_skill_documented_flags_exist_in_cli():
-    """SKILL.md 里出现的每个 --flag 都必须在 CLI 上真实注册（防臆造/改名漂移）。"""
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    documented = set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", text))
-    unknown = sorted(documented - _cli_options())
-    assert not unknown, f"SKILL.md 提到了 CLI 没有注册的参数：{unknown}"
+    """skill 文档里出现的每个 --flag 都必须在 CLI 上真实注册（防臆造/改名漂移）。"""
+    options = _cli_options()
+    unknown: dict[str, list[str]] = {}
+    for name, text in _skill_docs().items():
+        documented = set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", text))
+        bad = sorted(documented - options)
+        if bad:
+            unknown[name] = bad
+    assert not unknown, f"文档提到了 CLI 没有注册的参数：{unknown}"
 
 
 def test_skill_documents_parameters_that_had_drifted():
-    """速查表必须覆盖这些实际存在的参数。"""
-    text = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    missing = [flag for flag in MUST_BE_DOCUMENTED if flag not in text]
-    assert not missing, f"SKILL.md 漏记：{missing}"
+    """速查表（入口或 operation-manual）必须覆盖这些实际存在的参数。"""
+    corpus = "\n".join(_skill_docs().values())
+    missing = [flag for flag in MUST_BE_DOCUMENTED if flag not in corpus]
+    assert not missing, f"skill 文档漏记：{missing}"
+
+
+def test_skill_entry_stays_within_pruner_char_budget():
+    """入口正文必须 ≤ 8192 码点，否则宿主压缩时会裁掉流程主体。"""
+    entry = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    length = len(entry)
+    assert length <= SKILL_ENTRY_MAX_CHARS, (
+        f"SKILL.md 为 {length} 码点，超过宿主修剪阈值 {SKILL_ENTRY_MAX_CHARS}；"
+        "细节请移入 references/operation-manual.md"
+    )
+
+
+def test_skill_entry_referenced_files_exist():
+    """入口里链接的 references/ 文件必须真实存在（链接不能指向空处）。"""
+    entry = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    missing = []
+    for target in re.findall(r"\]\((?!https?:)([^)#\s]+)\)", entry):
+        if not (SKILL_DIR / target).is_file():
+            missing.append(target)
+    assert not missing, f"SKILL.md 链接的文件不存在：{missing}"
 
 
 def test_harness_call_contract_is_documented():

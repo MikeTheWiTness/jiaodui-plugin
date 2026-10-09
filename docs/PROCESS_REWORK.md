@@ -8,6 +8,12 @@ M2 定位建议与 M3 结构化提交/依赖审查是单独实验，留在 `feat
 
 preset 保留宿主真实 `read_image`、旧报告 `write/edit` 和 `jiaodui` CLI；关闭 web、goal、plan 与 fork，限制一层 spawn，skill 只从组合包 custom 目录发现。随包子代理工具过滤名单为 `skill/read/read_image/write/edit/jiaodui`，这是当前宿主工具目录配置，不声称实现了严格子权限。依据 `.worktrees/host-inspection/tool-fs.js`：`read_image` 参数为 `file_path`，且由 filesystem 工具在 attachments 可用时注册；`skill-filesystem.js` 的 `includeDefaultRoots` 默认 true，故本 preset 显式关闭默认根；`tool-subagent.js` 支持 `toolFilter` 与 `maxDepth`，但只将 filter 转交子代理请求，不能据此证明底层能力/权限边界已收紧。需待第7章实验和新会话验收后再评估严格子权限。
 
+## 入口体积
+
+入口 `SKILL.md` 已从 14,376 码点精简到 7,970 码点，低于宿主 `tool-result-pruner` 的 8,192 阈值：命令速查、目录参数说明、写入前核对、讲义清理顺序、智能拆分步骤与派发细节移入 `references/operation-manual.md`，**流程与硬约束（六类预算、取消/权限拒绝不恢复、verify 唯一闸门、命名纪律）仍留在入口**。`tests/test_skill_docs.py` 已锁三条：入口 ≤8192 码点、入口引用的 references 文件存在、两份 skill 副本字节一致（参数与命令断言覆盖整个 skill 目录，不再只查入口）。
+
+精简的必要性有前提：修剪只在宿主压缩触发时运行（溢出，或 token 压力达到上下文窗口的 0.8；桌面 profile 为 1,000,000 上下文、约 800k token 压力线），未触发时对话保持不变；一旦触发，超阈值的工具结果会被裁成「前 4,096 + `[... tool result middle pruned ...]` + 后 1,024」。入口另加了一条兜底：见到该标记就重新加载 skill 或用 `read` 分页读取，再继续派发与交付。
+
 ## 尚未完成
 
 - Desktop profile 已安装组合包：`node_modules/dsh-jiaodui` 是指向根仓 `packages/dsh-jiaodui` 的软链。尚未验收重载后的新会话 tool catalog/profile preset、read_image 实际读图和旧报告 write 的端到端行为；配置源码与 Node 测试不等于宿主会话验收。
