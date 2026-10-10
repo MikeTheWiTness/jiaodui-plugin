@@ -83,8 +83,8 @@ def _cancel(unit: Path, manifest: Path, *, attempt_id: str, initiator: str = "us
     from jiaodui import material
 
     task_id, unit_id, _ = _ids(manifest, unit)
-    return material.record_unit_event(task_id, unit_id, phase="prepared", attempt_id=attempt_id,
-                                      cancel_initiator=initiator, cancel_reason=reason)
+    return material.record_unit_cancel(task_id, unit_id, attempt_id=attempt_id,
+                                       initiator=initiator, reason=reason)
 
 
 def _ledger(manifest: Path, unit: Path) -> dict:
@@ -112,6 +112,22 @@ def test_new_run_is_not_preauthorized_and_attempt_fails_without_policy(tmp_path,
         _recover(units[0], manifest, attempt_id="retry-without-policy", error_code="host-timeout")
     assert err.value.code == "execution-policy-required"
     assert manifest.read_bytes() == before
+
+
+def test_missing_policy_error_teaches_how_to_rea_authorize(tmp_path, monkeypatch):
+    """报错必须给出补救命令：授权随轮次失效，只说「尚未确认执行模式」会让调用方卡住。
+
+    回放实测（第 11 讲）：父代理把 execution-policy 登记在 split 之前，split 开新轮后
+    8 个并发子代理在第 1 步全部被拒；报错不含补救指引时只能靠父代理自行推断。
+    """
+    units, manifest = _material(tmp_path, monkeypatch)
+    with pytest.raises(JiaoduiError) as err:
+        _spend(units[0], manifest, attempt_id="attempt-without-policy")
+    assert err.value.code == "execution-policy-required"
+    message = str(err.value)
+    assert "jiaodui execution-policy" in message, "必须给出补救命令"
+    assert "重新登记" in message, "必须点明「需要重新登记」而不是「没配置」"
+    assert "--origin" in message and "--mode" in message
 
 
 def test_budget_categories_are_fixed_and_not_entry_questions():

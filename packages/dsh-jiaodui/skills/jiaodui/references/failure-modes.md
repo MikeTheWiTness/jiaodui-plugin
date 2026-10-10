@@ -58,11 +58,22 @@
 | 找不到单元源文（`integrity.no-source`，**error → 拒绝**） | 确认单元目录名与源文名匹配（`第N题.md` / `单元N.md`）；必要时用 `--source` 指定 |
 | 工具参数校验错误 | 若修正只是恢复 schema 所需字段、类型或 JSON 格式，最多 2 次并记 `call_correction`；不可更换题意或命令来绕过失败。超过预算停止并留痕 |
 | 计算输入解析错误 | 仅对缺字段、类型或表达式表示/传输格式做最多 2 次机械修正，记 `calc_representation`；不得更换题意、假设或目标来绕过失败。实质性计算争议按模式处理 |
+| `proposal.calc-call-mismatch`（`expression` / `result` 与记账不逐字一致） | 按报错列出的「字段=取值」逐字抄回**其中一个**参数；多参数调用（`equality` 的 `expression_a`/`expression_b`、`formula` 的 `formula`/`solve_for`）没有唯一 `expression`，**不得用 `==` 自行拼接**，要两条证据就分条记录两次调用。`result` 抄 `result.result` 原值（`dimensional` 返回对象，不是布尔）。机械修正记 `calc_representation` |
+| 读图报 `cannot read ... not found`（自行拼接目录层级） | 路径只能逐字复制 `jiaodui_unit_read` / `inspect-images` 清单里的 `read_paths`（或 `actual_read_path`），不得自行拼接、增删 `units/<材料名>/` 层级或改名。这是抄写错误，记 `call_correction`；不属 schema 错误，**不扣 `image_schema_fix`** |
+| 工具报 `not_found`：unit_id 不存在 | 读 `details.known_units`（本材料全部「单元名 → unit_id」）与 `details.suggestion` 逐字重取；不要用同一串重试。unit_id 长且易抄错，优先从 snapshot / unit-read 返回值复制 |
+| 工具报 `not_found`：`task_id` 显示为字面量 `undefined` | 这不是「材料不存在」，而是**顶层参数漏传 `task_id`/`unit_id`**（结构化工具把缺省值序列化成了该字符串）；报错会明确写出这一点。补齐顶层 `task_id` 与 `unit_id` 后重试，不要换材料或换命令 |
+| `location.original-mismatch`（位置原文与 `expected_original` 不一致） | `expected_original` 必须**逐字复制 `unit-locate` 返回的 `original` 整段**——`location_id` 已绑定源文摘要，命中的区间就是原文字段，只截取子串必然失败。报错会同时给出「实际命中的原文」与「你写的值」，照抄前者即可。要改区间内的片段时，先把 `unit-locate` 的 `phrase` 收敛到该整段、整段写 `replacement`。机械修正记 `call_correction` |
+| `proposal.schema`（建议字段缺失或包含未支持字段） | 报错会点名**缺哪个键、多哪个键**并列出允许的顶层字段，照着补齐或删除即可，不要整体重写。最常见的是把 `task_id`/`unit_id` 嵌进 `proposal` 却漏了工具顶层参数（或反之）——两处都要给。机械修正记 `call_correction` |
+| `proposal.self-check-incomplete` / `proposal.self-check` | `checks` 只接受五个字面量 `real_issue` / `replacement_semantics` / `related_coverage` / `scope_and_uncertainty` / `severity`（无问题单元为 `["no_issue_review"]`），**不要写 `real_issue: 说明…` 这类带后缀的串**；报错会逐项列出缺哪些。`status` 必须是 `passed`、`unresolved` 必须为空数组 |
+| `proposal.evidence-assumptions` / `-symbols` / `-calculation(s)` / `-images` | 报错会指明**第几项、缺哪个字段或实际收到的形状**，按位置补齐该字段即可，不要重写整份 evidence。`symbols` 无内容时写 `[]`（不是省略或 `null`）；`images`/`calculations` 只有「证据数组」或 `{"status":"not_applicable","reason":"…"}` 两种形态 |
+| `proposal-revision-stale` | 报错会给出**当前已登记 revision** 与应填值；按它 +1 提交，不要试探性加减。被拒的建议不写盘，重放同一 revision 也仍会拒绝 |
+| `execution-policy-required`（当前轮次尚未确认执行模式） | 授权**绑定轮次**：`convert`/`split`/`slice` 开新轮次（含 `--rerun`/`--replace-units`）后旧授权立即失效。这不是单元失败、不消耗恢复预算；由**父代理**重新运行 `jiaodui execution-policy <材料_dir> --mode … --origin … --work-root <W> --json` 后再重派该单元。`split` 开了新轮次时会在 `warnings` 里显式提示 |
 | 读图参数错误（missing required property / invalid arguments） | 核对当前工具 schema，DSH read_image 使用 `file_path` 而非 `path`；每次图像 schema 修正同时扣 `image_schema_fix` 和 `call_correction` 各 1 次，总共最多 2 次尝试，不可将两个额度相加。用户取消或权限拒绝立即停止 |
 | 固定读图探针失败 | 按 vision-probe.md 检查随包 assets/vision-probe.png 的绝对路径与实际图像返回；不依赖教材图片，不重复建立随机探针目录。有限修正后仍无法确认视觉能力 → 按 D14 停止校对 |
 | 实际材料图片读不到（图片显示失败、模型看不到配图） | 先确认是否透明底 PNG：合成白底后重读；完成白底合成仍读不到 → 回报失败，由主 agent 按 D14 拒绝 / 重派；不得静默跳过图片内容检查 |
 | 权限拒绝（permission denied / authorization required） | 不是参数错误，不用同一权限重复尝试；停止本次工具调用，说明需要宿主授权或用户处理，并写入失败留痕 |
 | 用户取消 / 中止 | 不自动重派、不计入技术失败次数；立即停止，保留已收集输出和现有产物，确认在途调用已取消并写入失败留痕 |
+| 取消一个单元（`jiaodui_unit_cancel`） | **只有父代理/宿主能记录取消**：单元子代理拿不到该工具，也不得用 `unit-event` 表达取消（它已不接受取消参数）。`initiator` 与 `reason` 必须配对：`user`+`user_cancel`、`parent`/`host`+`technical_timeout`/`superseded`，否则 `cancel-invalid`。**父代理技术停止后被 `dispatch-plan stop=true` 挡住时，用 `--revoke` 撤销这次技术性取消即可继续补位，不要为此 `--rerun`**（开新轮次会连带废掉在途子代理的 `expected_run_id`，触发 `run-changed`）。用户取消**不可撤销**（那是人的决定），只能由用户重新发起 |
 | 提前失败 / 读图失败 / 图片归属不明 / 批次取消 | 在相关单元写 `_校对失败.md`；记录轮次、失败阶段、完整工具错误、引用序号及正文位置、产物摘要；verify 未执行时明确写“未执行”；子 agent 无法落盘时由主 agent 兜底 |
 | 技术性崩溃 / 超时 / 限流 | 由主 agent **自动重派 1 次**（仅一次）；重派仍失败 → 写 `_校对失败.md` 标失败 |
 | 自修 3 轮仍不过 | 写 `_校对失败.md`：失败原因 + 最后一次 verify 完整输出 + 最后一次产物摘要；保留报告供排查，不进下游 |

@@ -121,6 +121,11 @@ def test_new_snapshot_cannot_reuse_old_proposal_revision(tmp_path, monkeypatch):
     with pytest.raises(BusinessError) as error:
         commit_unit_submission(task_id, unit_id, proposal, current["snapshot_sha256"])
     assert error.value.code == "proposal-revision-stale"
+    # 必须给出当前版本与应填版本：只说「必须增加1」时调用方只能试探性加减
+    message = str(error.value)
+    assert "当前已登记 revision=1" in message
+    assert "proposal_revision=2" in message
+    assert "你写的是 1" in message
     next_proposal = {**proposal, "proposal_revision": 2}
     second = commit_unit_submission(task_id, unit_id, next_proposal, current["snapshot_sha256"])
     actions = material.load(root)["runs"][-1]["actions"]

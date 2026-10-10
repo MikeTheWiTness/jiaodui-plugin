@@ -11,7 +11,7 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 - v1 范围：只做**试卷 + 讲义**主链路；批注评审、自由校对、独立解题（冻结）、classics 古籍检索均后置。学科预设 v1 只落地**高中物理**，其余 6 科见 `references/subject-matrix.md`（M5 待落地）。
 - 不做：GUI、LaTeX/PDF、自动改源文。
 
-- 入口在派发第一个单元前确认执行模式：用户已明确自动校对/无人值守时直接采用 automatic；否则将自动/交互选项与其他未确定入口项合并一次询问。确认后用 `jiaodui execution-policy <material_dir> --mode automatic|interactive --origin user|confirmed --work-root <W> --json` 写入当前轮次。后续恢复读取清单中的执行模式，不重复确认；新轮次需重新授权。默认恢复预算按工具记录的六类额度执行，用户取消、权限拒绝和实质内容争议不得自动重试。
+- 入口在派发第一个单元前确认执行模式：用户已明确自动校对/无人值守时直接采用 automatic；否则与其他未定入口项合并一次询问。顺序固定为 `convert → split → execution-policy`（split 开新轮次会使先前授权失效）。确认后用 `jiaodui execution-policy <material_dir> --mode automatic|interactive --origin user|confirmed --work-root <W> --json` 写入当前轮次。恢复时不重复确认；新轮次须重新授权。
 
 ## 2. 入口判断与前置硬门槛
 

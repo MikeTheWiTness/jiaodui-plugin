@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import unicodedata
 import zipfile
 from datetime import UTC
 from pathlib import Path
@@ -593,6 +594,8 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
                     content = content_raw.strip()
                     content = _rewrite_images(content, paper_path / qid, img_root, stats)
                     content = _preprocess_latex(content)
+                    # 无标记单元同样要还原破折线表格的列：pandoc 直接读这类块只当一列
+                    content = _convert_multiline_tables(content)
                     gid = next(gid_iter)
                     if gid in used_ids:
                         gid = max(used_ids) + 1
@@ -610,7 +613,6 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
             # 审计要把「重建正文」与单元源文逐字比对，而这两步都会改写正文字面
             audits = audit_markers(body, _read_unit_source(paper_path, qid), escaped=escaped)
             body = _rewrite_images(body, paper_path / qid, img_root, stats)
-            body = _convert_multiline_tables(body)
             # 标记字段先摘出再预处理正文：字段里的 \[ 多为待修改的转义错误，
             # 套用正文的「\[…\] → $…$」还原会打乱字段内 $ 配对（见 _mask_markers）
             body, marker_fields = _mask_markers(body, escaped=escaped)
@@ -665,7 +667,9 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
 
             unit_body = _MARKER_SLOT_RE.sub(_anchor_markup, body)
             unit_body = _textify_skipped_formulas(unit_body, skipped_anchors)
-            # 必须排在锚点注入与公式兜底之后：此时单元格文字已定型，列宽才算得准
+            # 两个表格转换都排在锚点注入之后：此时单元格文字已定型（含 openxml raw
+            # 与「改为」文本），列宽才算得准。先 multiline→grid，再处理 pipe table。
+            unit_body = _convert_multiline_tables(unit_body)
             unit_body = _gridify_marked_tables(unit_body)
             all_bodies.append(f"# {qid}\n\n{unit_body}\n\n{_PAGE_BREAK}")
 
@@ -827,6 +831,44 @@ def _pipe_row(line: str) -> list[str] | None:
     return cells
 
 
+def _display_width(text: str) -> int:
+    """按显示宽度计数：东亚宽/全角字符记 2，其余记 1。
+
+    pandoc 的 grid table 用显示宽度判定列边界（实测 pandoc 3.9：`对`/`，`/`（`/`－`
+    记 2，`×`/`μ`/`α`/`①` 记 1）。用 `len()` 按码点补齐会让 `|` 与 `+---+` 错位，
+    pandoc 随即把整行并成一格（表格静默塌掉，闸门看不出来）。
+    """
+    return sum(2 if unicodedata.east_asian_width(char) in "WF" else 1 for char in text)
+
+
+def _pad_display(text: str, width: int) -> str:
+    """按显示宽度右侧补空格到 `width`（已超宽时原样返回）。"""
+    return text + " " * max(0, width - _display_width(text))
+
+
+def _pipe_cells_keeping_anchors(line: str) -> list[str]:
+    """按未转义竖线切出单元格，锚点 raw 留在它原本的位置上。
+
+    与 `_pipe_row` 的区别是**不先摘锚点**：先摘再按竖线计数把 raw 追加到格首/格尾，
+    会把单元格内的锚点顶到格尾（实测 `前{start}木板{end}后` → `前木板后{start}{end}`，
+    批注范围变成空串）。锚点落在整行首/整行尾时（标记字段就是整条表格行）该段只有
+    raw、没有文字，并入相邻格，避免多出一列。
+    """
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", stripped)]
+    while len(cells) > 1 and not _ANCHOR_RAW_RE.sub("", cells[0]).strip():
+        cells[1] = cells[0] + cells[1]
+        cells.pop(0)
+    while len(cells) > 1 and not _ANCHOR_RAW_RE.sub("", cells[-1]).strip():
+        cells[-2] = cells[-2] + cells[-1]
+        cells.pop()
+    return cells
+
+
 def _gridify_marked_tables(text: str) -> str:
     """含锚点 raw 的 pipe table → grid table。
 
@@ -863,42 +905,38 @@ def _gridify_marked_tables(text: str) -> str:
             continue
         rows: list[list[str]] = []
         for line in block:
-            cells = _pipe_row(_ANCHOR_RAW_RE.sub("", line))
-            if not cells:  # None 或分隔行
+            if not _pipe_row(_ANCHOR_RAW_RE.sub("", line)):  # None 或分隔行
                 continue
-            for match in _ANCHOR_RAW_RE.finditer(line):
-                before = len(re.findall(r"(?<!\\)\|", line[:match.start()]))
-                if before == 0:                     # 行首锚点：并入第一个单元格
-                    cells[0] = match.group(0) + cells[0]
-                elif before >= len(cells) + 1:      # 行尾锚点：并入最后一个单元格
-                    cells[-1] = cells[-1] + match.group(0)
-                else:                               # 单元格内锚点：留在本单元格
-                    cells[before - 1] = cells[before - 1] + match.group(0)
-            rows.append(cells)
+            rows.append(_pipe_cells_keeping_anchors(line))
         if not rows:
             out.extend(block)
             index = end
             continue
         width = max(len(row) for row in rows)
         rows = [row + [""] * (width - len(row)) for row in rows]
-        widths = [max(len(row[column]) for row in rows) for column in range(width)]
+        widths = [max(_display_width(row[column]) for row in rows) for column in range(width)]
 
         def border(character: str = "-") -> str:
             return "+" + "+".join(character * (item + 2) for item in widths) + "+"
 
         out.append(border())
         for row in rows:
-            out.append("| " + " | ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)) + " |")
+            out.append("| " + " | ".join(_pad_display(cell, widths[i]) for i, cell in enumerate(row)) + " |")
             out.append(border())
         index = end
     return "\n".join(out)
 
 
 def _convert_multiline_tables(text: str) -> str:
-    """多行表格（长 --- 线包裹，pandoc multiline table）→ grid table。
+    """多行表格（长 --- 线包裹）→ grid table。
 
-    pandoc 的 multiline table 单元格会丢弃 openxml raw；grid table 正常。
-    短 --- 是 markdown 分隔线，不动。
+    这类块是 pandoc 对源材料表格的 Markdown 输出：整行破折线只算一条边框，
+    单元格靠 2 个以上空格分隔，pandoc 直接读会当成只有一列；单元格里的 openxml
+    raw 也会丢。转成 grid table 才能既保住列又保住批注锚点。短 --- 是 markdown
+    分隔线，不动。
+
+    必须在锚点注入之后调用：列宽要按最终文字（含 openxml raw 与「改为」文本）
+    计算，否则标记被替换后行宽变化，`|` 与 `+---+` 错位、整表并成一格。
     """
     lines = text.split("\n")
     out = []
@@ -933,18 +971,18 @@ def _convert_multiline_tables(text: str) -> str:
                     widths = [0] * ncols
                     for r in rows:
                         for ci, c in enumerate(r):
-                            widths[ci] = max(widths[ci], len(c))
+                            widths[ci] = max(widths[ci], _display_width(c))
 
                     def border(ch):
                         return "+" + "+".join(ch * (w + 2) for w in widths) + "+"
 
                     out.append(border("-"))
                     out.append("| " + " | ".join(
-                        c.ljust(widths[ci]) for ci, c in enumerate(rows[0])) + " |")
+                        _pad_display(c, widths[ci]) for ci, c in enumerate(rows[0])) + " |")
                     out.append(border("="))
                     for r in rows[1:]:
                         out.append("| " + " | ".join(
-                            c.ljust(widths[ci]) for ci, c in enumerate(r)) + " |")
+                            _pad_display(c, widths[ci]) for ci, c in enumerate(r)) + " |")
                         out.append(border("-"))
                     i = end + 1
                     continue

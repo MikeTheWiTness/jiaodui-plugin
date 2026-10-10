@@ -280,10 +280,19 @@ def cmd_unit_event(args: argparse.Namespace) -> int:
 
     payload = record_unit_event(args.task_id, args.unit_id, phase=args.phase,
                                 attempt_id=args.attempt_id, agent_id=args.agent_id,
-                                cancel_initiator=args.cancel_initiator,
-                                cancel_reason=args.cancel_reason,
                                 expected_run_id=args.expected_run_id)
     _json_out({"ok": True, "event": payload})
+    return ExitCode.OK
+
+
+def cmd_unit_cancel(args: argparse.Namespace) -> int:
+    from .material import record_unit_cancel
+
+    payload = record_unit_cancel(args.task_id, args.unit_id, attempt_id=args.attempt_id,
+                                 initiator=args.initiator, reason=args.reason,
+                                 agent_id=args.agent_id,
+                                 expected_run_id=args.expected_run_id, revoke=args.revoke)
+    _json_out({"ok": True, "cancellation": payload})
     return ExitCode.OK
 
 
@@ -644,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--window", type=int, default=8, help="滑动窗口上限，默认 8")
     sp.set_defaults(func=cmd_dispatch_plan)
 
-    sp = sub.add_parser("unit-event", help="记录单元阶段、attempt和取消来源")
+    sp = sub.add_parser("unit-event", help="记录单元阶段心跳（不含取消；取消用 unit-cancel）")
     sp.add_argument("--task-id", required=True)
     sp.add_argument("--unit-id", required=True)
     sp.add_argument("--phase", choices=["prepared", "read", "images", "calculated", "proposed",
@@ -652,10 +661,21 @@ def build_parser() -> argparse.ArgumentParser:
                                         "deliverable"], required=True)
     sp.add_argument("--attempt-id", required=True)
     sp.add_argument("--agent-id")
-    sp.add_argument("--cancel-initiator", choices=["user", "parent", "host"])
-    sp.add_argument("--cancel-reason", choices=["user_cancel", "technical_timeout", "superseded"])
     sp.add_argument("--expected-run-id", help="CAS 防护：与当前轮次不一致即 run-changed")
     sp.set_defaults(func=cmd_unit_event)
+
+    sp = sub.add_parser("unit-cancel", help="记录或撤销一次显式取消（只应由父代理/宿主调用）")
+    sp.add_argument("--task-id", required=True)
+    sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--attempt-id", required=True)
+    sp.add_argument("--initiator", choices=["user", "parent", "host"], required=True)
+    sp.add_argument("--reason", choices=["user_cancel", "technical_timeout", "superseded"],
+                    required=True)
+    sp.add_argument("--agent-id")
+    sp.add_argument("--revoke", action="store_true",
+                    help="撤销该单元当前生效的取消（用户取消不可撤销）")
+    sp.add_argument("--expected-run-id", help="CAS 防护：与当前轮次不一致即 run-changed")
+    sp.set_defaults(func=cmd_unit_cancel)
 
     sp = sub.add_parser("unit-schema", help="输出结构化建议schema v2")
     sp.set_defaults(func=cmd_unit_schema)

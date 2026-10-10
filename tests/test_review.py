@@ -109,6 +109,40 @@ def test_latest_rejection_revokes_acceptance_and_old_parse_cannot_bypass(tmp_pat
     assert not build_report(unit.parent).complete
 
 
+def test_parent_review_gates_completion_and_redispatch(tmp_path, monkeypatch):
+    """回归（P1）：提交只算技术登记；复核前与被退回都要回到待派发集合。
+
+    修复前 `register_locked` 只看 registered+verify，提交后立刻 `run.status=completed`、
+    单元报「已完成」；父代理再 `needs_revision` 也不回退，`dispatch-plan` 从此不再
+    派发该单元——断点恢复与自动补位都会漏掉它。
+    """
+    from jiaodui.status import scan_status
+
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+
+    pending = scan_status(unit.parent)
+    assert [item.state for item in pending.units] == ["本轮未完成"]
+    assert "父复核" in pending.units[0].reason
+    assert material.load(root)["runs"][-1]["status"] == "in_progress"
+    assert material.dispatch_plan(task_id)["dispatch"] == [unit.name]
+
+    current = read_unit_snapshot(task_id, unit_id)
+    record_parent_review(task_id, unit_id, expected_snapshot_sha256=current["snapshot_sha256"],
+                         decision="accepted", reviewer_id="parent")
+    assert [item.state for item in scan_status(unit.parent).units] == ["已完成"]
+    assert material.load(root)["runs"][-1]["status"] == "completed"
+    assert material.dispatch_plan(task_id)["dispatch"] == []
+
+    record_parent_review(task_id, unit_id, expected_snapshot_sha256=current["snapshot_sha256"],
+                         decision="needs_revision", reviewer_id="parent", issue="关联用语需复查")
+    rejected = scan_status(unit.parent)
+    assert [item.state for item in rejected.units] == ["本轮未完成"]
+    assert material.load(root)["runs"][-1]["status"] == "in_progress"
+    assert material.dispatch_plan(task_id)["dispatch"] == [unit.name], "退回单元必须重新可派发"
+
+
 def test_parent_review_cli_accepts_current_registered_version(tmp_path, monkeypatch):
     import subprocess
     import sys

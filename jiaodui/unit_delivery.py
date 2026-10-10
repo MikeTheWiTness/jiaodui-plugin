@@ -166,7 +166,13 @@ def commit_unit_submission(task_id: str, unit_id: str, proposal: dict,
                 raise BusinessError("当前数据结构无效，不能静默覆盖", code="data-invalid")
             if (previous_data.get("schema_version") == 2
                     and proposal["proposal_revision"] != previous_data.get("proposal_revision", 0) + 1):
-                raise BusinessError("新建议revision必须在当前版本基础上增加1", code="proposal-revision-stale")
+                # 不给出当前版本号时，调用方只能试探性加减。实测有子代理连撞 2 次。
+                current_revision = previous_data.get("proposal_revision", 0)
+                raise BusinessError(
+                    f"新建议revision必须在当前版本基础上增加1：当前已登记 revision="
+                    f"{current_revision}，本次必须提交 proposal_revision={current_revision + 1}，"
+                    f"你写的是 {proposal['proposal_revision']}",
+                    code="proposal-revision-stale")
         report_bytes = candidate.text.encode("utf-8")
         parsed: dict[str, Any] = dict(checked["parsed"])
         parsed.update({

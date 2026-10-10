@@ -87,13 +87,68 @@ def test_silent_in_flight_unit_becomes_stale(tmp_path, monkeypatch):
 
 def test_cancelled_unit_is_not_in_flight_and_reports_origin(tmp_path, monkeypatch):
     root, task_id, unit_id = _unit(tmp_path, monkeypatch)
-    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1",
-                               cancel_initiator="parent", cancel_reason="technical_timeout")
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1")
+    material.record_unit_cancel(task_id, unit_id, attempt_id="a1",
+                                initiator="parent", reason="technical_timeout")
     _age_last_event(root, unit_id, 10_000)
     entry = material.unit_progress(task_id, unit_id=unit_id, stale_after_seconds=60)["units"][0]
     assert entry["in_flight"] is False, "已取消的单元不得再被判为在途或超时"
     assert entry["cancelled"]["initiator"] == "parent"
     assert entry["cancelled"]["reason"] == "technical_timeout"
+
+
+def test_unit_event_has_no_cancellation_parameters():
+    """取消不再挂在 unit-event 上：该工具只记阶段心跳。
+
+    第 12 讲实测：取消作为两个没有说明的可选 enum 暴露时，单元子代理在正常的
+    `prepared` 心跳里顺手填了 `user` + `user_cancel`，在 8 个单元上伪造出约 29 条
+    「用户取消」；`dispatch-plan` 只要有取消记录就永久 `stop=true`，父代理只能靠
+    `--rerun` 逃出，又引发 `run-changed` 连锁并让整轮无交付。
+    """
+    import inspect
+
+    params = inspect.signature(material.record_unit_event).parameters
+    assert "cancel_initiator" not in params
+    assert "cancel_reason" not in params
+
+
+def test_cancel_reports_actor_and_revoke_releases_dispatch_stop(tmp_path, monkeypatch):
+    """技术性取消可撤销：父代理不必用 --rerun（那会连带废掉在途子代理的轮次）。"""
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_cancel(task_id, unit_id, attempt_id="a1", agent_id="parent",
+                                initiator="parent", reason="technical_timeout")
+    stopped = material.dispatch_plan(task_id, window=8)
+    assert stopped["stop"] is True
+    assert stopped["dispatch"] == []
+    assert stopped["cancelled"][0]["attempt_id"] == "a1"
+    assert stopped["cancelled"][0]["agent_id"] == "parent"
+
+    material.record_unit_cancel(task_id, unit_id, attempt_id="a1-revoke", agent_id="parent",
+                                initiator="parent", reason="technical_timeout", revoke=True)
+    released = material.dispatch_plan(task_id, window=8)
+    assert released["stop"] is False
+    assert released["dispatch"], "撤销技术性取消后必须恢复补位"
+    assert material.unit_progress(task_id, unit_id=unit_id)["units"][0]["cancelled"] is None
+
+
+def test_user_cancel_cannot_be_revoked_by_parent(tmp_path, monkeypatch):
+    """用户取消是人的决定，父代理不得代撤销。"""
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_cancel(task_id, unit_id, attempt_id="a1",
+                                initiator="user", reason="user_cancel")
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_cancel(task_id, unit_id, attempt_id="a1-revoke",
+                                    initiator="parent", reason="technical_timeout", revoke=True)
+    assert error.value.code == "cancel-invalid"
+    assert material.dispatch_plan(task_id, window=8)["stop"] is True, "被拒后原取消必须仍然生效"
+
+
+def test_revoke_without_standing_cancel_is_rejected(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_cancel(task_id, unit_id, attempt_id="a1",
+                                    initiator="parent", reason="superseded", revoke=True)
+    assert error.value.code == "cancel-invalid"
 
 
 def test_progress_is_read_only(tmp_path, monkeypatch):
@@ -116,6 +171,29 @@ def test_unknown_task_or_unit_is_rejected(tmp_path, monkeypatch):
     assert unknown_unit.value.code == "not_found"
 
 
+def test_unrelated_broken_manifest_does_not_block_queries(tmp_path, monkeypatch):
+    """回归（P2）：无关材料的损坏清单不得阻断目标材料的只读查询。
+
+    修复前 `_material_by_task` / `find_unit_by_id` 逐份 load，任何一份坏 JSON 都会
+    让正常 task 的 unit-progress 报那个无关目录的 invalid-manifest。损坏材料仍要
+    留痕：查不到的 task 会把不可读清单列进 details。
+    """
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    broken = root.parent / "000无关"
+    broken.mkdir()
+    (broken / material.MANIFEST).write_text("{ 坏掉的 JSON", encoding="utf-8")
+
+    assert material.unit_progress(task_id)["task_id"] == task_id
+    assert material.find_unit_by_id(task_id, unit_id)[1].name == "单元1"
+    assert material.dispatch_plan(task_id)["ok"] is True
+
+    with pytest.raises(NotFoundError) as unknown_task:
+        material.unit_progress("f" * 32)
+    unreadable = unknown_task.value.details["unreadable_materials"]
+    assert [item["material_dir"] for item in unreadable] == [str(broken)]
+    assert unreadable[0]["code"] == "invalid-manifest"
+
+
 # ---- 滑动窗口判据（P5 第 3 项中可由 core 判定的部分） ----
 
 def test_dispatch_plan_fills_empty_slots_without_duplicating_in_flight(tmp_path, monkeypatch):
@@ -134,8 +212,9 @@ def test_dispatch_plan_fills_empty_slots_without_duplicating_in_flight(tmp_path,
 
 def test_dispatch_plan_stops_after_explicit_cancellation(tmp_path, monkeypatch):
     root, task_id, unit_id = _unit(tmp_path, monkeypatch)
-    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1",
-                               cancel_initiator="parent", cancel_reason="technical_timeout")
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1")
+    material.record_unit_cancel(task_id, unit_id, attempt_id="a1",
+                                initiator="parent", reason="technical_timeout")
     plan = material.dispatch_plan(task_id, window=8)
     assert plan["stop"] is True
     assert plan["dispatch"] == []
@@ -248,3 +327,49 @@ def test_cli_unit_event_accepts_and_forwards_expected_run_id(tmp_path, monkeypat
     ok = run("--expected-run-id", fresh)
     assert ok.returncode == 0, ok.stderr
     assert json.loads(ok.stdout)["event"]["phase"] == "read"
+
+
+def test_cli_unit_cancel_records_and_revokes_end_to_end(tmp_path, monkeypatch):
+    """端到端：`unit-event` 不再接受取消参数，取消走独立的 `unit-cancel`。
+
+    同一条教训：Node 行为测试只验插件拼的 argv、Python 测试直接用 core API，
+    两者都验不到「CLI 解析器是否真的接受/拒绝这些参数」。这里用真子进程兜住。
+    """
+    import json
+    import os
+    import subprocess
+    import sys
+
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+
+    def run(*argv):
+        return subprocess.run(
+            [sys.executable, "-m", "jiaodui", *argv, "--json"],
+            capture_output=True, text=True, env=os.environ.copy(),
+            cwd=str(Path(__file__).resolve().parents[1]))
+
+    # 心跳不再携带取消：旧写法必须被解析器拒绝，而不是静默记成一次取消
+    legacy = run("unit-event", "--task-id", task_id, "--unit-id", unit_id,
+                 "--phase", "prepared", "--attempt-id", "cli-1",
+                 "--cancel-initiator", "user", "--cancel-reason", "user_cancel")
+    assert legacy.returncode == 2, legacy.stderr
+    assert material.dispatch_plan(task_id, window=8)["stop"] is False, "旧写法不得伪造取消"
+
+    bad = run("unit-cancel", "--task-id", task_id, "--unit-id", unit_id,
+              "--attempt-id", "cli-1", "--initiator", "user", "--reason", "superseded")
+    assert bad.returncode == 6, bad.stderr
+    assert json.loads(bad.stdout or bad.stderr)["error"]["code"] == "cancel-invalid"
+
+    recorded = run("unit-cancel", "--task-id", task_id, "--unit-id", unit_id,
+                   "--attempt-id", "cli-1", "--initiator", "parent",
+                   "--reason", "technical_timeout")
+    assert recorded.returncode == 0, recorded.stderr
+    assert json.loads(recorded.stdout)["cancellation"]["initiator"] == "parent"
+    assert material.dispatch_plan(task_id, window=8)["stop"] is True
+
+    revoked = run("unit-cancel", "--task-id", task_id, "--unit-id", unit_id,
+                  "--attempt-id", "cli-2", "--initiator", "parent",
+                  "--reason", "technical_timeout", "--revoke")
+    assert revoked.returncode == 0, revoked.stderr
+    assert json.loads(revoked.stdout)["cancellation"]["revoked"] is True
+    assert material.dispatch_plan(task_id, window=8)["stop"] is False

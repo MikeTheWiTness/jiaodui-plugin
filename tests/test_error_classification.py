@@ -121,6 +121,16 @@ def test_recovery_rejects_category_that_contradicts_the_code(tmp_path, monkeypat
         material.record_recovery_attempt(task_id, unit_id, "report_repair", fingerprint,
                                          attempt_id="e4", error_code="usage")
     assert error.value.code == "recovery-category-mismatch"
+    # 报错必须给出可机械修正的目标值：第 12 讲实测父代理批量填错类别，4 次调用全部作废
+    assert error.value.details["expected_category"] == "call_correction"
+    assert error.value.details["provided_category"] == "report_repair"
+    assert error.value.details["error_code"] == "usage"
+
+    # 省略 category 即按错误码派生（这才是错误驱动恢复的正常写法）
+    recorded = material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
+                                                attempt_id="e4b", error_code="usage")
+    assert recorded["category"] == "call_correction"
+    assert recorded["charged"] == ["call_correction"]
 
 
 def test_recovery_rejects_unclassified_code_and_cancel(tmp_path, monkeypatch):

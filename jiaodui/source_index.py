@@ -26,6 +26,16 @@ def source_digest(source_text: str) -> str:
     return hashlib.sha256(source_text.encode("utf-8")).hexdigest()
 
 
+def _brief(value: str, limit: int = 120) -> str:
+    """诊断用的短表示：带引号，超长截断并标出真实长度。
+
+    错误信息会进入模型上下文，必须给足定位信息又不能把整段正文灌进去。
+    """
+    if len(value) <= limit:
+        return repr(value)
+    return f"{value[:limit]!r}…（共 {len(value)} 字符）"
+
+
 def _location_id(source_sha256: str, start: int, end: int) -> str:
     raw = json.dumps({"v": INDEX_VERSION, "h": source_sha256, "s": start, "e": end},
                      separators=(",", ":"), sort_keys=True).encode("ascii")
@@ -126,7 +136,15 @@ def resolve_location(source_text: str, source_sha256: str, location_id: str,
         raise LocationError("location.out-of-range", "位置区间越界或为空")
     original = source_text[start:end]
     if original != expected_original:
-        raise LocationError("location.original-mismatch", "位置原文与 expected_original 不一致")
+        # 只报「不一致」会让调用方无从修正：这里必须同时给出**实际命中的原文**与
+        # **它写入的期望值**。实测（第 11 讲 单元3）同一处子串误用连撞 20 次提交，
+        # 最终放弃该条修改并改报「无问题」，造成静默漏报。
+        raise LocationError(
+            "location.original-mismatch",
+            f"位置原文与 expected_original 不一致：该 location_id 命中的原文是 {_brief(original)}，"
+            f"你写的 expected_original 是 {_brief(expected_original)}；"
+            f"expected_original 必须逐字复制 unit-locate 返回的 original 整段（不要只截取子串），"
+            f"要改的是子串就先把 unit-locate 的 phrase 收敛到该整段")
     line, column = _line_column(source_text, start)
     return {"start": start, "end": end, "line": line, "column": column,
             "original": original, "paragraph_id": _paragraph_id(source_text, start)}

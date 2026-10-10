@@ -236,6 +236,21 @@ def _finalize_record(record: dict) -> dict:
     return record
 
 
+def _read_paths(references: list[dict]) -> list[str]:
+    """按正文顺序去重的实际读取路径清单，供子 agent 逐字复制调用读图工具。
+
+    路径由拆分阶段决定；子 agent 自行拼接目录层级会指向不存在的文件
+    （回放实测：漏掉 `units/<材料名>/` 一层导致 read_image not found）。
+    同一文件被多处引用时只列一次，避免宿主重复读同一张图。
+    """
+    paths: list[str] = []
+    for record in references:
+        path = record.get("actual_read_path")
+        if isinstance(path, str) and path and path not in paths:
+            paths.append(path)
+    return paths
+
+
 def inspect_unit_images(unit_dir: str | Path, *, source_path: str | Path | None = None,
                         allow_legacy_transparent: bool = False) -> dict:
     """返回单元图片清单；引用按正文出现位置排序，重复引用不去重。
@@ -247,7 +262,7 @@ def inspect_unit_images(unit_dir: str | Path, *, source_path: str | Path | None 
     unit = Path(unit_dir).resolve()
     source = Path(source_path).resolve() if source_path is not None else find_source_md(unit)
     result = {"ok": True, "unit": str(unit), "source": str(source.resolve()) if source else None,
-              "references": [], "extra_images": [], "errors": [], "warnings": [],
+              "references": [], "read_paths": [], "extra_images": [], "errors": [], "warnings": [],
               "supported_syntax": ["![alt](path)"]}
     if source is None or not source.is_file():
         result["ok"] = False
@@ -396,6 +411,7 @@ def inspect_unit_images(unit_dir: str | Path, *, source_path: str | Path | None 
         if result["extra_images"]:
             result["warnings"].append({"code": "extra_images", "message": "images/ 中存在未被正文引用的图片，未加入读图任务",
                                         "paths": [x["path"] for x in result["extra_images"]]})
+    result["read_paths"] = _read_paths(result["references"])
     return result
 
 

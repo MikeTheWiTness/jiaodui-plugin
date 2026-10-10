@@ -70,6 +70,32 @@ def test_transparent_image_has_explicit_white_background_binding(tmp_path):
         assert image.getpixel((0, 0)) != (255, 0, 0)
 
 
+def test_read_paths_are_copy_ready_and_deduplicated(tmp_path):
+    """回放根因：子 agent 自行拼接目录层级导致 read_image not found。
+
+    清单必须给出可直接复制、按正文顺序去重的绝对读取路径；透明图给白底副本，
+    重复引用同一文件只列一次。
+    """
+    unit = _unit(tmp_path, "![透明](./images/transparent.png) ![不透明](./images/opaque.png)\n"
+                           "重复 ![透明](./images/transparent.png)\n")
+    _png(unit / "images/transparent.png", (255, 0, 0), alpha=80)
+    _png(unit / "images/opaque.png", (0, 0, 255))
+
+    prepared = prepare_white_backgrounds(unit / "images")
+    result = inspect_unit_images(unit)
+
+    assert result["read_paths"] == [prepared[0]["white_background"], str((unit / "images/opaque.png").resolve())]
+    assert result["read_paths"] == list(dict.fromkeys(
+        ref["actual_read_path"] for ref in result["references"] if ref.get("actual_read_path")))
+    assert all(Path(path).is_file() for path in result["read_paths"])
+
+
+def test_read_paths_stay_empty_when_no_reference_is_readable(tmp_path):
+    unit = _unit(tmp_path, "![缺](./images/missing.png)\n")
+    result = inspect_unit_images(unit)
+    assert result["read_paths"] == []
+
+
 def test_unsupported_html_image_is_reported(tmp_path):
     unit = _unit(tmp_path, '<img src="./images/p.png">\n')
     result = inspect_unit_images(unit)

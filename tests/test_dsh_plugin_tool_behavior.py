@@ -110,6 +110,15 @@ await prepare.execute({operation:'status',path:'/tmp/units'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','status','/tmp/units']);
 await prepare.execute({operation:'precheck-split',path:'/tmp/units'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','precheck-split','/tmp/units']);
+// 第 12 讲实测：split 的 rerun/replace-units/adopt-units 原先只有 CLI 有，父代理被迫退回
+// bash（猜绝对路径、绕过 --work-root 校验）才能开新轮次。这里锁住插件的映射。
+assert.ok(prepare.parameters.properties.rerun,'task_prepare 缺 rerun');
+assert.ok(prepare.parameters.properties.replace_units,'task_prepare 缺 replace_units');
+assert.ok(prepare.parameters.properties.adopt_units,'task_prepare 缺 adopt_units');
+await prepare.execute({operation:'split',path:'/tmp/a_raw.md',subject:'高中物理',mode:'lecture',rerun:true,replace_units:true},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','split','/tmp/a_raw.md','--subject','高中物理','--mode','lecture','--rerun','--replace-units']);
+await prepare.execute({operation:'split',path:'/tmp/a_raw.md',subject:'高中物理',mode:'lecture',adopt_units:true},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','split','/tmp/a_raw.md','--subject','高中物理','--mode','lecture','--adopt-units']);
 await prepare.execute({operation:'execution-policy',path:'/tmp/mat',execution_mode:'automatic',origin:'user'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','execution-policy','/tmp/mat','--mode','automatic','--origin','user']);
 // P5b：心跳查询必须只读，且 stale 阈值可按次调整
@@ -117,8 +126,21 @@ assert.deepEqual(requests.at(-1).argv.slice(1),['--json','execution-policy','/tm
 const unitEvent=registered.get('jiaodui_unit_event');
 assert.equal(unitEvent.parameters.additionalProperties,false);
 assert.ok(unitEvent.parameters.properties.expected_run_id,'unit-event 缺 expected_run_id');
+// 第 12 讲实测：取消字段曾挂在 unit-event 上，子代理在正常心跳里填 user/user_cancel 伪造取消
+assert.ok(!('cancel_initiator' in unitEvent.parameters.properties),'unit-event 不得再暴露 cancel_initiator');
+assert.ok(!('cancel_reason' in unitEvent.parameters.properties),'unit-event 不得再暴露 cancel_reason');
 await unitEvent.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),phase:'read',attempt_id:'t1',expected_run_id:'r'.repeat(32)},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-event','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--phase','read','--attempt-id','t1','--expected-run-id','r'.repeat(32)]);
+// 取消拆成独立工具：只由父代理调用，preset 的 toolFilter 对子代理屏蔽
+const unitCancel=registered.get('jiaodui_unit_cancel');
+assert.equal(unitCancel.parameters.additionalProperties,false);
+assert.deepEqual(unitCancel.parameters.required,['task_id','unit_id','attempt_id','initiator','reason']);
+assert.deepEqual(unitCancel.parameters.properties.initiator.enum,['user','parent','host']);
+assert.deepEqual(unitCancel.parameters.properties.reason.enum,['user_cancel','technical_timeout','superseded']);
+await unitCancel.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t1',initiator:'parent',reason:'technical_timeout'},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-cancel','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t1','--initiator','parent','--reason','technical_timeout']);
+await unitCancel.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t2',initiator:'parent',reason:'technical_timeout',revoke:true},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-cancel','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t2','--initiator','parent','--reason','technical_timeout','--revoke']);
 const progress=registered.get('jiaodui_unit_progress');
 assert.equal(progress.parameters.additionalProperties,false);
 assert.deepEqual(progress.parameters.required,['task_id']);

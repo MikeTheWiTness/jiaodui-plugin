@@ -103,6 +103,21 @@ def test_preset_uses_standard_native_tools_and_keeps_parallel_delegation():
     assert plugins["tool-todo"]["config"]["allowParallelInProgress"] is True
 
 
+def test_unit_subagents_cannot_cancel_their_own_unit():
+    """单元子代理拿不到 `jiaodui_unit_cancel`：取消只由父代理/宿主记录。
+
+    第 12 讲实测：取消曾作为 `unit-event` 的两个可选 enum 暴露，单元子代理在正常
+    `prepared` 心跳里填 `user`/`user_cancel`，在 8 个单元上伪造约 29 条用户取消；
+    `dispatch-plan` 只要有取消记录就永久 `stop=true`，父代理只能 `--rerun` 逃出，
+    又让在途子代理的 `expected_run_id` 全部失效（`run-changed`），整轮最终无交付。
+    """
+    plugins = {p["id"]: p for p in _preset_config()["plugins"]}
+    delegation = {p["id"]: p for p in plugins["delegation"]["config"]}
+    child_tools = set(delegation["tool-subagent"]["config"]["toolFilter"]["allow"])
+    assert "jiaodui_unit_event" in child_tools, "阶段心跳仍要给子代理"
+    assert "jiaodui_unit_cancel" not in child_tools
+
+
 def test_preset_mounts_bundled_skill_dir_and_native_tool():
     plugins = {p["id"]: p for p in _preset_config()["plugins"]}
     assert plugins["skill-filesystem"]["config"]["includeDefaultRoots"] is False

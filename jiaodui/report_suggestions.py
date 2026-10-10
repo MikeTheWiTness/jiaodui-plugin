@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -120,15 +121,29 @@ def _validate_first_pass_evidence(evidence: dict) -> set[str]:
     if not isinstance(assumptions, list) or not assumptions:
         raise _error("proposal.evidence-assumptions", "必须记录首轮假设/核验依据")
     identities: set[str] = set()
-    for entry in assumptions:
-        if (not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"]
-                or not isinstance(entry.get("text"), str) or not entry["text"].strip()
-                or not isinstance(entry.get("source_locations"), list)):
-            raise _error("proposal.evidence-assumptions", "假设证据需含id、text和source_locations")
+    for index, entry in enumerate(assumptions):
+        # 逐项点名缺哪个字段：只说「需含 id/text/source_locations」时，调用方无法判断
+        # 是第几项、哪个字段不合格，只能整体重写。
+        problems: list[str] = []
+        if not isinstance(entry, dict):
+            problems.append("不是对象")
+        else:
+            if not isinstance(entry.get("id"), str) or not entry["id"]:
+                problems.append("id 缺失或为空")
+            if not isinstance(entry.get("text"), str) or not entry["text"].strip():
+                problems.append("text 缺失或为空")
+            if not isinstance(entry.get("source_locations"), list):
+                problems.append("source_locations 缺失或不是数组")
+        if problems:
+            raise _error("proposal.evidence-assumptions",
+                         f"假设证据需含id、text和source_locations；"
+                         f"assumptions[{index}] 有问题：" + "、".join(problems))
         identities.add(entry["id"])
     symbols = evidence.get("symbols")
     if not isinstance(symbols, list):
-        raise _error("proposal.evidence-symbols", "symbols须显式列出或为空数组")
+        raise _error("proposal.evidence-symbols",
+                     "symbols须显式列出或为空数组（无符号时写 []，不要省略或写 null）；"
+                     f"实际收到：{_shape_of(symbols)}")
     images = evidence.get("images")
     calculations = evidence.get("calculations")
     item_fields = {
@@ -170,6 +185,65 @@ def _contains_string(value: Any, expected: str) -> bool:
     return False
 
 
+def _string_leaves(value: Any, prefix: str = "") -> list[tuple[str, str]]:
+    """列出参数里的全部字符串叶子（字段路径, 值），供绑定失败时给出可照抄的候选。
+
+    多参数调用（如 `equality` 的 expression_a / expression_b）没有唯一的
+    `expression` 字段；只报「不逐字一致」会让子 agent 反复试参数，因此这里把
+    每个可逐字填写的取值连字段名一起列出。
+    """
+    if isinstance(value, str):
+        return [(prefix or "value", value)]
+    if isinstance(value, dict):
+        leaves: list[tuple[str, str]] = []
+        for key, child in value.items():
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            leaves.extend(_string_leaves(child, child_prefix))
+        return leaves
+    if isinstance(value, list):
+        leaves = []
+        for index, child in enumerate(value):
+            leaves.extend(_string_leaves(child, f"{prefix}[{index}]" if prefix else f"[{index}]"))
+        return leaves
+    return []
+
+
+_NON_EXPRESSION_PARAMS = frozenset({
+    "task_id", "unit_id", "subject", "variables", "domain", "dim_operation",
+    "operation", "target_units", "quantities", "unit_definitions", "substitutions",
+})
+_EXPRESSION_PARAM_HINTS = ("expression", "formula", "equation")
+
+
+def _expression_candidates(params: Any) -> list[tuple[str, str]]:
+    """挑出可填进 `expression` 的字符串参数：优先表达式字段，排除身份/元数据字段。
+
+    身份字段（task_id / unit_id / subject 等）与元数据子树（unit_definitions /
+    substitutions）虽然也存在于 params 里，列出来只会诱导子 agent 抄错字段；
+    多参数调用优先列出 expression_* / formula 这类字段。
+    """
+    leaves = [(path, value) for path, value in _string_leaves(params)
+              if not any(segment in _NON_EXPRESSION_PARAMS
+                         for segment in re.split(r"\.|\[", path))]
+    preferred = [(path, value) for path, value in leaves
+                 if any(hint in path.lower() for hint in _EXPRESSION_PARAM_HINTS)]
+    return preferred or leaves
+
+
+def _calc_expression_mismatch(call: dict, expression: str) -> str:
+    """`expression` 与记账参数不逐字一致时的诊断：列出可照抄的取值并说明多参数调用写法。"""
+    candidates = _expression_candidates(call.get("params"))
+    listed = "、".join(f"{path}={value!r}" for path, value in candidates)
+    message = (f"expression 必须与调用时传入的某个参数值逐字一致（含空格与大小写）；"
+               f"你写的是 {expression!r}，该调用记录的可用取值是 {listed or '（该调用没有可用的字符串参数）'}")
+    values = [value for _, value in candidates]
+    if len(values) >= 2 and all(value in expression for value in values[:2]):
+        joined = " 与 ".join(repr(value) for value in values[:2])
+        message += (f"；你像是把 {joined} 拼成了一条。多参数调用请改成其中一个参数的"
+                    f"原样值（如 {values[0]!r}），或按字段分条记录两次核验，不要用 '==' 自行拼接")
+    return message
+
+
 def _validate_calculation_evidence(evidence: dict, calls: list[dict] | None, *, task_id: str,
                                   unit_id: str, run_id: str, source_sha256: str) -> set[str]:
     calculations = evidence["calculations"]
@@ -177,12 +251,25 @@ def _validate_calculation_evidence(evidence: dict, calls: list[dict] | None, *, 
         return set()
     calls_by_id = {entry.get("call_id"): entry for entry in (calls or []) if isinstance(entry, dict)}
     identifiers: set[str] = set()
-    for item in calculations:
-        if (not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]
-                or not isinstance(item.get("call_id"), str)
-                or not isinstance(item.get("expression"), str) or not item["expression"]
-                or "result" not in item):
-            raise _error("proposal.evidence-calculation", "计算证据须含id、call_id、expression和result")
+    for index, item in enumerate(calculations):
+        # 逐项点名缺哪个字段；「须含id、call_id、expression和result」不指明位置时
+        # 调用方只能重写整份 evidence。
+        problems: list[str] = []
+        if not isinstance(item, dict):
+            problems.append("不是对象")
+        else:
+            if not isinstance(item.get("id"), str) or not item["id"]:
+                problems.append("id 缺失或为空")
+            if not isinstance(item.get("call_id"), str):
+                problems.append("call_id 缺失或不是字符串")
+            if not isinstance(item.get("expression"), str) or not item["expression"]:
+                problems.append("expression 缺失或为空")
+            if "result" not in item:
+                problems.append("result 缺失")
+        if problems:
+            raise _error("proposal.evidence-calculation",
+                         f"计算证据须含id、call_id、expression和result；"
+                         f"calculations[{index}] 有问题：" + "、".join(problems))
         call = calls_by_id.get(item["call_id"])
         if call is None:
             # 4讲 单元10 的根因：7 个绑定条件只报一句「未绑定」，无法定位
@@ -208,9 +295,7 @@ def _validate_calculation_evidence(evidence: dict, calls: list[dict] | None, *, 
                          f"失败的计算不能作为证据")
         if not _contains_string(call.get("params"), item["expression"]):
             raise _error("proposal.calc-call-mismatch",
-                         f"expression 必须与调用时传入的参数逐字一致（含空格与大小写）；"
-                         f"你写的是 {item['expression']!r}，该调用记录的是 "
-                         f"{json.dumps(call.get('params'), ensure_ascii=False)[:120]}")
+                         _calc_expression_mismatch(call, item["expression"]))
         recorded = (call.get("result") or {}).get("result")
         if recorded != item["result"]:
             raise _error("proposal.calc-call-mismatch",
@@ -231,7 +316,12 @@ def _validate_self_check(self_check: Any, *, has_corrections: bool) -> None:
     checks = set(self_check["checks"])
     required = _REQUIRED_SELF_CHECKS if has_corrections else {"no_issue_review"}
     if not required <= checks:
-        raise _error("proposal.self-check-incomplete", "自查未覆盖全部必需检查项")
+        # 必需项是固定字面量；不列出缺失项时调用方只能猜拼写。实测（第 11 讲 单元3）
+        # 把 checks 写成「real_issue: 说明…」这类带后缀的串，连撞 4 次。
+        raise _error("proposal.self-check-incomplete",
+                     "自查未覆盖全部必需检查项：缺少 " + "、".join(sorted(required - checks))
+                     + "。checks 只接受这些**字面量**（不要加冒号说明后缀）："
+                     + "、".join(sorted(required)))
 
 
 def _error(code: str, message: str) -> SuggestionError:
@@ -248,8 +338,21 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
     （由调用方经 `expected_source_sha256` 传入，缺省退回正文摘要以兼容直接调用），
     `body_sha256` 绑定**正文文本**。诊断因此能指出到底哪一项对不上。
     """
-    if not isinstance(payload, dict) or set(payload) - _ALLOWED_KEYS or not _REQUIRED_KEYS <= set(payload):
-        raise _error("proposal.schema", "建议字段缺失或包含未支持字段")
+    if not isinstance(payload, dict):
+        raise _error("proposal.schema", "建议必须是 JSON 对象")
+    # 只报「字段缺失或未支持」而不点名，会让调用方逐个试键。实测（第 11 讲 单元1）
+    # 同一处缺键连撞 5 次提交，196 步后放弃并由父代理重派。
+    unknown = sorted(str(key) for key in set(payload) - _ALLOWED_KEYS)
+    missing = sorted(_REQUIRED_KEYS - set(payload))
+    if unknown or missing:
+        details = []
+        if missing:
+            details.append("缺少必需字段 " + "、".join(missing))
+        if unknown:
+            details.append("包含未支持字段 " + "、".join(unknown))
+        raise _error("proposal.schema",
+                     "建议字段缺失或包含未支持字段：" + "；".join(details)
+                     + "。允许的顶层字段只有 " + "、".join(sorted(_ALLOWED_KEYS)))
     if (type(payload.get("schema_version")) is not int or payload["schema_version"] != 2
             or payload.get("task_id") != expected_task_id
             or payload.get("unit_id") != expected_unit_id

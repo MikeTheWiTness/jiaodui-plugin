@@ -100,7 +100,13 @@ function taskPrepareArgs(args) {
       return ['split', ...target,
         ...(args.subject ? ['--subject', args.subject] : []), ...modeFlags,
         ...(args.strategy ? ['--strategy', args.strategy] : []),
-        ...(args.no_clean ? ['--no-clean'] : [])]
+        ...(args.out_root ? ['--out-root', args.out_root] : []),
+        ...(args.base_name ? ['--base-name', args.base_name] : []),
+        ...(args.images_dir ? ['--images-dir', args.images_dir] : []),
+        ...(args.no_clean ? ['--no-clean'] : []),
+        ...(args.rerun ? ['--rerun'] : []),
+        ...(args.replace_units ? ['--replace-units'] : []),
+        ...(args.adopt_units ? ['--adopt-units'] : [])]
     case 'precheck-split':
       return ['precheck-split', ...target]
     case 'status':
@@ -173,13 +179,13 @@ function registerStructuredTools(ctx, cliTool) {
       task_id: { type: 'string' }, unit_id: { type: 'string' },
       error_code: {
         type: 'string',
-        description: '失败的工具/宿主错误码（如 usage / not_found / calc_failed / verify_failed / images.missing / host-timeout）。类别由它决定；未分类码会被拒绝。',
+        description: '失败的工具/宿主错误码（如 usage / not_found / calc_failed / verify_failed / images.missing / host-timeout）。类别由它决定；未分类码会被拒绝。给了它时请省略 category。',
       },
       category: {
         type: 'string',
         enum: ['call_correction', 'calc_representation', 'report_repair',
           'targeted_review', 'technical_redispatch', 'image_schema_fix'],
-        description: '只用于父代理判断类的 targeted_review；错误驱动的恢复必须给 error_code，给了 category 就必须与映射一致。',
+        description: '只用于父代理判断类的 targeted_review。**错误驱动的恢复请省略本字段**：类别由 error_code 确定性派生；填了但与映射不一致会整次被拒，并在 details.expected_category 给出应填值。',
       },
       attempt_id: {
         type: 'string', minLength: 1, maxLength: 200,
@@ -223,7 +229,7 @@ function registerStructuredTools(ctx, cliTool) {
   }, args => ['dispatch-plan', '--task-id', args.task_id,
     '--window', String(args.window ?? 8)])
 
-  register('jiaodui_unit_event', '记录单元阶段心跳及取消发起者/原因。', {
+  register('jiaodui_unit_event', '记录单元阶段心跳。取消不在本工具：请用 jiaodui_unit_cancel。', {
     type: 'object', additionalProperties: false,
     required: ['task_id', 'unit_id', 'phase', 'attempt_id'],
     properties: {
@@ -231,8 +237,6 @@ function registerStructuredTools(ctx, cliTool) {
       agent_id: { type: 'string' },
       phase: { type: 'string', enum: ['prepared', 'read', 'images', 'calculated', 'proposed',
         'self_checked', 'verified', 'registered', 'parent_reviewed', 'deliverable'] },
-      cancel_initiator: { type: 'string', enum: ['user', 'parent', 'host'] },
-      cancel_reason: { type: 'string', enum: ['user_cancel', 'technical_timeout', 'superseded'] },
       expected_run_id: {
         type: 'string',
         description: 'CAS 防护：与当前轮次不一致即 run-changed，避免迟到事件写进新轮次（可选）。',
@@ -241,8 +245,38 @@ function registerStructuredTools(ctx, cliTool) {
   }, args => ['unit-event', '--task-id', args.task_id, '--unit-id', args.unit_id,
     '--phase', args.phase, '--attempt-id', args.attempt_id,
     ...(args.agent_id ? ['--agent-id', args.agent_id] : []),
-    ...(args.cancel_initiator ? ['--cancel-initiator', args.cancel_initiator] : []),
-    ...(args.cancel_reason ? ['--cancel-reason', args.cancel_reason] : []),
+    ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : [])])
+
+  // 取消单独成工具，而不是 unit-event 的可选字段：preset 的子代理 toolFilter 不含本工具，
+  // 单元子代理因此无法自证取消（第 12 讲实测：子代理在正常心跳里填 user/user_cancel，
+  // 伪造出 29 条用户取消，让 dispatch-plan 永久 stop=true）。
+  register('jiaodui_unit_cancel', '记录或撤销一次显式取消；只应由父代理/宿主调用（子代理不可见）。', {
+    type: 'object', additionalProperties: false,
+    required: ['task_id', 'unit_id', 'attempt_id', 'initiator', 'reason'],
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' }, attempt_id: { type: 'string' },
+      initiator: {
+        type: 'string', enum: ['user', 'parent', 'host'],
+        description: '取消发起者。user 只配 user_cancel；parent/host 只配 technical_timeout/superseded。',
+      },
+      reason: {
+        type: 'string', enum: ['user_cancel', 'technical_timeout', 'superseded'],
+        description: '取消原因；必须与 initiator 配对，否则 cancel-invalid。',
+      },
+      revoke: {
+        type: 'boolean', default: false,
+        description: '撤销该单元当前生效的取消（技术性停止后无需开新轮次即可继续派发）；用户取消不可撤销。',
+      },
+      agent_id: { type: 'string' },
+      expected_run_id: {
+        type: 'string',
+        description: 'CAS 防护：与当前轮次不一致即 run-changed（可选）。',
+      },
+    },
+  }, args => ['unit-cancel', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    '--attempt-id', args.attempt_id, '--initiator', args.initiator, '--reason', args.reason,
+    ...(args.revoke ? ['--revoke'] : []),
+    ...(args.agent_id ? ['--agent-id', args.agent_id] : []),
     ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : [])])
 
   register('jiaodui_unit_review', '父代理按当前snapshot接受或退回结构化建议。', {
@@ -284,6 +318,24 @@ function registerStructuredTools(ctx, cliTool) {
       mode_reason: { type: 'string', description: '仅 convert/split：类型判断的简短依据（不超过500字符）。' },
       strategy: { type: 'string', enum: ['rule', 'manual', 'none'], description: '仅 split：拆分策略，默认 rule。' },
       no_clean: { type: 'boolean', description: '仅 split：跳过讲义导入清理（六步全不执行）。' },
+      // 第 12 讲实测：这三个开关原先只有 CLI 有，插件没暴露，父代理被迫退回 bash 调
+      // `.venv-cli/bin/jiaodui`——既猜路径（`jiaodui` 不在 PATH，先 exit 127），又绕过了
+      // 本工具自带的「--work-root 必须等于当前会话工作区」校验。
+      rerun: {
+        type: 'boolean', default: false,
+        description: '仅 split：开启新轮次，旧报告不计为本轮完成。**会重置本轮的执行模式授权**，之后必须重新登记 execution-policy。',
+      },
+      replace_units: {
+        type: 'boolean', default: false,
+        description: '仅 split：单元集变化时把陈旧单元归档到 .superseded/<run_id>/（只移动不删除）并更新本轮单元集。',
+      },
+      adopt_units: {
+        type: 'boolean', default: false,
+        description: '仅 split：显式接纳当前磁盘单元集，留痕且不删除产物（与 replace_units 互斥，由 CLI 拒绝）。',
+      },
+      out_root: { type: 'string', description: '仅 split：单元输出根目录。' },
+      base_name: { type: 'string', description: '仅 split：产物基名。' },
+      images_dir: { type: 'string', description: '仅 split：图片来源目录。' },
       execution_mode: {
         type: 'string', enum: ['automatic', 'interactive'],
         description: '仅 execution-policy：本轮执行模式。',

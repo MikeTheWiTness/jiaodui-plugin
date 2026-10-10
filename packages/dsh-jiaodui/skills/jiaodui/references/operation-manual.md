@@ -32,12 +32,16 @@ jiaodui status <paper_dir> --json
 
 `split` 可选 `--rerun` 开新轮；单元集合变更须显式 `--replace-units`，陈旧单元移入 `.superseded/<run_id>/`，只移动不删除。人工接纳现有集合用 `--adopt-units`。`convert` 另有 `--out-dir`、`--base-name`、`--mathjax`；`split` / `slice` 另有 `--base-name`、`--out-root`、`--no-clean`。材料类型来源可用 `--mode-origin` / `--mode-reason` 登记。所有选项以 `jiaodui <command> --help` 为准。
 
+**重跑与集合变更走原生工具，不要退回 bash**：`jiaodui_task_prepare`（operation=split）已经暴露 `rerun` / `replace_units` / `adopt_units` / `out_root` / `base_name` / `images_dir`（布尔项传 `true`）。这些开关原先只有 CLI 有，实测导致父代理去 bash 里猜 `.venv-cli/bin/jiaodui` 的绝对路径（`jiaodui` 不在 PATH，先 exit 127），并且**绕过了原生工具自带的「`--work-root` 必须等于当前会话工作区」校验**。只有 `slice` 的边界清单仍按第 3 步走 `jiaodui` argv 工具。
+
+**流程顺序是硬约束**：`convert → split → execution-policy → 派发单元`。`convert` / `split` / `slice` 在参数或单元集变化时会**开启新轮次**（含 `--rerun` / `--replace-units` / `--adopt-units`），而执行模式授权绑定轮次——先登记再拆分会让授权立即失效，子代理派出去后会在第 1 步被 `execution-policy-required` 拒绝。因此登记要放在拆分之后、派发之前；`split` 一旦开了新轮次会在返回的 `warnings` 里显式提示，看到该提示必须重新登记。
+
 ## 单元身份和提交
 
 父代理读取拆分结果中的 `task_id`、`unit_ids` 后派发单元。单元子代理不收源文正文；先取单元snapshot，再按需分页读取源文和图片实际读取清单。
 
 1. `jiaodui_unit_snapshot` 获取 `snapshot_sha256`、源文/图片/数据/报告摘要和 `run_id`。
-2. `jiaodui_unit_read` 使用task/unit ID分页读取源文，图片路径取自同一份实际读取清单；单次最多2000行，后续页递增 `start_line`。
+2. `jiaodui_unit_read` 使用task/unit ID分页读取源文，图片路径取自同一份实际读取清单；单次最多2000行，后续页递增 `start_line`。清单的 `read_paths` 是按正文顺序去重的实际读取路径，读图时逐字复制，**不要自行拼接或增删目录层级**。
 3. `jiaodui_unit_locate` 按短语取得候选 `location_id`、`match_index`、精确 Unicode 区间和安全范围。重复命中必须选定具体位置；源文版本变化后旧ID失效。
 4. `jiaodui_unit_submit` 提交schema v2建议对象和步骤1的snapshot hash。工具从不可变源文生成全文报告，复核verify、图片和版本后再登记；过期版本拒绝写入。`preview: true` 只做预览。
 
@@ -91,13 +95,20 @@ jiaodui status <paper_dir> --json
 }
 ```
 
-`images` / `calculations` 只有两种形态：**证据数组**，或确实不适用时写 `{"status": "not_applicable", "reason": "<原因>"}`——写成其它对象会被拒绝并回报实际形状。`calculations` 的 `expression` / `result` 必须与记录逐字一致：空白差异、只抄对象的一部分、或引用上一轮/上一份源文的 `call_id` 都会绑定失败，且报错会指明是哪一条不满足。
+提交字段的四条硬规则（都由回放实测踩出来，报错现在会逐项点名）：
+
+- **`expected_original` 逐字复制 `unit-locate` 返回的 `original` 整段**：`location_id` 已绑定源文摘要，命中的区间就是原文字段，不接受只截取子串。要改的只是区间内的片段时，先把 `unit-locate` 的 `phrase` 收敛到该整段，再整段写入 `replacement`；报错会同时给出「实际命中的原文」与「你写的值」。
+- **`calculations[].result` 抄 `result.result` 的原生 JSON 值**：数字就是数字（写 `8.0` 而不是 `"8.0"`），`dimensional` 的对象整体照抄，不要手打摘要。多参数调用没有唯一 `expression`——`equality` 用 `expression_a`/`expression_b`、`formula` 用 `formula`/`solve_for`、`vector_ops` 用 `vector_operation`（如 `dot`）：挑**其中一个**参数的原样值，不要用 `==` 或函数调用式拼接；要两条证据就分条记录两次核验。
+- **`task_id` / `unit_id` 两处都要给**：既在工具顶层参数里，也在 `proposal` 内部。只给一处会分别得到 `not_found`（`task_id` 显示成字面量 `undefined`，报错会说明这是占位值）或 `proposal.schema`（报错点名叫缺哪个/多哪个键）。
+- **`self_check.checks` 只接受五个字面量** `real_issue` / `replacement_semantics` / `related_coverage` / `scope_and_uncertainty` / `severity`（无问题单元为 `["no_issue_review"]`），**不要加冒号说明后缀**；缺项、字段位置错误、`evidence.assumptions`/`symbols`/`images`/`calculations` 的形态问题，报错都会指明第几项缺哪个字段或给出实际形状。
+
+`images` / `calculations` 只有两种形态：**证据数组**，或确实不适用时写 `{"status": "not_applicable", "reason": "<原因>"}`——写成其它对象会被拒绝并回报实际形状。`calculations` 的 `expression` / `result` 必须与记录逐字一致：空白差异、只抄对象的一部分、或引用上一轮/另一份源文的 `call_id` 都会绑定失败，且报错会指明是哪一条不满足，并列出该调用所有可逐字填写的参数取值。`unit_id` 对不上时 `not_found` 的 `details` 会给出该材料的完整 `known_units` 映射与 `suggestion`，照着逐字重取即可，不要重试同一串 ID。
 
 无问题单元提交空 `corrections`、`summary: "无问题"` 和必要的证据对象。竖线与标记括号由 v2 转义无损承载（ADR 0006），不再因此拒绝提交；`_校对数据.json` 的 `marked_text` 保持报告字面（带转义），`corrections` 是反转义后的内容。旧 Markdown 报告仍可由 `verify-report` / `parse-report` 兼容读取；`repair-report` 仍只服务旧报告修复。
 
 ## 恢复与事件
 
-执行模式记录后，以 `unit-recovery` 按 `unit_id`、**`--attempt-id`（幂等键）**、**失败错误码**和64位小写SHA-256失败指纹消费有限预算：`--attempt-id` 必须与该单元 `unit-event` 登记的 attempt_id 一致；**同一 attempt 重放不再扣费**，返回原结果并带 `idempotent=true`（事件里带 `replay=true`）；同一 attempt 换了指纹或换了类别即 `attempt-id-conflict`。可选 `--expected-run-id` 作 CAS 防护（与当前轮次不一致即 `run-changed`）。恢复类别由错误码确定性决定，不由模型自选——`usage`/`not_found`/`unsupported`/`*stale` → `call_correction`；`calc_failed`/`calc-evidence-invalid`/`proposal.calc-*` → `calc_representation`；`verify_failed`/`contract`/`out-of-contract`/`syntax.*`/`integrity.*`/`original.*`/`locate.*`/`report.*` → `report_repair`；`images.*`/`images-invalid` → `image_schema_fix`；`env`/`host-timeout`/`host-crash`/`parent-technical-timeout` → `technical_redispatch`。未分类的错误码会被拒绝并给出相近的已知码；用户取消与权限拒绝**不可恢复、不消耗预算**；只有父代理判断类的 `targeted_review` 可以不带错误码，带了与映射不一致的类别会被拒绝。指纹非法返回 `invalid-attempt-fingerprint`。**`image_schema_fix` 会连带扣一次 `call_correction`**（图片格式修复本身要占一次调用）；任一被扣类别余额不足即整次拒绝，返回 `allowed=false` 并给出 `blocked_category`，**不做部分扣费**。成功时返回 `charged` 列出本次实际扣减的类别。换 agent 或更换指纹不能重置同轮计数。`unit-event` 记录阶段、attempt、agent，以及明确的取消发起者和原因（**要求当前轮次已确认执行模式**，没有授权就不留下工作痕迹）；可选 `--expected-run-id` 作 CAS 防护。user取消不重派；parent技术取消不得记作user取消。只读的 `jiaodui_unit_progress`（`jiaodui unit-progress --task-id T [--unit-id U] [--stale-after-seconds N]`）汇总每单元的 `phase` / `attempt_id` / `agent_id` / `last_event_at` / `age_seconds` / `event_count` / `in_flight` / `stale` / `cancelled`：终态为 `registered` / `parent_reviewed` / `deliverable`；被显式取消的单元不再算在途。父代理据此判超时与补位，不靠沉默时间猜崩溃；该命令只读，不改材料记录。补位与停止判据用只读的 `jiaodui_dispatch_plan`（`jiaodui dispatch-plan --task-id T [--window N]`，默认窗口 8）：返回 `dispatch`（下一批可派发单元，已排除在途单元，保证同一单元不重复派发）、`waiting`（窗口外排队）、`free_slots`、`in_flight`、`stop` 与 `cancelled`；候选只取「未开始 / 已交付未过校验 / 本轮未完成」。任一单元被显式取消即 `stop=true`，此时不再补位交人裁定，不为「凑满窗口」继续派发——父代理技术取消同样按停止处理，但不冒称用户取消。
+执行模式记录后，以 `unit-recovery` 按 `unit_id`、**`--attempt-id`（幂等键）**、**失败错误码**和64位小写SHA-256失败指纹消费有限预算：`--attempt-id` 必须与该单元 `unit-event` 登记的 attempt_id 一致；**同一 attempt 重放不再扣费**，返回原结果并带 `idempotent=true`（事件里带 `replay=true`）；同一 attempt 换了指纹或换了类别即 `attempt-id-conflict`。可选 `--expected-run-id` 作 CAS 防护（与当前轮次不一致即 `run-changed`）。恢复类别由错误码确定性决定，不由模型自选——`usage`/`not_found`/`unsupported`/`*stale` → `call_correction`；`calc_failed`/`calc-evidence-invalid`/`proposal.calc-*` → `calc_representation`；`verify_failed`/`contract`/`out-of-contract`/`syntax.*`/`integrity.*`/`original.*`/`locate.*`/`report.*` → `report_repair`；`images.*`/`images-invalid` → `image_schema_fix`；`env`/`host-timeout`/`host-crash`/`parent-technical-timeout` → `technical_redispatch`。未分类的错误码会被拒绝并给出相近的已知码；用户取消与权限拒绝**不可恢复、不消耗预算**；只有父代理判断类的 `targeted_review` 可以不带错误码。**错误驱动的恢复请省略 `category`**——类别由错误码确定性派生；若填了但与映射不一致会整次被拒，`details.expected_category` 直接给出应填值（第 12 讲实测父代理批量填错类别，4 次调用全部作废后重发）。指纹非法返回 `invalid-attempt-fingerprint`。**`image_schema_fix` 会连带扣一次 `call_correction`**（图片格式修复本身要占一次调用）；任一被扣类别余额不足即整次拒绝，返回 `allowed=false` 并给出 `blocked_category`，**不做部分扣费**。成功时返回 `charged` 列出本次实际扣减的类别。换 agent 或更换指纹不能重置同轮计数。`unit-event` 只记录阶段、attempt、agent（**要求当前轮次已确认执行模式**，没有授权就不留下工作痕迹），可选 `--expected-run-id` 作 CAS 防护；**它不接受任何取消参数**。取消走独立工具 `jiaodui_unit_cancel`（`initiator` 与 `reason` 必须配对，`--revoke` 可撤销技术性取消），同样要求当前轮次已授权，且**只由父代理或宿主调用——preset 的子代理 toolFilter 不含该工具，单元子代理无法自证取消**。user取消不重派、**不可撤销**；parent技术取消不得记作user取消，撤销后即可继续补位。只读的 `jiaodui_unit_progress`（`jiaodui unit-progress --task-id T [--unit-id U] [--stale-after-seconds N]`）汇总每单元的 `phase` / `attempt_id` / `agent_id` / `last_event_at` / `age_seconds` / `event_count` / `in_flight` / `stale` / `cancelled`：终态为 `registered` / `parent_reviewed` / `deliverable`；被显式取消的单元不再算在途。父代理据此判超时与补位，不靠沉默时间猜崩溃；该命令只读，不改材料记录。补位与停止判据用只读的 `jiaodui_dispatch_plan`（`jiaodui dispatch-plan --task-id T [--window N]`，默认窗口 8）：返回 `dispatch`（下一批可派发单元，已排除在途单元，保证同一单元不重复派发）、`waiting`（窗口外排队）、`free_slots`、`in_flight`、`stop` 与 `cancelled`；候选只取「未开始 / 已交付未过校验 / 本轮未完成」——**「本轮未完成」包含已技术登记但缺当前版本父复核（未复核或已退回）的 v2 单元**，所以退回的单元会重新出现在 `dispatch` 里，不会因为报告仍然合格而从调度中消失。任一单元被显式取消即 `stop=true`，此时不再补位交人裁定，不为「凑满窗口」继续派发——父代理技术取消同样按停止处理，但不冒称用户取消。
 
 ## 父代理复核（第7项实验分支）
 

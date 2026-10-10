@@ -339,8 +339,17 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
         archived = _archive_stale_units(paper, names, data["current_run_id"]) if replace_units else []
         inputs = {p.name: material.unit_inputs(directory, p) for p in dirs}
         associated = material.resources(directory, material.relative_path(directory, data["paths"]["images"]))
-        if rerun or data["params"] != params or data["resources"] != associated or data["unit_inputs"] != inputs:
+        opens_new_run = (rerun or data["params"] != params or data["resources"] != associated
+                         or data["unit_inputs"] != inputs)
+        if opens_new_run:
             material.new_run(data, params, associated)
+            # 执行模式授权绑定轮次：这里一开新轮，上一轮授权立即失效。当场告知调用方，
+            # 避免子代理派出去之后在第 1 步被 execution-policy-required 集体拒绝
+            # （第 11 讲实测：split 后 8 个并发子代理首次调用全部被拒）。
+            result.warnings.append(
+                "本次拆分开启了新轮次，上一轮的执行模式授权已失效；"
+                "派发单元前必须重新登记：`jiaodui execution-policy <材料目录> "
+                "--mode automatic|interactive --origin user|confirmed --work-root <W> --json`")
         data["unit_set"] = names
         data["unit_inputs"] = inputs
         data["runs"][-1]["actions"].append({"command": "slice" if boundaries is not None else "split",

@@ -579,3 +579,115 @@ unit-recovery --task-id T --unit-id U --attempt-id A --fingerprint F
 - 夹具 `单元1` / `单元2` 是上一轮遗留的 `registered` 未复核状态，本轮**未动**（按简报「不要动回放材料既有留痕」）；它们被 `build-docx` 以「尚无当前版本的父代理复核」正当排除。
 - 双口径测试数字未产出：本 preset 无 shell，无法跑 `pytest`。本次为纯宿主侧验收，**未改 `jiaodui/` 代码**，测试口径应与上一批一致（1112 passed / 0 failed / 5 skipped / 4 subtests），但需在 standard preset 复核确认。
 - 未提交、未 push（简报禁止 push）。`docs/PROCESS_REWORK.md` 的本节由本会话写入，提交信息需另行补。
+
+## 回放（第 11/12 讲）三项可确定性修复：诊断与复制就绪清单（2026-10-10）
+
+**材料**：用户提供的会话包 `dsh-session-session-d873f221-…zip`（12 个子 agent：1 个视觉探针完成，3 个被上游代理 `PI_AI_ERROR` 打死，其余 8 个随会话中止被杀）。上游抖动是主因、属宿主/代理层；以下三项是回放里能落到本仓的真问题——**只加诊断与只读输出，不改契约、不放宽任何闸门**。
+
+| # | 现象（回放证据） | 修复 | 回归测试 |
+|---|---|---|---|
+| 1 | 12 讲单元3 提交被拒 `proposal.calc-call-mismatch`：模型把 equality 的 `expression_a`/`expression_b` 拼成 `'2*2 == 2*4 + (-2)*2'`；原报错只说「不逐字一致」并截断 params，模型无从机械修正 | `report_suggestions._calc_expression_mismatch`：列出该调用**每个可逐字填写的参数取值**（`字段='值'`），排除 task_id / unit_id / subject / unit_definitions 等身份与元数据字段；检测到「把两条参数拼成一条」时明确给出改法。`expression` 逐字匹配仍是硬条件 | `test_report_suggestions.py::test_calc_evidence_mismatch_lists_copyable_candidates_for_multi_argument_calls`（含反向契约：逐字抄其中一个字段即通过） |
+| 2 | 11 讲单元4 子 agent 自行拼接目录层级（漏 `units/<材料名>/`），5 次 `read_image` not found 后才自行纠正 | `inspect-images` / `unit-read` 的清单新增 `read_paths`：按正文顺序、去重、可直接复制的实际读取路径（透明图给白底副本）。文档明确「只许逐字复制、不得拼接层级」，并把抄错路径归入 `call_correction`（不是 schema 错误，不扣 `image_schema_fix`） | `test_inspect_images.py::test_read_paths_are_copy_ready_and_deduplicated`、`::test_read_paths_stay_empty_when_no_reference_is_readable` |
+| 3 | 12 讲单元4 子 agent 手抄 32 位 `unit_id` 错一位（…d7d8→…d7c8），两次 `calc` 只得 `not_found`，分不清抄错还是身份过期 | `material._unknown_unit_details`：`unit_id` 对不上时 `details` 带该材料完整 `known_units`（单元名→unit_id）与 `suggestion`（difflib 近似候选）；`find_unit_by_id` 与 `unit_progress` 共用 | `test_unit_identity.py::test_unknown_unit_id_reports_known_mapping_and_suggestion`、`::test_unknown_unit_id_without_close_match_omits_suggestion` |
+
+**真机冒烟**（标准 preset，临时工作区）：`jiaodui inspect-images --unit …` 返回 `read_paths=['…/单元…/images/__jiaodui-whitebg-8145d9dfaa16f9d6.png']`；`jiaodui unit-progress --task-id T --unit-id <typod>` exit 5，`details` 带 `known_units` 与 `suggestion`。
+
+**口径**：`pytest -o addopts='' -q -rs` → 1163 passed / 4 subtests passed。文档两份副本（`skills/jiaodui` 与 `packages/dsh-jiaodui/skills/jiaodui`）保持字节一致。
+
+## 外部代码审查 6 项复核与修复（第 2 批，2026-10-10）
+
+外部审查在 `origin/main`（abfea6c）→ `HEAD`（c54c843）+ 未提交改动上提了 6 项。逐条本地复现后**修 4 项、暂缓 2 项**；所有修复都附能先失败的回归测试，口径为「只修会静默产出错误交付或破坏调度闭环的，不动只对畸形输入才成立的」。
+
+| # | 结论 | 修复 | 回归测试 |
+|---|---|---|---|
+| 1 [P1] 表格内批注锚点变空范围 | ✅ 已修 | `_gridify_marked_tables` 不再「先摘锚点再按竖线计数追加到格尾」，改为 `_pipe_cells_keeping_anchors` 直接在原行切格——锚点留在单元格内的原偏移；整行首/尾的纯锚点段并入相邻格（标记字段就是整行时仍不多列） | `test_cjk_table_keeps_columns_and_cell_anchor_keeps_offset`（断言锚点覆盖文本 == 「木板」，不只数锚点数）、`test_pipe_cells_keep_anchor_offset_and_row_edges` |
+| 2 [P1] 中文表格两列并一列 | ✅ 已修，且修了两条独立成因 | ① `_display_width`/`_pad_display`：按显示宽度补齐（pandoc 实测 W/F 记 2、歧义宽记 1）；② `_convert_multiline_tables` 从锚点注入**之前**移到之后——宽度原本按标记文本 `【1\|cd\|ef】` 算，raw 注入后行宽变化，纯 ASCII 表格也会整表塌成一格。无标记单元的正文分支原来完全不做这个转换，也一并补上 | `test_dash_fenced_cjk_table_keeps_columns`、`test_display_width_follows_pandoc_grid_rule`；两条端到端断言 Word 行列结构而不只是 `ok` |
+| 4 [P1] 复核前/退回后仍算「已完成」 | ✅ 已修 | `material.unit_needs_parent_review` + `run_units_complete`：v2 单元的「本轮完成」= 已登记 + 过闸 + 当前父复核 accepted；`scan_status` 把缺复核/被退回的单元降级为「本轮未完成」（因此自动回到 `dispatch-plan` 候选），`register_locked` 与 `record_parent_review` 共用同一完成口径（接受/退回都重算 `run.status`）。v1 报告不适用父复核，语义不变 | `test_parent_review_gates_completion_and_redispatch`（提交→待复核→accepted→退回，四个阶段查 status/dispatch/run.status） |
+| 5 [P2] 无关材料坏清单阻断查询 | ✅ 已修 | `material._scan_materials`：遍历期隔离坏清单并保留现场（`material_dir`/`code`/`message`），`_material_by_task` 与 `find_unit_by_id` 共用；命中目标材料仍走严格校验，查不到 task 时把不可读清单列进 `not_found.details.unreadable_materials` | `test_unrelated_broken_manifest_does_not_block_queries` |
+| 3 [P1] v1 报告可绕过结构化契约完成新材料 | ⏸ 待业主决策 | 未改。机理已复核：`parse_unit` 只拦 v2 前缀，v1 报告 + `parse-report` 在**新布局**材料上会 `registered=true / legacy=false`、`run.status=completed`、`build-report complete=true`。但现有测试 `test_concurrent_registration_keeps_all_units` 正依赖「新布局材料用 v1 `parse-report` 登记并算已完成」，属契约取舍而非 bug 修复，需先定「新材料是否允许人工补 v1 报告登记」 | — |
+| 6 [P2] v1 标记正则兼容 | ⏸ 暂缓 | 未改。触发条件是「改为字段以**单个**孤立反斜杠结尾再紧接 `】`」（`\\】` 不受影响），全仓报告扫描无此形态；改法要按封套选正则，而 `INLINE_MARKER_CAPTURE_RE` 是模块级常量、被 verify/parse/docx/repair 共 10 处引用，收益是假想输入、代价是动兼容读取核心 | — |
+
+**真机冒烟**（标准 preset，临时材料）：
+- 表格：`| 对象 | 数值 | / | 前【1\|木板\|木块】后 | 10 |` 与破折线包裹的同类表格，Word 中都是 2 行 × 2 格，`commentRangeStart…End` 之间正是「木板」；无标记单元的破折线表格也从 1 列恢复为 2 列。
+- 调度：v2 提交后 `status=本轮未完成/run=in_progress/dispatch=['单元1']`；`accepted` 后 `已完成/run=completed/dispatch=[]`；`needs_revision` 后回到 `本轮未完成/in_progress/dispatch=['单元1']`。
+
+**口径**：`pytest -o addopts='' -q -rs` → 1169 passed / 4 subtests passed。skill 文档两份副本保持字节一致。
+
+## 第 11 讲真机回放：子代理摩擦的 A/B 档修复（2026-10-10）
+
+**材料**：用户提供的 `dsh-session-session-d72a3e46-….zip`（主会话 585 事件 + 15 个子代理会话）。10 个单元、15 次单元派发，**84 次 `unit_submit` 里 70 次被拒（83%）**。逐条归因后确认：**绝大多数不是判断问题，而是「报错不给定位信息」与「同一份身份/证据要抄两遍」造成的空转**。本轮按业主要求只做 **A（core 报错补细节）+ B（skill 文档）**，**不放宽任何契约、不改闸门、不动预算机制**。
+
+| 错误码 | 次数 | 根因 | 本轮修复（A） | 文档（B） |
+|---|---|---|---|---|
+| `location.original-mismatch` | 10（单元3 同一写法连撞 20 次） | 只报「不一致」，不给实际/期望原文；`expected_original` 与 `location_id` 的绑定规则未写明。**后果**：单元3 放弃该条修改并改报「无问题」，同类发现却在单元10 被正常提交 → 静默漏报 | `source_index.resolve_location` 同时给出「实际命中的原文」与「你写的值」（`_brief` 按 120 字符截断并标真实长度） | `operation-manual`「四条硬规则」第 1 条；`failure-modes` 新增该行 |
+| `proposal.schema` | 10（单元1 同一缺键连撞 5 次） | 报错恒为「字段缺失或包含未支持字段」，不点名；且 `task_id`/`unit_id` 要同时出现在工具顶层与 `proposal` 内部，模型在两处之间横跳（顶层漏传 → `not_found: "undefined"`） | `report_suggestions` 报出 `missing=[…]` / `unknown=[…]` 与允许字段全集；`material._identity_placeholder_hint` 把字面量 `undefined` 报成「漏传参数」而非「材料不存在」 | 同上硬规则第 3 条 |
+| `proposal.calc-call-mismatch` | 19 | `result` 被字符串化（`'8.0'` vs `8.0`）、手打 `dimensional` 对象、多参数调用用 `==` 拼接、`vector_ops` 误填函数调用式 | 报错文案维持（上一批已列出可照抄取值） | 硬规则第 2 条：原生 JSON 类型、`expression_a`/`expression_b`/`formula`/`solve_for`/`vector_operation` 分条记录 |
+| `proposal.self-check-incomplete` | 4 | 五个必需项是固定字面量，但入口与 schema 都没列出；模型写成 `"real_issue: 说明…"` | 报错列出缺失项与合法字面量清单 | 硬规则第 4 条 |
+| `proposal.evidence-*` | 17 | 「须含 id/text/…」不指明第几项缺哪个字段 | `assumptions` / `calculations` 逐项报 `[下标] + 缺失字段`；`symbols` 报实际形状 | 硬规则第 4 条 |
+| `execution-policy-required` | 17 | 授权绑定轮次，而 `execution-policy` 被登记在 `split` 之前；`split` 开新轮后 8 个并发子代理第 1 步全被拒 | `require_current_policy` 给出补救命令与当前 `run_id`；`split`/`slice` 开新轮次时在 `warnings` 显式告警 | `SKILL.md` 写明 `convert → split → execution-policy`；`operation-manual` 增「流程顺序是硬约束」段；`failure-modes` 新增该行 |
+| `proposal-revision-stale` | 3 | 只报「必须增加 1」，不给当前版本 | 报出当前已登记 revision 与应填值 | `failure-modes` 新增该行 |
+
+**未改（有意）**：`proposal.calc-call-mismatch` 的放宽（允许只给 `call_id` 由 ledger 回填）、`expected_original` 改为可选、`proposal` 身份字段改为可选、工具壳缺参不再序列化成 `undefined`、`self_check.checks` 补 enum —— 这些属 C 档（放宽契约必填字段），需业主先定边界。**预算机制也未改**：本轮 70 次失败提交中，子代理一次 `unit_recovery` 都没调（5 次全是父代理），`≤2 次`上限实际未生效；按业主要求本轮只记录、不改机制。
+
+**回归测试**（新增 10 个，均为「报错必须给出可机械修正的定位信息」的正向契约）：
+`test_source_index.py::test_original_mismatch_names_both_actual_and_expected_text`、`::test_original_mismatch_truncates_long_text_but_keeps_length_hint`；
+`test_report_suggestions.py::test_schema_error_names_missing_and_unknown_keys`、`::test_self_check_incomplete_lists_missing_required_checks`、`::test_evidence_assumptions_error_names_index_and_missing_field`、`::test_evidence_symbols_error_reports_actual_shape`、`::test_evidence_calculation_error_names_index_and_missing_fields`；
+`test_unit_identity.py::test_unknown_task_placeholder_is_reported_as_missing_argument`、`::test_split_warns_only_when_it_actually_opens_a_new_round`；
+`test_main_policy_contract.py::test_missing_policy_error_teaches_how_to_rea_authorize`；并扩展 `test_unit_delivery.py::test_new_snapshot_cannot_reuse_old_proposal_revision` 断言当前版本号。
+
+**入口体积**：`SKILL.md` 仍为 8172 码点（阈值 8192）——把与 `failure-modes.md` 重复的恢复预算句压缩掉，腾出空间写流程顺序契约。两份 skill 副本保持字节一致。
+
+**口径**：`pytest -o addopts='' -q -rs` → 1179 passed / 4 subtests passed。
+
+## 第 12 讲真机回放：伪造取消拖垮整轮的 P0 修复（2026-10-10）
+
+**材料**：`dsh-session-session-5c46945e-….zip`（第 12 讲，`jiaodui` preset，模型 `gpt-6.1-sol`）。本轮**无交付物**，用户在 10:30:55 主动中止。逐条归因后确认：**一条由工具 schema 诱发的伪造取消链**是整轮失败的根因；另有 4 条是修复会话自身在 10:20:0x–10:23:55 把工作树改成中间态造成的（同一会话随即从 DSH 日志重放恢复，不属于本仓需要修的问题）。
+
+### 因果链（真机证据）
+
+| # | 环节 | 证据 |
+|---|---|---|
+| 1 | `execution-policy` 登记在 `split` **之前**，`split` 开新轮 → 授权失效 | 5 个子代理在 10:10:37–43 同时 `execution-policy-required`（step 45 登记、step 62 拆分） |
+| 2 | **单元子代理在正常 `prepared` 心跳里填了取消字段** | `jiaodui_unit_event` 的 `cancel_initiator`/`cancel_reason` 是**没有 description 的可选 enum**；8 个子代理合计成功记录约 29 条 `user`/`user_cancel`（另有 8 条 `host`/`technical_timeout`） |
+| 3 | `dispatch-plan` 的 `stopped = bool(cancelled)` → **永久 `stop=true`**，无超时、无撤销 | `dispatch=[]`、14 个单元全在 `waiting` |
+| 4 | 父代理唯一出路是开新轮次，而 **`--rerun` 不在原生 `jiaodui_task_prepare` 里** | 退回 bash：`jiaodui: command not found`(127) → 再猜绝对路径 `/…/.venv-cli/bin/jiaodui`；`taskPrepareArgs` 的 split 分支只有 `--subject/--mode/--strategy/--no-clean` |
+| 5 | `--rerun` 开新轮 → 在途子代理 `expected_run_id` 全部失效 | `run-changed` ×3（10:28:42–44） |
+| 6 | 循环；用户中止 | `turn/end reason=user` |
+
+### 本轮修复（P0：取消陷阱 + stop 锁死）
+
+| 层 | 改动 |
+|---|---|
+| core | `record_unit_event` **移除** `cancel_initiator`/`cancel_reason`；新增 `record_unit_cancel`（配对校验 + `revoke`），`_last_cancellation` 统一「末尾是撤销记录即视为未取消」；`user_cancel` **不可撤销**（人的决定不是父代理能代撤的） |
+| CLI | `unit-event` 去掉两个取消开关；新增 `unit-cancel --initiator/--reason [--revoke]` |
+| 工具 | `jiaodui_unit_event` schema 删除取消字段；新增独立工具 `jiaodui_unit_cancel` |
+| preset | 子代理 `toolFilter.allow` **不含** `jiaodui_unit_cancel`（并加注释锁住），`jiaodui_unit_event` 保留 |
+| 输出 | `unit-progress` / `dispatch-plan` 的 `cancelled` 补 `agent_id`、`attempt_id`，伪造来源可追溯 |
+
+**取消语义**：取消只由父代理/宿主记录。技术性停止被 `stop=true` 挡住时，父代理用 `unit-cancel --revoke` 直接恢复补位，**不再需要 `--rerun`**（后者会连带废掉在途子代理的轮次）。
+
+### 回归测试（新增 6 个）
+
+- `test_unit_progress.py`：`test_unit_event_has_no_cancellation_parameters`（签名反向契约）、`test_cancel_reports_actor_and_revoke_releases_dispatch_stop`、`test_user_cancel_cannot_be_revoked_by_parent`、`test_revoke_without_standing_cancel_is_rejected`、`test_cli_unit_cancel_records_and_revokes_end_to_end`（真子进程：旧写法必须 exit 2 且不得伪造取消）。
+- `test_dsh_plugin_package.py`：`test_unit_subagents_cannot_cancel_their_own_unit`（子代理 toolFilter 必须排除 `jiaodui_unit_cancel`）。
+- `test_dsh_plugin_tool_behavior.py`：扩充真 Node 断言——`jiaodui_unit_event` 不得再暴露取消字段、`jiaodui_unit_cancel` 的 argv 映射（含 `--revoke`）。
+
+**真机 CLI 冒烟**（临时工作区）：① 旧写法 `unit-event --cancel-initiator user` → exit 2，`dispatch stop=False`（伪造被堵死）；② 父代理 `unit-cancel parent/technical_timeout` → `stop=true` 且 `cancelled` 带 `agent_id`/`attempt_id`；③ `--revoke` → `stop=False`、`dispatch=['第1题']`；④ 先记 `user_cancel` 再 revoke → `cancel-invalid`、`stop` 仍为 `True`。
+
+**顺带确认**：上一批 A/B 档修复在真实链路里生效——10:20:20 与 10:28:37 出现新文案（「缺少 no_issue_review…只接受这些字面量」「assumptions[0] 有问题：不是对象」）；`execution-policy-required` 的复发正是 B 档要修的排序陷阱，该轮运行早于修复落地。
+
+**未修（留待 P1/P2）**：原生工具缺 `--rerun/--replace-units/--adopt-units`、`execution-policy` 对不存在目录抛裸 traceback、`unit-recovery` 的 category 猜测。
+
+**口径**：`pytest -o addopts='' -q -rs` → 1185 passed / 4 subtests passed。两份 skill 副本字节一致。
+
+## 第 12 讲回放：P1/P2 低风险增补（2026-10-10）
+
+承接上一节的因果链，补掉三处「让父代理只能猜」的缺口。**不动闸门、不放宽任何校验**。
+
+| # | 现象（第 12 讲证据） | 修复 | 回归测试 |
+|---|---|---|---|
+| P1-3 | `split` 的 `--rerun`/`--replace-units`/`--adopt-units` 只有 CLI 有，`jiaodui_task_prepare` 没暴露 → 父代理退回 bash 猜 `.venv-cli/bin/jiaodui` 绝对路径（`jiaodui` 不在 PATH，先 exit 127），并**绕过原生工具自带的 `--work-root` 等值校验** | `taskPrepareArgs` 的 split 分支补 `--rerun`/`--replace-units`/`--adopt-units`/`--out-root`/`--base-name`/`--images-dir`；schema 同步加六个属性，并在 `rerun` 上注明「会重置执行模式授权」 | `test_dsh_plugin_tool_behavior.py` 断言三处 argv 映射；真机用同一串参数跑通 `split --rerun --replace-units` |
+| P1-4 | 父代理在 `convert` 之前登记执行模式 → `locked()` 抛 `FileNotFoundError`，被 CLI 兜成**裸 traceback + `unexpected`(exit 1)**，无从判断该先做什么 | `material.set_execution_policy` 先判 `root.is_dir()`，报 `not_found`(exit 5) 并给出「先 convert，拆分之后再登记」的指引 | 真机冒烟断言 exit 5 且 stderr 无 `Traceback` |
+| P2-5 | 父代理批量 4 次恢复都填了 `report_repair`（实为 `call_correction`）→ 整批被拒后重发 | 保留「类别由错误码确定性决定」的硬校验（不改契约、保留既有测试），但 `recovery-category-mismatch` 的 `details` 补 `error_code`/`provided_category`/`expected_category`，可一次机械修正；工具 schema 的 `category` 描述改为「错误驱动的恢复请省略」 | `test_error_classification.py` 扩断言：`details.expected_category == 'call_correction'`，并补「省略 category 即按码派生并扣费」的正向契约 |
+
+**口径**：`pytest -o addopts='' -q -rs` → 1185 passed / 4 subtests passed；SKILL.md 仍 8172/8192 码点；两份 skill 副本字节一致。

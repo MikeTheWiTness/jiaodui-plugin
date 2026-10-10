@@ -71,15 +71,17 @@ def test_cancel_events_keep_initiator_and_reason_and_do_not_consume_retry_budget
     material.set_execution_policy(root, "automatic")
     data = material.load(root)
     unit_id, task_id = data["unit_ids"][unit.name], data["task_id"]
-    event = material.record_unit_event(task_id, unit_id, phase="read", attempt_id="attempt-1",
-                                       cancel_initiator="user", cancel_reason="user_cancel")
+    event = material.record_unit_event(task_id, unit_id, phase="read", attempt_id="attempt-1")
     assert event["phase"] == "read"
+    cancellation = material.record_unit_cancel(task_id, unit_id, attempt_id="attempt-1",
+                                               initiator="user", reason="user_cancel")
+    assert cancellation["initiator"] == "user"
     run = material.load(root)["runs"][-1]
     assert run["cancellations"][-1]["initiator"] == "user"
     assert run["unit_state"][unit_id]["last_event_at"] == event["at"]
     assert "recovery" not in run
 
     with pytest.raises(BusinessError) as error:
-        material.record_unit_event(task_id, unit_id, phase="read", attempt_id="attempt-2",
-                                   cancel_initiator="parent", cancel_reason="user_cancel")
+        material.record_unit_cancel(task_id, unit_id, attempt_id="attempt-2",
+                                    initiator="parent", reason="user_cancel")
     assert error.value.code == "cancel-invalid"

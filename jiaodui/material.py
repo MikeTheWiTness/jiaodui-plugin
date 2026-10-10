@@ -1,6 +1,7 @@
 """材料清单、轮次与交付登记；清单描述产物，不授予写入权限。"""
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -15,7 +16,7 @@ from .error_classification import RECOVERY_CATEGORIES, classify_error
 from .execution_policy import (attempt_decision, charge, is_current_policy,
                                is_readable_policy, migrate_legacy_spent, new_policy,
                                validate_attempt)
-from .errors import BusinessError, NotFoundError
+from .errors import BusinessError, JiaoduiError, NotFoundError
 from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
 from .workdir import ensure_inside, input_path, workspace_root
@@ -187,7 +188,16 @@ def require_current_policy(run: dict, data: dict) -> dict:
     """需要授权才能干活的入口共用：无策略、旧策略、非本轮策略一律拒绝。"""
     policy = run.get("execution_policy")
     if not is_current_policy(policy, run.get("run_id")):
-        raise BusinessError("当前轮次尚未确认执行模式", code="execution-policy-required")
+        # 授权绑定轮次：convert / split / slice 会在参数或单元集变化时开新轮次。
+        # 只报「尚未确认执行模式」时调用方不知道要重新登记，实测（第 11 讲）8 个并发
+        # 子代理在第 1 步 unit-snapshot 全部被拒。这里必须给出补救命令。
+        raise BusinessError(
+            "当前轮次尚未确认执行模式：执行模式授权随轮次失效，"
+            "convert / split / slice 等开启新轮次（含 --rerun / --replace-units）之后必须重新登记。"
+            "请运行 `jiaodui execution-policy <材料目录> --mode automatic|interactive "
+            "--origin user|confirmed --work-root <W> --json` 后再继续；只读命令不受影响。"
+            f"（当前 run_id={run.get('run_id')}）",
+            code="execution-policy-required")
     return policy
 
 
@@ -228,26 +238,93 @@ def ensure_unit_ids(data: dict, unit_names: list[str]) -> dict:
     return {"task_id": data["task_id"], "unit_ids": dict(data["unit_ids"])}
 
 
+def _unknown_unit_details(data: dict, unit_id: str) -> dict:
+    """unit_id 对不上时给出可照抄的已知映射与近似候选。
+
+    回放实测：子 agent 手抄 32 位 unit_id 时错一位（…d7d8 → …d7c8），只得到
+    「当前材料中不存在此unit_id」，无法判断是自己抄错还是身份过期。details
+    因此列出该 task 的全部「单元名 → unit_id」，并对明显近似值给出 suggestion。
+    """
+    known = data.get("unit_ids", {}) or {}
+    details: dict = {"task_id": data.get("task_id"), "unit_id": unit_id,
+                     "known_units": dict(known)}
+    close = difflib.get_close_matches(unit_id, list(known.values()), n=1, cutoff=0.6)
+    if close:
+        match = close[0]
+        details["suggestion"] = {
+            "unit": next(name for name, identity in known.items() if identity == match),
+            "unit_id": match,
+        }
+    return details
+
+
+def _identity_placeholder_hint(task_id: str) -> str:
+    """识别「调用方压根没传身份」的占位值，返回可读提示（无需提示时返回空串）。
+
+    结构化工具的参数缺失时，外层 JS 壳会把缺省值序列化成字面量 `undefined` / `null`，
+    CLI 收到的就是字符串 `"undefined"`。这**不是**「材料不存在」：报成 not_found 会
+    诱导调用方拿同一串重试，或在工作区里找一份并不存在的材料（第 11 讲实测 2 次）。
+    这里单独点名，让调用方去补参数，而不是换命令或换材料。
+    """
+    if str(task_id).strip() in {"undefined", "null", "None", ""}:
+        return (f"task_id 收到的是占位值 {task_id!r}，说明调用时没有传 task_id"
+                "（结构化工具参数缺失会被序列化成该字面量）。"
+                "请显式传入拆分返回的 task_id 与 unit_id，不要用同一串重试。")
+    return ""
+
+
+def _task_not_found_message(task_id: str) -> str:
+    """找不到 task 时的完整报错：占位值另有说明，避免被当成「材料不存在」。"""
+    hint = _identity_placeholder_hint(task_id)
+    return "当前工作区中不存在此task_id" + (f"；{hint}" if hint else "")
+
+
+def _scan_materials() -> list[tuple[Path, dict | None, dict | None]]:
+    """只读遍历工作区内的全部材料：损坏的清单作为诊断返回，不抛给调用方。
+
+    一份**无关**材料的手改坏 JSON 不该阻断另一个材料（回放实测：加一个排序靠前的
+    损坏材料后，正常 task 的 `unit-progress` 直接报该无关目录的 invalid-manifest）。
+    这里只隔离遍历期的错误并保留现场；命中的目标材料仍按 `load()` 的严格校验使用。
+    """
+    materials = workspace_root() / "校对"
+    scanned: list[tuple[Path, dict | None, dict | None]] = []
+    if not materials.is_dir():
+        return scanned
+    for root in sorted(materials.iterdir()):
+        if not root.is_dir() or not (root / MANIFEST).is_file():
+            continue
+        try:
+            ensure_inside(root)
+            scanned.append((root, load(root), None))
+        except JiaoduiError as exc:
+            scanned.append((root, None, {
+                "material_dir": str(root),
+                "code": exc.code,
+                "message": exc.message,
+            }))
+    return scanned
+
+
 def find_unit_by_id(task_id: str, unit_id: str) -> tuple[Path, Path]:
     """只在当前工作区材料清单中解析已登记的task/unit ID。"""
-    materials = workspace_root() / "校对"
-    if materials.is_dir():
-        for root in materials.iterdir():
-            if not root.is_dir() or not (root / MANIFEST).is_file():
-                continue
-            ensure_inside(root)
-            data = load(root)
-            if data.get("task_id") != task_id:
-                continue
-            unit_name = next((name for name, identity in data.get("unit_ids", {}).items()
-                              if identity == unit_id), None)
-            if unit_name is None:
-                raise NotFoundError("当前材料中不存在此unit_id", details={"task_id": task_id})
-            unit = relative_path(root, data["paths"]["paper"]) / unit_name
-            if not unit.is_dir():
-                raise NotFoundError("登记的单元目录不存在", details={"unit_id": unit_id})
-            return root, unit
-    raise NotFoundError("当前工作区中不存在此task_id", details={"task_id": task_id})
+    broken: list[dict] = []
+    for root, data, error in _scan_materials():
+        if error is not None:
+            broken.append(error)
+            continue
+        if data.get("task_id") != task_id:
+            continue
+        unit_name = next((name for name, identity in data.get("unit_ids", {}).items()
+                          if identity == unit_id), None)
+        if unit_name is None:
+            raise NotFoundError("当前材料中不存在此unit_id",
+                                details=_unknown_unit_details(data, unit_id))
+        unit = relative_path(root, data["paths"]["paper"]) / unit_name
+        if not unit.is_dir():
+            raise NotFoundError("登记的单元目录不存在", details={"unit_id": unit_id})
+        return root, unit
+    raise NotFoundError(_task_not_found_message(task_id),
+                        details={"task_id": task_id, "unreadable_materials": broken})
 
 
 TERMINAL_PHASES: frozenset[str] = frozenset({"registered", "parent_reviewed", "deliverable"})
@@ -256,15 +333,15 @@ TERMINAL_PHASES: frozenset[str] = frozenset({"registered", "parent_reviewed", "d
 
 def _material_by_task(task_id: str) -> Path:
     """只读解析task_id对应的材料目录，找不到就报 not_found。"""
-    materials = workspace_root() / "校对"
-    if materials.is_dir():
-        for root in sorted(materials.iterdir()):
-            if not root.is_dir() or not (root / MANIFEST).is_file():
-                continue
-            ensure_inside(root)
-            if load(root).get("task_id") == task_id:
-                return root
-    raise NotFoundError("当前工作区中不存在此task_id", details={"task_id": task_id})
+    broken: list[dict] = []
+    for root, data, error in _scan_materials():
+        if error is not None:
+            broken.append(error)
+            continue
+        if data.get("task_id") == task_id:
+            return root
+    raise NotFoundError(_task_not_found_message(task_id),
+                        details={"task_id": task_id, "unreadable_materials": broken})
 
 
 def unit_progress(task_id: str, *, unit_id: str | None = None,
@@ -283,19 +360,17 @@ def unit_progress(task_id: str, *, unit_id: str | None = None,
     run = data["runs"][-1]
     state_map = run.get("unit_state", {}) or {}
     events_map = run.get("unit_events", {}) or {}
-    cancellations = run.get("cancellations", []) or []
     identities = data.get("unit_ids", {}) or {}
     selected = [(name, identity) for name, identity in identities.items()
                 if unit_id is None or identity == unit_id]
     if unit_id is not None and not selected:
-        raise NotFoundError("当前材料中不存在此unit_id", details={"task_id": task_id})
+        raise NotFoundError("当前材料中不存在此unit_id", details=_unknown_unit_details(data, unit_id))
     current = datetime.now(timezone.utc)
     units: list[dict] = []
     for name, identity in selected:
         state = state_map.get(identity) or {}
         last_event_at = state.get("last_event_at")
-        cancel = next((item for item in reversed(cancellations)
-                       if item.get("unit_id") == identity), None)
+        cancel = _last_cancellation(run, identity)
         in_flight = bool(state) and state.get("phase") not in TERMINAL_PHASES and cancel is None
         age: int | None = None
         if isinstance(last_event_at, str):
@@ -315,7 +390,8 @@ def unit_progress(task_id: str, *, unit_id: str | None = None,
             "in_flight": in_flight,
             "stale": bool(in_flight and age is not None and age > stale_after_seconds),
             "cancelled": ({"initiator": cancel.get("initiator"), "reason": cancel.get("reason"),
-                           "at": cancel.get("at")} if cancel else None),
+                           "at": cancel.get("at"), "agent_id": cancel.get("agent_id"),
+                           "attempt_id": cancel.get("attempt_id")} if cancel else None),
         })
     return {"ok": True, "task_id": task_id, "run_id": run.get("run_id"),
             "material_dir": str(root), "stale_after_seconds": stale_after_seconds,
@@ -417,6 +493,14 @@ def new_run(data: dict, params: dict, associated: list[dict]) -> str:
 
 def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
     """为当前轮次记录一次自动/交互执行授权和固定恢复预算。"""
+    if not root.is_dir():
+        # 目录不存在时 locked() 会抛 FileNotFoundError，被 CLI 兜成裸 traceback + `unexpected`。
+        # 第 12 讲实测：父代理在 convert 之前先登记执行模式，只拿到一段堆栈，无从判断该先做什么。
+        # 真实顺序本就要求 convert → split → execution-policy，所以这里必须给出补救指引。
+        raise NotFoundError(
+            "材料目录不存在：请先运行 `jiaodui convert <源文件> --mode exam|lecture` 生成材料，"
+            "再在拆分之后登记执行模式（顺序：convert → split → execution-policy）",
+            details={"material_dir": str(root)})
     with locked(root):
         data = load(root)
         run = data["runs"][-1]
@@ -478,10 +562,16 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
                 + (f"；相近的已知码：{'、'.join(hint)}" if hint else ""),
                 code="recovery-forbidden" if classified["forbidden"] else "unclassified-error-code")
         if category is not None and category != classified["category"]:
+            # 类别由错误码确定性决定，不由模型自选；但仍然要给出**可机械修正的目标值**：
+            # 第 12 讲实测，父代理按一条批量的 4 次调用全填了 report_repair，报错只说
+            # 「属于 call_correction」，4 次全部作废后重发。details 直接给出应填值。
             raise BusinessError(
                 f"类别与错误码不一致：{error_code!r} 属于 {classified['category']}，"
-                f"不能记为 {category}",
-                code="recovery-category-mismatch")
+                f"不能记为 {category}；错误驱动的恢复请**省略 category**，系统按错误码派生",
+                code="recovery-category-mismatch",
+                details={"error_code": error_code,
+                         "provided_category": category,
+                         "expected_category": classified["category"]})
         category = classified["category"]
     root, _ = find_unit_by_id(task_id, unit_id)
     with locked(root):
@@ -522,26 +612,24 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
 
 
 def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str,
-                      agent_id: str | None = None, cancel_initiator: str | None = None,
-                      cancel_reason: str | None = None,
+                      agent_id: str | None = None,
                       expected_run_id: str | None = None) -> dict:
-    """记录可恢复阶段事件与明确来源的取消，不从错误文本猜测。
+    """记录可恢复阶段事件。
 
     `expected_run_id` 是 CAS 防护（采纳 main）：与当前轮次不一致即 `run-changed`，
     避免迟到的阶段事件被写进新轮次。
+
+    **这里刻意不接受取消参数**（取消走 `record_unit_cancel`）：第 12 讲实测中，
+    `unit-event` 把 `cancel_initiator`/`cancel_reason` 当成普通可选 enum 暴露，
+    单元子代理在正常 `prepared` 心跳里顺手填了 `user` + `user_cancel`，在 8 个单元上
+    伪造出约 29 条「用户取消」；而 `dispatch-plan` 只要有取消记录就永久 `stop=true`，
+    父代理只能靠 `--rerun` 逃出，又引发 `run-changed` 连锁。取消因此拆成独立工具，
+    并在 preset 的 `toolFilter` 里对子代理不可见。
     """
     phases = {"prepared", "read", "images", "calculated", "proposed", "self_checked",
               "verified", "registered", "parent_reviewed", "deliverable"}
     if phase not in phases or not isinstance(attempt_id, str) or not attempt_id:
         raise BusinessError("阶段或attempt_id无效", code="event-invalid")
-    if (cancel_initiator is None) != (cancel_reason is None):
-        raise BusinessError("取消发起者与原因必须同时提供", code="cancel-invalid")
-    if cancel_initiator is not None:
-        allowed = {"user": {"user_cancel"},
-                   "parent": {"technical_timeout", "superseded"},
-                   "host": {"technical_timeout", "superseded"}}
-        if cancel_initiator not in allowed or cancel_reason not in allowed[cancel_initiator]:
-            raise BusinessError("取消来源与原因不匹配", code="cancel-invalid")
     root, _ = find_unit_by_id(task_id, unit_id)
     with locked(root):
         data = load(root)
@@ -557,12 +645,77 @@ def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str
         run.setdefault("unit_events", {}).setdefault(unit_id, []).append(event)
         run.setdefault("unit_state", {})[unit_id] = {"phase": phase, "attempt_id": attempt_id,
                                                      "agent_id": agent_id, "last_event_at": event["at"]}
-        if cancel_initiator is not None:
-            run.setdefault("cancellations", []).append({
-                **event, "initiator": cancel_initiator, "reason": cancel_reason,
-            })
         write(root, data)
         return event
+
+
+_ALLOWED_CANCELLATIONS = {"user": {"user_cancel"},
+                          "parent": {"technical_timeout", "superseded"},
+                          "host": {"technical_timeout", "superseded"}}
+
+
+def _last_cancellation(run: dict, unit_id: str) -> dict | None:
+    """取该单元最后一条取消记录的**生效**条目；末尾是撤销记录则视为未取消。"""
+    entries = [item for item in (run.get("cancellations") or [])
+               if item.get("unit_id") == unit_id]
+    if not entries:
+        return None
+    last = entries[-1]
+    return None if last.get("revoked") else last
+
+
+def record_unit_cancel(task_id: str, unit_id: str, *, attempt_id: str, initiator: str,
+                       reason: str, agent_id: str | None = None,
+                       expected_run_id: str | None = None, revoke: bool = False) -> dict:
+    """记录或撤销一次**显式**取消；只由父代理 / 宿主调用，单元子代理拿不到该工具。
+
+    - 取消来源与原因必须配对：`user` 只配 `user_cancel`；`parent`/`host` 只配
+      `technical_timeout`/`superseded`（父代理技术取消不得冒称用户取消）。
+    - `revoke=True` 追加一条撤销记录（append-only，可审计），让父代理在技术性停止后
+      无需 `--rerun` 就能继续派发；**用户取消不可撤销**（那是人的决定，不是父代理的）。
+    """
+    if initiator not in _ALLOWED_CANCELLATIONS or reason not in _ALLOWED_CANCELLATIONS[initiator]:
+        raise BusinessError("取消来源与原因不匹配", code="cancel-invalid",
+                            details={"initiator": initiator, "reason": reason,
+                                     "allowed": {key: sorted(value)
+                                                 for key, value in _ALLOWED_CANCELLATIONS.items()}})
+    if revoke and initiator == "user":
+        raise BusinessError("用户取消不可撤销：这是人的决定，只能由用户重新发起",
+                            code="cancel-invalid",
+                            details={"initiator": initiator, "reason": reason})
+    if not isinstance(attempt_id, str) or not attempt_id:
+        raise BusinessError("attempt_id无效", code="event-invalid")
+    root, _ = find_unit_by_id(task_id, unit_id)
+    with locked(root):
+        data = load(root)
+        run = data["runs"][-1]
+        if expected_run_id is not None and expected_run_id != run["run_id"]:
+            raise BusinessError("取消事件只能记入调用方预期的轮次", code="run-changed",
+                                details={"expected_run_id": expected_run_id,
+                                         "run_id": run["run_id"]})
+        require_current_policy(run, data)
+        standing = _last_cancellation(run, unit_id)
+        if revoke:
+            if standing is None:
+                raise BusinessError("该单元当前没有可撤销的取消记录", code="cancel-invalid",
+                                    details={"unit_id": unit_id})
+            if standing.get("initiator") == "user":
+                # 用户取消是人的决定，不是父代理可以代撤销的；只能由用户重新发起。
+                raise BusinessError("用户取消不可撤销：这是人的决定，只能由用户重新发起",
+                                    code="cancel-invalid",
+                                    details={"unit_id": unit_id,
+                                             "initiator": standing.get("initiator"),
+                                             "reason": standing.get("reason")})
+            entry = {"at": now(), "unit_id": unit_id, "attempt_id": attempt_id,
+                     "agent_id": agent_id, "revoked": True,
+                     "revoked_initiator": standing.get("initiator"),
+                     "revoked_reason": standing.get("reason")}
+        else:
+            entry = {"at": now(), "unit_id": unit_id, "attempt_id": attempt_id,
+                     "agent_id": agent_id, "initiator": initiator, "reason": reason}
+        run.setdefault("cancellations", []).append(entry)
+        write(root, data)
+        return entry
 
 
 def record_calc_call(task_id: str, unit_id: str, operation: str, params: dict, result: dict) -> str:
@@ -645,6 +798,36 @@ def registered(root: Path, data: dict, unit: Path) -> bool:
     return False
 
 
+def unit_needs_parent_review(root: Path, data: dict, unit: Path) -> bool:
+    """结构化（schema v2）单元是否还缺当前版本的父复核（未复核或已被退回）。
+
+    技术登记（`registered`）只证明报告过了 verify 闸门；正式完成还要求父代理对
+    当前 snapshot 复核为 accepted。缺复核或退回的单元必须重新回到待派发集合，
+    否则 `needs_revision` 之后该单元既不再派发、又被 status 报成「已完成」。
+    非 v2（历史 v1 报告）不适用父复核，返回 False，保持旧链语义不变。
+    """
+    from .review import review_current
+    try:
+        unit_data = json.loads(data_path(unit).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False  # 数据缺失/损坏由 verify 与 registered 判定，这里不重复拒绝
+    if not isinstance(unit_data, dict) or unit_data.get("schema_version") != 2:
+        return False
+    return not review_current(root, data, unit.name)
+
+
+def run_units_complete(root: Path, data: dict) -> bool:
+    """当前轮次是否所有单元都已登记、过闸，且 v2 单元都有当前父复核。"""
+    from .verify import verify_unit
+    paper = relative_path(root, data["paths"]["paper"])
+    return all(
+        is_skip_unit(paper / name)
+        or (registered(root, data, paper / name)
+            and verify_unit(paper / name).ok
+            and not unit_needs_parent_review(root, data, paper / name))
+        for name in data["unit_set"])
+
+
 def register_locked(root: Path, unit: Path, text: str, expected_run_id: str) -> None:
     """调用方持有材料锁时登记；不重新获取目录锁。"""
     data = load(root)
@@ -672,11 +855,7 @@ def register_locked(root: Path, unit: Path, text: str, expected_run_id: str) -> 
     data["unit_records"].append({"unit": unit.name, "run_id": data["current_run_id"],
                                  "report_sha256": digest, "data_sha256": data_digest,
                                  "recorded_at": now(), "inputs": data["unit_inputs"][unit.name]})
-    from .verify import verify_unit
-    complete = all(is_skip_unit(paper / name)
-                   or (registered(root, data, paper / name) and verify_unit(paper / name).ok)
-                   for name in data["unit_set"])
-    data["runs"][-1]["status"] = "completed" if complete else "in_progress"
+    data["runs"][-1]["status"] = "completed" if run_units_complete(root, data) else "in_progress"
     write(root, data)
 
 

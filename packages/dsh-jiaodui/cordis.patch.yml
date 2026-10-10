@@ -144,6 +144,10 @@
                       - jiaodui_unit_locate
                       - jiaodui_unit_snapshot
                       - jiaodui_unit_submit
+                      # 只给阶段心跳，**不给 jiaodui_unit_cancel**：单元子代理无权取消自己。
+                      # 第 12 讲实测：取消一旦作为 unit-event 的可选字段暴露，子代理会在正常
+                      # prepared 心跳里填 user/user_cancel，伪造取消让 dispatch-plan 永久
+                      # stop=true，父代理只能靠 --rerun 逃出并引发 run-changed 连锁。
                       - jiaodui_unit_event
                       - jiaodui_unit_recovery
                       - jiaodui_calc_evaluate

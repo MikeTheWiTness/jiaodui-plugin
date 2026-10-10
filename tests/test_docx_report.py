@@ -2176,6 +2176,88 @@ def test_build_docx_keeps_table_and_anchor_when_marker_spans_a_row(tmp_path, mon
     assert "0.125" in commented, "「改为」内容应进批注"
 
 
+def _table_rows(path) -> list[list[str]]:
+    """返回 docx 里每个表格行的单元格文本。"""
+    with zipfile.ZipFile(path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    rows = []
+    for row in re.findall(r"<w:tr\b.*?</w:tr>", document, re.S):
+        cells = re.findall(r"<w:tc(?: [^>]*)?>.*?</w:tc>", row, re.S)
+        rows.append(["".join(re.findall(r"<w:t(?:\s[^>]*)?>(.*?)</w:t>", cell, re.S)) for cell in cells])
+    return rows
+
+
+def _commented_texts(path) -> list[str | None]:
+    """返回每条批注锚点实际覆盖的正文字符串（空范围会是 ''）。"""
+    with zipfile.ZipFile(path) as archive:
+        document = archive.read("word/document.xml").decode("utf-8")
+    covered = []
+    for cid in re.findall(r'<w:commentRangeStart w:id="(\d+)"', document):
+        match = re.search(
+            r'<w:commentRangeStart w:id="%s"/>(.*?)<w:commentRangeEnd w:id="%s"/>' % (cid, cid),
+            document, re.S)
+        covered.append(re.sub(r"<[^>]+>", "", match.group(1)) if match else None)
+    return covered
+
+
+@PANDOC_REQUIRED
+def test_cjk_table_keeps_columns_and_cell_anchor_keeps_offset(tmp_path):
+    """回归（P1×2）：中文列按显示宽度补齐、格内锚点保留原偏移。
+
+    修复前：列宽用 `len`/`ljust` 按码点算，pandoc 把两列并成一格；格内锚点被
+    追加到单元格末尾，批注范围变成空串——两者都仍然 `ok=true`，闸门看不出来。
+    """
+    paper = tmp_path / "中文表格"
+    _write_unit_report(paper, "第1题",
+        "# 第1题 校对报告\n\n一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+        "| 对象 | 数值 |\n| --- | --- |\n| 前【1|木板|木块】后 | 10 |\n"
+        "\n### 修改原因\n1. 用词不当。\n")
+    result = build_docx(str(paper), legacy_layout=True)
+    assert result.ok and result.anchor_count == 1
+    assert _table_rows(result.out_path) == [["对象", "数值"], ["前木板后", "10"]]
+    assert _commented_texts(result.out_path) == ["木板"], "批注必须覆盖被标记文字，不能是空范围"
+
+
+@PANDOC_REQUIRED
+def test_dash_fenced_cjk_table_keeps_columns(tmp_path):
+    """回归（P1）：破折线包裹的表格按显示宽度转 grid table，中文列不得并成一格。
+
+    这类块是源材料表格的 pandoc 输出（整行破折线 + 2 空格分列），pandoc 直接读
+    只当一列；转换必须排在锚点注入之后算列宽，否则标记被替换后行宽变化、整表塌掉。
+    """
+    paper = tmp_path / "破折线表格"
+    _write_unit_report(paper, "第1题",
+        "# 第1题 校对报告\n\n一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+        "--------------\n对象   数值\n前【1|木板|木块】后   10\n--------------\n"
+        "\n### 修改原因\n1. 用词不当。\n")
+    result = build_docx(str(paper), legacy_layout=True)
+    assert result.ok and result.anchor_count == 1
+    assert _table_rows(result.out_path) == [["对象", "数值"], ["前木板后", "10"]]
+    assert _commented_texts(result.out_path) == ["木板"]
+
+
+def test_display_width_follows_pandoc_grid_rule():
+    """列宽判据来自 pandoc 实测：东亚宽/全角记 2，其余（含歧义宽）记 1。"""
+    from jiaodui.docx_report import _display_width, _pad_display
+
+    assert _display_width("对") == 2 and _display_width("，") == 2 and _display_width("（") == 2
+    assert _display_width("×") == 1 and _display_width("μ") == 1 and _display_width("α") == 1
+    assert _display_width("abc") == 3 and _display_width("对象ab") == 6
+    assert _pad_display("对", 4) == "对  " and _pad_display("abc", 2) == "abc"
+
+
+def test_pipe_cells_keep_anchor_offset_and_row_edges():
+    """定向单测：格内锚点留原位；整行首/尾的纯锚点段并入相邻格，不多出一列。"""
+    from jiaodui.docx_report import _pipe_cells_keeping_anchors
+
+    start = '`<w:commentRangeStart w:id="1"/>`{=openxml}'
+    end = ('`<w:commentRangeEnd w:id="1"/>'
+           '<w:r><w:commentReference w:id="1"/></w:r>`{=openxml}')
+    assert _pipe_cells_keeping_anchors(f"| 前{start}木板{end}后 | 10 |") == [f"前{start}木板{end}后", "10"]
+    assert _pipe_cells_keeping_anchors(f"| {start}整行 | 10 |{end}") == [f"{start}整行", f"10{end}"]
+    assert _pipe_cells_keeping_anchors(f"   {start}| t/s | 0.1 |{end}") == [f"{start}t/s", f"0.1{end}"]
+
+
 def test_gridify_marked_tables_only_rewrites_tables_with_anchors():
     """定向单测：只重排含锚点的 pipe table，且不碰已有 grid table。
 

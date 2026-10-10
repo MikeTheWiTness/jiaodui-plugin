@@ -2,6 +2,10 @@
 
 优先级：先校验现有报告；通过则为「已完成」，即使保留旧 _校对失败.md 也不回退。
 未通过且有失败记录才为「失败」；未通过且无失败记录为「已交付未过校验」。
+
+「本轮完成」比 verify 更严一档（`scan_status`）：材料有清单时还要求**本轮已登记**，
+且结构化（schema v2）单元有**当前版本的父复核 accepted**；缺任一项都记「本轮未完成」
+并回到 `dispatch-plan` 的候选集合——技术登记不等于正式完成，被退回的单元必须能再派发。
 """
 from __future__ import annotations
 
@@ -163,9 +167,15 @@ def scan_status(paper_dir: str | Path) -> PaperStatus:
         result.warnings.append("未发现任何单元目录（第N题 / 板块N / 单元N）")
     for d in dirs:
         status = status_of_unit(d)
-        if data is not None and status.state == COMPLETED and not material.registered(root, data, d):
-            status.state = CURRENT_PENDING
-            status.reason = "本轮尚未登记交付，或报告/单元输入摘要已改变（旧报告不算本轮完成）"
+        if data is not None and status.state == COMPLETED:
+            # 「本轮完成」= 已登记 + 过闸 + v2 有当前父复核；三者缺一都回到待处理，
+            # 否则被退回的单元会被报成已完成并从 dispatch-plan 的候选里消失。
+            if not material.registered(root, data, d):
+                status.state = CURRENT_PENDING
+                status.reason = "本轮尚未登记交付，或报告/单元输入摘要已改变（旧报告不算本轮完成）"
+            elif material.unit_needs_parent_review(root, data, d):
+                status.state = CURRENT_PENDING
+                status.reason = "已登记但缺当前版本的父复核（未复核或已退回），不能算本轮完成"
         result.units.append(status)
         # 失败留痕格式问题只告警：它是 agent 写的自由文本，不是闸门
         for problem in status.failure_note_problems:

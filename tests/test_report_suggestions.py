@@ -112,6 +112,84 @@ def test_self_check_and_first_pass_evidence_are_required():
     assert error.value.code == "proposal.evidence-assumptions"
 
 
+def test_schema_error_names_missing_and_unknown_keys():
+    """`proposal.schema` 必须点名缺哪个、多哪个键。
+
+    回放实测（第 11 讲 单元1）：同一处缺键在只报「字段缺失或包含未支持字段」时
+    连撞 5 次提交，196 步后放弃并由父代理重派。
+    """
+    source = "木板。"
+    payload = proposal(source)
+    payload.pop("run_id")
+    payload["unexpected_key"] = 1
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.schema"
+    message = str(error.value)
+    assert "run_id" in message and "缺少必需字段" in message
+    assert "unexpected_key" in message and "未支持字段" in message
+
+
+def test_self_check_incomplete_lists_missing_required_checks():
+    """必需检查项是固定字面量，报错必须列出缺哪几个、合法值是什么。"""
+    source = "木板。"
+    payload = proposal(source)
+    payload["self_check"] = {"status": "passed", "checks": ["real_issue"], "unresolved": []}
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.self-check-incomplete"
+    message = str(error.value)
+    assert "replacement_semantics" in message, "缺项必须点名"
+    assert "related_coverage" in message
+    assert "scope_and_uncertainty" in message
+    assert "severity" in message, "必须同时给出合法字面量清单"
+
+
+def test_evidence_assumptions_error_names_index_and_missing_field():
+    """逐项点名：只有「需含id、text和source_locations」时调用方无法定位是第几项。"""
+    source = "木板。"
+    payload = proposal(source)
+    payload["evidence"]["assumptions"] = [
+        {"id": "e0", "text": "先前假设。", "source_locations": []},
+        {"id": "e1", "text": "对象为物块。"},
+    ]
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.evidence-assumptions"
+    message = str(error.value)
+    assert "assumptions[1]" in message
+    assert "source_locations" in message
+
+
+def test_evidence_symbols_error_reports_actual_shape():
+    """symbols 只接受数组；报错要给出实际收到的形态。"""
+    source = "木板。"
+    payload = proposal(source)
+    payload["evidence"]["symbols"] = None
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.evidence-symbols"
+    assert "NoneType" in str(error.value)
+
+
+def test_evidence_calculation_error_names_index_and_missing_fields():
+    """计算证据缺字段必须报出下标与字段名，而不是重写整份 evidence。"""
+    source = "木板。"
+    payload = proposal(source)
+    payload["evidence"]["calculations"] = [{"id": "e2", "call_id": "fake"}]
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.evidence-calculation"
+    message = str(error.value)
+    assert "calculations[0]" in message
+    assert "expression" in message and "result" in message
+
+
 def test_fabricated_calc_call_is_rejected():
     source = "木板。"
     payload = proposal(source)
@@ -397,6 +475,32 @@ def test_calc_evidence_accepts_verbatim_copy_of_recorded_call():
                         params={"expression": "T = lam/v"}, success=True,
                         result={"success": True, "result": recorded_result, "error": None})]
     payload["evidence"]["calculations"][0]["expression"] = "T = lam/v"
+    candidate = render_suggestions(source, payload, expected_task_id="a" * 32,
+                                   expected_unit_id="b" * 32, expected_run_id="run-1",
+                                   calc_calls=calls)
+    assert candidate.summary == "一般问题"
+
+
+def test_calc_evidence_mismatch_lists_copyable_candidates_for_multi_argument_calls():
+    """回放根因：equality 没有唯一 expression 字段，子 agent 用 '==' 拼两条参数后只会
+    得到「不逐字一致」。报错必须列出每个可照抄的字段取值，并点明拼接写法错在哪。"""
+    source = "木板。"
+    payload, _ = _payload_with_calc(source, expression="2*2 == 2*4 + (-2)*2", result=True)
+    calls = [_calc_call(source, operation="equality",
+                        params={"expression_a": "2*2", "expression_b": "2*4 + (-2)*2",
+                                "subject": "高中物理", "task_id": "a" * 32},
+                        result={"success": True, "result": True, "error": None})]
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1",
+                           calc_calls=calls)
+    assert error.value.code == "proposal.calc-call-mismatch"
+    message = str(error.value)
+    assert "expression_a='2*2'" in message and "expression_b='2*4 + (-2)*2'" in message
+    assert "拼成了一条" in message and "'2*2'" in message
+    assert "subject" not in message and "task_id" not in message, "身份/元数据字段不能当候选，避免诱导抄错字段"
+    # 逐字抄回其中一个字段即通过：诊断不能变成新闸门。
+    payload["evidence"]["calculations"][0]["expression"] = "2*4 + (-2)*2"
     candidate = render_suggestions(source, payload, expected_task_id="a" * 32,
                                    expected_unit_id="b" * 32, expected_run_id="run-1",
                                    calc_calls=calls)

@@ -88,5 +88,9 @@ def record_parent_review(task_id: str, unit_id: str, *, expected_snapshot_sha256
             "proposal_sha256": review["proposal_sha256"],
             "inputs": review["inputs"],
         })
+        # 轮次完成口径含父复核：接受/退回都必须重算，否则退回后仍留着 completed、
+        # 接受后也补不回 completed。
+        data["runs"][-1]["status"] = ("completed" if material.run_units_complete(root, data)
+                                      else "in_progress")
         material.write(root, data)
         return {"ok": True, "review": review, "current": review_current(root, data, unit.name)}
