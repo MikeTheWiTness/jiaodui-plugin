@@ -226,6 +226,7 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
                    material_name: str | None = None, images_dir: str | Path | None = None,
                    clean: bool = True, boundaries: list[dict] | None = None,
                    boundaries_sha256: str | None = None, rerun: bool = False,
+                   scope: str = "full", scope_reason: str | None = None,
                    adopt_units: bool = False, replace_units: bool = False,
                    legacy_layout: bool = False,
                    mode_origin: str | None = None, mode_reason: str | None = None,
@@ -280,7 +281,8 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
     def split(before_write=None):
         if boundaries is not None:
             return slice_by_boundaries(str(raw), boundaries, str(target), name, mode,
-                                       clean=clean, config=config, before_write=before_write)
+                                       clean=clean, config=config, scope=scope, scope_reason=scope_reason,
+                                       before_write=before_write)
         if strategy != "rule":
             return split_by_strategy(str(raw), str(target), name, config, mode=mode,
                                      strategy=strategy, clean=clean, before_write=before_write)
@@ -304,11 +306,19 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
             data["unit_set"] = [p.name for p in dirs]
             material.ensure_unit_ids(data, data["unit_set"])
             data["unit_inputs"] = {p.name: material.unit_inputs(directory, p) for p in dirs}
+            coverage = {"scope": "excerpt", "reason": "人工接纳磁盘单元，源文覆盖未重新核验",
+                        "checked": False, "total_lines": None, "nonempty_lines": None,
+                        "uncovered_ranges": None, "overlapping_ranges": None}
+            data["params"] = {**data["params"], "slice_coverage": coverage}
             material.new_run(data, data["params"], data["resources"])
             data["runs"][-1]["actions"].append({"command": "split --adopt-units", "at": material.now(),
-                                                "before": before, "after": data["unit_set"]})
+                                                "before": before, "after": data["unit_set"],
+                                                "slice_coverage": coverage})
             material.write(directory, data)
-            return SplitResult(unit_dirs=[str(p) for p in dirs])
+            result = SplitResult(unit_dirs=[str(p) for p in dirs], coverage=coverage)
+            if coverage is not None:
+                result.warnings.append(coverage["reason"] + "；全量处理请重新 slice --replace-units")
+            return result
         # --replace-units 的语义就是「集合会变」，不能拿旧集合先卡住自己。
         if data["unit_set"] and not replace_units:
             material.check_units(directory, data)
@@ -332,6 +342,8 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
                   "raw_sha256": material.sha256(raw),
                   "config_sha256": hashlib.sha256(json.dumps(config, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
         result = split(before_write=check_unit_set)
+        if result.coverage is not None:
+            params["slice_coverage"] = result.coverage
         data["material_type"] = selection
         dirs = [Path(p) for p in result.unit_dirs]
         names = [p.name for p in dirs]
@@ -368,6 +380,7 @@ def slice_material(boundaries_file: str | Path | None, *, raw: str | Path | None
                    material_name: str | None = None, clean: bool = True,
                    rerun: bool = False, replace_units: bool = False,
                    legacy_layout: bool = False, preview: bool = False,
+                   scope: str | None = None, scope_reason: str | None = None,
                    mode_origin: str | None = None, mode_reason: str | None = None):
     if preview:
         from .split import lecture_cleaned_text
@@ -404,7 +417,11 @@ def slice_material(boundaries_file: str | Path | None, *, raw: str | Path | None
     boundaries = metadata.get("boundaries") if isinstance(data, dict) else data
     if not isinstance(boundaries, list) or not boundaries:
         raise BusinessError("边界清单缺少非空 boundaries 数组", code="invalid-boundaries")
+    if scope is not None and metadata.get("scope") is not None and scope != metadata["scope"]:
+        raise BusinessError("命令范围与边界清单不一致", code="slice-scope-required")
     return split_material(raw, subject=subject or metadata.get("subject"),
+                           scope=scope if scope is not None else metadata.get("scope", "full"),
+                           scope_reason=scope_reason if scope_reason is not None else metadata.get("scope_reason"),
                           mode=mode or metadata.get("mode"),
                           out_root=out_root or metadata.get("out_root"),
                           base_name=base_name or metadata.get("base_name"), material_name=material_name,

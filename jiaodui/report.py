@@ -20,6 +20,7 @@ class BuildReportResult:
     failed: list[dict] = field(default_factory=list)
     skipped: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    coverage: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -32,6 +33,7 @@ class BuildReportResult:
             "failed": self.failed,
             "skipped": self.skipped,
             "warnings": self.warnings,
+            "coverage": self.coverage,
         }
 
 
@@ -71,6 +73,10 @@ def build_report(paper_dir: str | Path, out_path: str | Path | None = None,
         return result
 
     sections: list[str] = [f"# {_base_name(paper_dir)} 整卷校对报告", ""]
+    result.coverage = data["params"].get("slice_coverage") if data is not None else None
+    if result.coverage and result.coverage["scope"] == "excerpt":
+        sections.extend([f"> 校对范围：明确节选。原因：{result.coverage['reason']}。"
+                         "完成仅表示所选单元完成，不代表全材料完成。", ""])
     for d in dirs:
         name = d.name
         report = paths.report_path(d)

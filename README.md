@@ -36,7 +36,7 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 | `jiaodui convert <file> --mode exam\|lecture` | 按已确认类型导入 docx / idml / md，记录类型与来源 |
 | `jiaodui split <raw_md> --subject <学科> [--mode exam\|lecture]` | 沿用材料类型；默认规则，`--strategy manual\|none` 支持人工标记/整篇 |
 | `jiaodui precheck-split <dir>` | 拆分预检：单元数 / 首行 / 字符数分布 / 空与超长单元 |
-| `jiaodui slice --boundaries <f> [--mode] [--subject]` | 按边界清单确定性切片；`--preview` 打印讲义清理后正文供定行号 |
+| `jiaodui slice --boundaries <f> [--mode] [--subject]` | 默认按源文行区间全量切片，写前核对非空行覆盖；明确节选用 `--scope excerpt --scope-reason`；`--preview` 供定行号 |
 | `jiaodui status <paper_dir>` | 扫描单元状态（未开始 / 已交付未过校验 / 已完成 / 失败） |
 | `jiaodui verify-report --unit <dir>` | 交付即校验：格式 + 原因对应 + 严重度 + 原文完整性 + 图片资源 |
 | `jiaodui parse-report --unit <dir>` | 旧Markdown报告兼容解析；默认拒绝未过校验的报告 |
@@ -44,7 +44,7 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 | `jiaodui unit-locate --task-id ID --unit-id ID --phrase TEXT` | 查询重复短语候选、安全区间与版本绑定位置ID |
 | `jiaodui unit-snapshot --task-id ID --unit-id ID` | 获取run、输入、报告和数据组成的提交快照 |
 | `jiaodui unit-submit ...` | 从schema v2结构化建议生成全文报告并原子校验登记 |
-| `jiaodui unit-recovery / unit-event` | 按类别消费有限预算，记录阶段和取消来源 |
+| `jiaodui unit-recovery / unit-event` | 按类别消费有限预算；recovery 可传 `--failure-json` 由 core 派生指纹，同时记录阶段事件 |
 | `jiaodui calc-schema [--operation OP]` | 从核心参数元数据导出operation-specific JSON Schema |
 | `jiaodui unit-schema` | 导出结构化建议schema v2 |
 | `jiaodui repair-report --unit <dir> [--apply]` | 旧Markdown报告完整性辅助，默认只预览 |

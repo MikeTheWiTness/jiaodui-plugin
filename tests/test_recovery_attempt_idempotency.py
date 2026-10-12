@@ -13,12 +13,19 @@ main 的 `attempt-id-conflict` 保持一致。语义：
 from __future__ import annotations
 
 import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from jiaodui import material
 from jiaodui.errors import BusinessError
 from jiaodui.workflow import convert_material, split_material
+
+ROOT = Path(__file__).resolve().parents[1]
+
 
 
 def _scene(tmp_path, monkeypatch, name="B3幂等测试"):
@@ -135,6 +142,60 @@ def test_invalid_attempt_id_is_rejected(tmp_path, monkeypatch):
                                              attempt_id=bad, error_code="usage")
         assert error.value.code == "invalid-attempt-id", bad
     assert "call_correction" not in material.load(root)["runs"][-1].get("recovery", {}).get(unit_id, {})
+
+
+def test_cli_failure_json_recovery_derives_and_returns_fingerprint(tmp_path, monkeypatch):
+    root, task_id, unit_id = _scene(tmp_path, monkeypatch)
+    current_run_id = material.load(root)["current_run_id"]
+    material.record_unit_event(task_id, unit_id, phase="prepared", attempt_id="cli-attempt",
+                               expected_run_id=current_run_id)
+    failure = {"message": "required field missing", "details": {"field": "source_sha256"}}
+    result = subprocess.run(
+        [sys.executable, "-m", "jiaodui", "unit-recovery", "--task-id", task_id,
+         "--unit-id", unit_id, "--attempt-id", "cli-attempt", "--error-code", "usage",
+         "--failure-json", json.dumps(failure)],
+        cwd=ROOT, capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["allowed"] is True
+    assert payload["fingerprint"] == material.load(root)["runs"][-1]["recovery_events"][-1]["fingerprint"]
+
+
+
+def test_placeholder_fingerprints_are_rejected_without_spending_budget(tmp_path, monkeypatch):
+    root, task_id, unit_id = _scene(tmp_path, monkeypatch)
+    for fingerprint in ("0" * 64, "1" * 64, "f" * 64):
+        with pytest.raises(BusinessError) as error:
+            material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
+                                             attempt_id="placeholder-" + fingerprint[0],
+                                             error_code="usage")
+        assert error.value.code == "invalid-attempt-fingerprint"
+    assert unit_id not in material.load(root)["runs"][-1].get("recovery", {})
+
+
+def test_failure_payload_derives_stable_fingerprint_without_volatile_fields(tmp_path, monkeypatch):
+    root, task_id, unit_id = _scene(tmp_path, monkeypatch)
+    failure = {
+        "message": "proposal field is missing",
+        "details": {"missing": ["source_sha256"]},
+        "call_id": "volatile-call-1",
+        "at": "2026-10-10T00:00:00Z",
+    }
+    first = material.record_recovery_attempt(
+        task_id, unit_id, None, None, attempt_id="submit-fix-1", error_code="usage",
+        failure=failure)
+    recorded = material.load(root)["runs"][-1]["recovery_attempts"][unit_id]["submit-fix-1"]
+    second = material.record_recovery_attempt(
+        task_id, unit_id, None, None, attempt_id="submit-fix-1", error_code="usage",
+        failure={**failure, "call_id": "volatile-call-2", "at": "later"})
+
+    assert first["allowed"] is True
+    assert second["idempotent"] is True
+    assert recorded["fingerprint"] == hashlib.sha256(
+        b'{"details":{"missing":["source_sha256"]},"error_code":"usage",'
+        b'"message":"proposal field is missing"}').hexdigest()
+    assert second["fingerprint"] == recorded["fingerprint"]
 
 
 def test_denied_attempt_leaves_no_trace_and_repeats_the_same_verdict(tmp_path, monkeypatch):

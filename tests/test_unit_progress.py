@@ -113,8 +113,9 @@ def test_unit_event_has_no_cancellation_parameters():
 
 
 def test_cancel_reports_actor_and_revoke_releases_dispatch_stop(tmp_path, monkeypatch):
-    """技术性取消可撤销：父代理不必用 --rerun（那会连带废掉在途子代理的轮次）。"""
+    """技术性取消可撤销，但已停止的旧 attempt 仍保持终态并释放窗口。"""
     root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1", agent_id="worker")
     material.record_unit_cancel(task_id, unit_id, attempt_id="a1", agent_id="parent",
                                 initiator="parent", reason="technical_timeout")
     stopped = material.dispatch_plan(task_id, window=8)
@@ -127,8 +128,15 @@ def test_cancel_reports_actor_and_revoke_releases_dispatch_stop(tmp_path, monkey
                                 initiator="parent", reason="technical_timeout", revoke=True)
     released = material.dispatch_plan(task_id, window=8)
     assert released["stop"] is False
-    assert released["dispatch"], "撤销技术性取消后必须恢复补位"
-    assert material.unit_progress(task_id, unit_id=unit_id)["units"][0]["cancelled"] is None
+    assert released["dispatch"] == ["单元1"], "撤销后需重派，但不能复活已停止的旧 attempt"
+    progress = material.unit_progress(task_id, unit_id=unit_id)["units"][0]
+    assert progress["cancelled"] is None
+    assert progress["phase"] == "cancelled"
+    assert progress["in_flight"] is False
+    with pytest.raises(BusinessError) as late:
+        material.record_unit_event(task_id, unit_id, phase="read", attempt_id="a1", agent_id="worker")
+    assert late.value.code == "attempt-terminated"
+    assert material.unit_progress(task_id, unit_id=unit_id)["units"][0]["in_flight"] is False
 
 
 def test_user_cancel_cannot_be_revoked_by_parent(tmp_path, monkeypatch):
@@ -141,6 +149,23 @@ def test_user_cancel_cannot_be_revoked_by_parent(tmp_path, monkeypatch):
                                     initiator="parent", reason="technical_timeout", revoke=True)
     assert error.value.code == "cancel-invalid"
     assert material.dispatch_plan(task_id, window=8)["stop"] is True, "被拒后原取消必须仍然生效"
+
+
+def test_user_cancel_survives_later_technical_cancel_and_revoke(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_cancel(task_id, unit_id, attempt_id="user-1",
+                                initiator="user", reason="user_cancel")
+    material.record_unit_cancel(task_id, unit_id, attempt_id="timeout-1",
+                                initiator="parent", reason="technical_timeout")
+    material.record_unit_cancel(task_id, unit_id, attempt_id="revoke-1",
+                                initiator="parent", reason="technical_timeout", revoke=True)
+
+    plan = material.dispatch_plan(task_id, window=8)
+    assert plan["stop"] is True
+    assert plan["dispatch"] == []
+    assert plan["cancelled"][0]["initiator"] == "user"
+    assert plan["cancelled"][0]["reason"] == "user_cancel"
+    assert len(material.load(root)["runs"][-1]["cancellations"]) == 3
 
 
 def test_revoke_without_standing_cancel_is_rejected(tmp_path, monkeypatch):

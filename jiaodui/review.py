@@ -88,6 +88,12 @@ def record_parent_review(task_id: str, unit_id: str, *, expected_snapshot_sha256
             "proposal_sha256": review["proposal_sha256"],
             "inputs": review["inputs"],
         })
+        state = data["runs"][-1].setdefault("unit_state", {}).get(unit_id, {})
+        state.update({"phase": "parent_reviewed" if decision == "accepted" else "needs_revision",
+                      "last_event_at": review["recorded_at"]})
+        if state.get("attempt_id"):
+            data["runs"][-1].setdefault("terminated_attempts", {})[state["attempt_id"]] = state["phase"]
+        data["runs"][-1]["unit_state"][unit_id] = state
         # 轮次完成口径含父复核：接受/退回都必须重算，否则退回后仍留着 completed、
         # 接受后也补不回 completed。
         data["runs"][-1]["status"] = ("completed" if material.run_units_complete(root, data)

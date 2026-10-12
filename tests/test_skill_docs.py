@@ -94,7 +94,25 @@ def test_skill_entry_referenced_files_exist():
     assert not missing, f"SKILL.md 链接的文件不存在：{missing}"
 
 
-def test_harness_call_contract_is_documented():
+def test_skill_documents_host_read_limit_and_review_scope_rules():
+    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    operations = (SKILL_DIR / "references" / "operation-manual.md").read_text(encoding="utf-8")
+    physics = (SKILL_DIR / "references" / "subjects" / "高中物理.md").read_text(encoding="utf-8")
+
+    assert "read limit" in skill and "2000" in skill and "offset" in skill
+    assert "`limit` 同样不超过 2000" in operations
+    assert "结论断言 → calc `call_id`" in physics
+    assert "不能替代系数或代数推导验证" in physics
+    assert "解析扩写或符合题设的结论" in skill
+
+
+def test_skill_documents_recovery_attempt_and_fingerprint_rules():
+    failures = (SKILL_DIR / "references" / "failure-modes.md").read_text(encoding="utf-8")
+    assert "新的恢复动作应创建新 attempt" in failures
+    assert "全零/全一占位指纹" in failures
+    assert "failure payload" in failures or "failure` 对象" in failures
+
+
     """run_code 外层 schema 与异步派发句柄必须明确，防止文档再次诱发误调用。"""
     text = (SKILL_DIR / "references" / "failure-modes.md").read_text(encoding="utf-8")
     required = ("run_code.justification", "非空完整句子", "invalid justification",

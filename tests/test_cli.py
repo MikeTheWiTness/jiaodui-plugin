@@ -163,7 +163,6 @@ def test_slice_lecture_boundaries_from_preview(tmp_path):
     assert preview.stdout.strip() == ("## 模块一\n\n**例1**（多选）\n题干一\n"
                                       "**例2**（多选）\n题干二")
     lines = preview.stdout.splitlines()
-    i1 = lines.index("**例1**（多选）")
     i2 = lines.index("**例2**（多选）")
     bpath = tmp_path / "boundaries.json"
     bpath.write_text(json.dumps({
@@ -172,7 +171,7 @@ def test_slice_lecture_boundaries_from_preview(tmp_path):
         "subject": "高中物理",
         "base_name": "讲义",
         "boundaries": [
-            {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
+            {"name": "单元1", "start_line": 1, "end_line": i2},
             {"name": "单元2", "start_line": i2 + 1, "end_line": len(lines)},
         ],
     }, ensure_ascii=False), encoding="utf-8")
@@ -194,24 +193,22 @@ def test_slice_without_mode_misslices_grid_lecture(tmp_path):
     raw.write_text(LECTURE_GRID, encoding="utf-8")
     preview = run("slice", "--raw", str(raw), "--mode", "lecture", "--preview")
     lines = preview.stdout.splitlines()
-    i1 = lines.index("**例1**（多选）")
     i2 = lines.index("**例2**（多选）")
     bpath = tmp_path / "boundaries.json"
     bpath.write_text(json.dumps({
         "raw": str(raw),
         "base_name": "讲义",
         "boundaries": [
-            {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
+            {"name": "单元1", "start_line": 1, "end_line": i2},
             {"name": "单元2", "start_line": i2 + 1, "end_line": len(lines)},
         ],
     }, ensure_ascii=False), encoding="utf-8")
     r = run("slice", "--boundaries", str(bpath), "--out-root", str(tmp_path / "out"), "--json")
-    assert r.returncode == 0, r.stderr
-    payload = json.loads(r.stdout)
-    texts = [(Path(d) / f"{Path(d).name}.md").read_text(encoding="utf-8")
-             for d in payload["unit_dirs"]]
-    assert any("+---" in t for t in texts), "漏 mode 时应把表格边框切进来"
-    assert not any("题干二" in t for t in texts), "漏 mode 时题干二应丢失"
+    assert r.returncode == 6, r.stderr
+    error = json.loads(r.stderr.strip().splitlines()[-1])["error"]
+    assert error["code"] == "slice-coverage-invalid"
+    assert error["details"]["uncovered_ranges"] == [{"start_line": 7, "end_line": 11}]
+    assert not (tmp_path / "out" / "讲义").exists()
     paper = tmp_path / "卷子"
     for i in (1, 2):
         d = paper / f"第{i}题"

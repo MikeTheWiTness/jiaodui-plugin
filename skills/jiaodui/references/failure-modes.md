@@ -1,6 +1,6 @@
 # 失败模式与自修指引
 
-`verify-report` 的每个失败都带结构化 code 与位置。报告机械修复最多 3 次并记 `report_repair`；工具参数/schema 修正最多 2 次并记 `call_correction`；计算输入的表示/传输机械修正最多 2 次并记 `calc_representation`；定向复核最多 2 次并记 `targeted_review`；技术性重派最多 1 次并记 `technical_redispatch`。read_image schema 修正同一次 attempt 同时扣 `image_schema_fix` 与 `call_correction`，两类各计一次、不能合并成 4 次额度。六类预算都按单元、按 run 独立；入口提问不占这些预算。新 run 未显式执行 `execution-policy` 前，unit-event/recovery 必须拒绝写入。每次 event/recovery 都带 `attempt_id` 与请求载荷的 64 位小写 SHA256 fingerprint（不含 attempt_id/时间戳）：相同 attempt 重放幂等；相同 fingerprint 的不同 attempt 仍扣预算，不能因 agent 变化刷新。实质性判断争议在 interactive 模式询问用户。用户取消与权限拒绝只记录、不恢复、不重派。
+`verify-report` 的每个失败都带结构化 code 与位置。报告机械修复最多 3 次并记 `report_repair`；工具参数/schema 修正最多 2 次并记 `call_correction`；计算输入的表示/传输机械修正最多 2 次并记 `calc_representation`；定向复核最多 2 次并记 `targeted_review`；技术性重派最多 1 次并记 `technical_redispatch`。read_image schema 修正同一次 attempt 同时扣 `image_schema_fix` 与 `call_correction`，两类各计一次、不能合并成 4 次额度。六类预算都按单元、按 run 独立；入口提问不占这些预算。新 run 未显式执行 `execution-policy` 前，unit-event/recovery 必须拒绝写入。event/recovery 使用唯一 `attempt_id`；同一 recovery 重放必须是同载荷，新的恢复动作应创建新 attempt 并先登记对应 `unit-event`，不得复用已用于其他错误码/类别的 attempt。DSH recovery 工具传稳定 `failure` 对象（只含错误 `message`/`details`），由 core 派生 SHA-256；不要手算、填全零/全一占位指纹，也不要把 call_id/时间戳放进指纹输入。旧 CLI 调用仍可传真实 SHA-256 `fingerprint`。实质性判断争议在 interactive 模式询问用户。用户取消与权限拒绝只记录、不恢复、不重派。
 
 ## 一、格式型失败（最常见）
 | 症状（code / 现象） | 自修动作 |
@@ -54,7 +54,8 @@
 | 报告为空（`report.empty`） / 找不到报告（`report.missing`） | 写出完整 `_校对报告.md`（含头部总结行 + 两节）后再自检 |
 | 报告写入调用报语法或转义错误（如 `Unterminated template` / `Expected unicode escape`） | 不把报告正文拼进 JS/TS 模板字符串或 shell 命令；后续修复按第七节使用正确转义的结构化 `write` 参数；本次停止，不自行重试。保留完整错误并写 `_校对失败.md`，未执行的 verify / parse 明确写明 |
 | `edit` 报旧文本未匹配 | 先读取当前报告，使用唯一且逐字一致的 `old_string`；匹配失败即停止并留痕，不猜测替换文本或继续登记 |
-| Harness `run_code` 外层参数校验失败（如 `invalid justification`） | 内层程序和工具尚未执行；按当前外层 schema 检查必填字段，`justification` 用非空完整句子。保留完整错误并注明实际阶段；用户要求遇错即停时不重试，也不记作 CLI 执行失败 |
+| 宿主工具参数校验失败（如 `invalid justification`） | 调用尚未执行；按本轮实际工具 schema 检查字段。当前 Harness `run_code.justification` 必须填非空完整句；其他工具若要求 `justification` 也必须非空。不要传当前 schema 未暴露的权限字段，也不要重放同一无效参数。保留完整错误并注明实际阶段，不记作 CLI 执行失败 |
+| DSH `read` 返回 `limit must be less than or equal to 2000` | 将 `limit` 设为 2000；保留 offset，需要后续内容时按上页实际结束行继续分页。不能把未读取部分当成已检查 |
 | 找不到单元源文（`integrity.no-source`，**error → 拒绝**） | 确认单元目录名与源文名匹配（`第N题.md` / `单元N.md`）；必要时用 `--source` 指定 |
 | 工具参数校验错误 | 若修正只是恢复 schema 所需字段、类型或 JSON 格式，最多 2 次并记 `call_correction`；不可更换题意或命令来绕过失败。超过预算停止并留痕 |
 | 计算输入解析错误 | 仅对缺字段、类型或表达式表示/传输格式做最多 2 次机械修正，记 `calc_representation`；不得更换题意、假设或目标来绕过失败。实质性计算争议按模式处理 |
@@ -63,7 +64,9 @@
 | 工具报 `not_found`：unit_id 不存在 | 读 `details.known_units`（本材料全部「单元名 → unit_id」）与 `details.suggestion` 逐字重取；不要用同一串重试。unit_id 长且易抄错，优先从 snapshot / unit-read 返回值复制 |
 | 工具报 `not_found`：`task_id` 显示为字面量 `undefined` | 这不是「材料不存在」，而是**顶层参数漏传 `task_id`/`unit_id`**（结构化工具把缺省值序列化成了该字符串）；报错会明确写出这一点。补齐顶层 `task_id` 与 `unit_id` 后重试，不要换材料或换命令 |
 | `location.original-mismatch`（位置原文与 `expected_original` 不一致） | `expected_original` 必须**逐字复制 `unit-locate` 返回的 `original` 整段**——`location_id` 已绑定源文摘要，命中的区间就是原文字段，只截取子串必然失败。报错会同时给出「实际命中的原文」与「你写的值」，照抄前者即可。要改区间内的片段时，先把 `unit-locate` 的 `phrase` 收敛到该整段、整段写 `replacement`。机械修正记 `call_correction` |
-| `proposal.schema`（建议字段缺失或包含未支持字段） | 报错会点名**缺哪个键、多哪个键**并列出允许的顶层字段，照着补齐或删除即可，不要整体重写。最常见的是把 `task_id`/`unit_id` 嵌进 `proposal` 却漏了工具顶层参数（或反之）——两处都要给。机械修正记 `call_correction` |
+| `proposal.schema`（建议字段缺失或包含未支持字段） | 报错会点名**缺哪个键、多哪个键**并列出允许的顶层字段，照着补齐或删除即可，不要整体重写。插件 schema 会预检嵌套 evidence 结构；`evidence_ids` 与真实证据项、`location_id` 与当前源文的关联由 core 复核。被拒后只修报错字段，再用当前 snapshot 提交 |
+| `attempt-id-conflict` | 当前 `attempt_id` 已绑定另一指纹/类别；不要更改该 attempt 后重试。为这次新恢复创建新的 `attempt_id`，并先用同一 ID 记录对应 `unit-event`；同一失败的原样重放才复用旧 ID |
+| `invalid-attempt-fingerprint` / `invalid-attempt-failure` | DSH recovery 用 `failure: {message, details?}`，core 派生指纹；复制稳定错误内容，不填全零/全一或手算摘要。若走旧 CLI 参数，必须提供真实 64 位小写 SHA-256 |
 | `proposal.self-check-incomplete` / `proposal.self-check` | `checks` 只接受五个字面量 `real_issue` / `replacement_semantics` / `related_coverage` / `scope_and_uncertainty` / `severity`（无问题单元为 `["no_issue_review"]`），**不要写 `real_issue: 说明…` 这类带后缀的串**；报错会逐项列出缺哪些。`status` 必须是 `passed`、`unresolved` 必须为空数组 |
 | `proposal.evidence-assumptions` / `-symbols` / `-calculation(s)` / `-images` | 报错会指明**第几项、缺哪个字段或实际收到的形状**，按位置补齐该字段即可，不要重写整份 evidence。`symbols` 无内容时写 `[]`（不是省略或 `null`）；`images`/`calculations` 只有「证据数组」或 `{"status":"not_applicable","reason":"…"}` 两种形态 |
 | `proposal-revision-stale` | 报错会给出**当前已登记 revision** 与应填值；按它 +1 提交，不要试探性加减。被拒的建议不写盘，重放同一 revision 也仍会拒绝 |

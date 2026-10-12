@@ -104,7 +104,8 @@ def _split(args: argparse.Namespace) -> int:
                             mode_origin=args.mode_origin, mode_reason=args.mode_reason,
                             strategy=args.strategy)
     payload = {"ok": True, "units": result.units, "unit_dirs": result.unit_dirs,
-               "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
+               "copied": result.copied, "missing": result.missing, "warnings": result.warnings,
+               "coverage": result.coverage}
     if result.unit_dirs:
         from .material import find_material, load
         root = find_material(result.unit_dirs[0])
@@ -127,6 +128,7 @@ def cmd_slice(args: argparse.Namespace) -> int:
                             clean=not args.no_clean, rerun=args.rerun,
                             replace_units=args.replace_units,
                             legacy_layout=args.legacy_layout, preview=args.preview,
+                             scope=args.scope, scope_reason=args.scope_reason,
                             mode_origin=args.mode_origin, mode_reason=args.mode_reason)
     if args.preview:
         if args.json:
@@ -135,7 +137,8 @@ def cmd_slice(args: argparse.Namespace) -> int:
             print(result["cleaned"])
         return ExitCode.OK
     payload = {"ok": True, "unit_dirs": result.unit_dirs, "units": result.units,
-               "copied": result.copied, "missing": result.missing, "warnings": result.warnings}
+               "copied": result.copied, "missing": result.missing, "warnings": result.warnings,
+               "coverage": result.coverage}
     if result.unit_dirs:
         from .material import find_material, load
         root = find_material(result.unit_dirs[0])
@@ -253,9 +256,15 @@ def cmd_unit_submit(args: argparse.Namespace) -> int:
 def cmd_unit_recovery(args: argparse.Namespace) -> int:
     from .material import record_recovery_attempt
 
+    failure = None
+    if args.failure_json is not None:
+        try:
+            failure = json.loads(args.failure_json)
+        except json.JSONDecodeError as exc:
+            raise BusinessError("failure-json不是有效JSON", code="attempt-failure-json-invalid") from exc
     _json_out(record_recovery_attempt(args.task_id, args.unit_id, args.category,
                                       args.fingerprint, attempt_id=args.attempt_id,
-                                      error_code=args.error_code,
+                                      error_code=args.error_code, failure=failure,
                                       expected_run_id=args.expected_run_id))
     return ExitCode.OK
 
@@ -582,6 +591,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--subject", help="学科配置（与 split 一致，影响讲义出题意图清理）")
     sp.add_argument("--no-clean", action="store_true",
                     help="讲义模式跳过导入清理（边界行号须与清理后正文一致）")
+    sp.add_argument("--scope", choices=["full", "excerpt"],
+                    help="切片范围：默认 full 核对全部非空正文；明确节选用 excerpt")
+    sp.add_argument("--scope-reason", help="明确节选的原因，excerpt 必填")
     sp.add_argument("--preview", action="store_true",
                     help="只打印讲义清理后的正文（供智能拆分定边界行号），不写盘")
     sp.set_defaults(func=cmd_slice)
@@ -636,7 +648,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="失败的工具/宿主错误码；恢复类别由它确定性决定，未分类码会被拒绝")
     sp.add_argument("--attempt-id", required=True,
                     help="本次尝试的幂等键（须与该单元 unit-event 登记的 attempt_id 一致）")
-    sp.add_argument("--fingerprint", required=True)
+    failure_input = sp.add_mutually_exclusive_group(required=True)
+    failure_input.add_argument("--fingerprint", help="兼容旧调用；优先改用 --failure-json，由core派生")
+    failure_input.add_argument("--failure-json", help="稳定失败载荷JSON（message/details）；忽略call_id与时间戳并由core派生指纹")
     sp.add_argument("--expected-run-id",
                     help="CAS 防护：与当前轮次不一致即 run-changed")
     sp.set_defaults(func=cmd_unit_recovery)

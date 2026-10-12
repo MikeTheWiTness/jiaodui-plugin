@@ -131,6 +131,8 @@ class DocxBuildResult:
     failed_out_path: str | None = None
     """未通过复核时本次产物的另存路径（*.failed.docx）；不进交付路径。"""
 
+    coverage: dict | None = None
+
     @property
     def ok(self) -> bool:
         """缺失为 0、无记账异常、产物存在、锚点结构完整、且没有单元被排除，才算通过。"""
@@ -339,7 +341,8 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
                 details={"out_dir": str(requested), "contract_dir": str(contract_dir)})
         out_dir = str(ensure_tree(requested))
     paper_dir = str(paper_path)
-    result = DocxBuildResult(out_path=None)
+    result = DocxBuildResult(out_path=None,
+                             coverage=data["params"].get("slice_coverage") if data is not None else None)
     if not paper_path.is_dir():
         log(f"❌ Word 报告：目录不存在 {paper_dir}")
         result.warnings.append(f"目录不存在: {paper_dir}")
@@ -678,6 +681,10 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
             return None
 
         full_md = "\n\n".join(all_bodies)
+        coverage = data["params"].get("slice_coverage") if data is not None else None
+        if coverage and coverage["scope"] == "excerpt":
+            full_md = (f"> 校对范围：明确节选。原因：{coverage['reason']}。"
+                       "完成仅表示所选单元完成，不代表全材料完成。\n\n" + full_md)
         md_tmp = work / "_报告_带锚.md"
         md_tmp.write_text(full_md, encoding="utf-8")
 
@@ -724,12 +731,13 @@ def generate_combined_docx(paper_dir: str, out_dir: str | None = None,
 
 
 def _collect_reports(paper_path: Path):
-    """只收集合约单元目录中的报告，按数字排序。"""
+    """只收集合约单元目录中的未跳过报告，按数字排序。"""
+    from .paths import is_skip_unit
     from .units import is_unit_dir
 
     reports = []
     for sub in paper_path.iterdir():
-        if not sub.is_dir() or not is_unit_dir(sub.name):
+        if not sub.is_dir() or not is_unit_dir(sub.name) or is_skip_unit(sub):
             continue
         rep = sub / "_校对报告.md"
         if rep.exists():
@@ -855,15 +863,17 @@ def _pipe_cells_keeping_anchors(line: str) -> list[str]:
     raw、没有文字，并入相邻格，避免多出一列。
     """
     stripped = line.strip()
-    if stripped.startswith("|"):
+    has_leading_pipe = stripped.startswith("|")
+    has_trailing_pipe = stripped.endswith("|")
+    if has_leading_pipe:
         stripped = stripped[1:]
-    if stripped.endswith("|"):
+    if has_trailing_pipe:
         stripped = stripped[:-1]
     cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", stripped)]
-    while len(cells) > 1 and not _ANCHOR_RAW_RE.sub("", cells[0]).strip():
+    if not has_leading_pipe and len(cells) > 1 and not _ANCHOR_RAW_RE.sub("", cells[0]).strip():
         cells[1] = cells[0] + cells[1]
         cells.pop(0)
-    while len(cells) > 1 and not _ANCHOR_RAW_RE.sub("", cells[-1]).strip():
+    if not has_trailing_pipe and len(cells) > 1 and not _ANCHOR_RAW_RE.sub("", cells[-1]).strip():
         cells[-2] = cells[-2] + cells[-1]
         cells.pop()
     return cells

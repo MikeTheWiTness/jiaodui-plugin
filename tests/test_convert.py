@@ -610,6 +610,60 @@ def test_organize_images_same_basename_keeps_both(tmp_path):
     assert {(media / name).read_bytes() for name in refs} == {b"FIRST", b"SECOND"}
 
 
+@pytest.mark.parametrize("nested_root", ["", "images"])
+def test_md_exact_relative_image_paths_precede_basename(tmp_path, nested_root):
+    """正文的完整路径优先于任何目录中的同名图，两个引用各保留自己的内容。"""
+    source_dir = tmp_path / "src"
+    nested = source_dir / nested_root / "nested"
+    nested.mkdir(parents=True)
+    (source_dir / "pic.png").write_bytes(b"FIRST")
+    (nested / "pic.png").write_bytes(b"SECOND")
+    (source_dir / "images").mkdir(exist_ok=True)
+    (source_dir / "images" / "pic.png").write_bytes(b"DECOY")
+    source = source_dir / "材料.md"
+    source.write_text("![一](pic.png)\n![二](nested/pic.png)", encoding="utf-8")
+
+    result = convert_to_raw(str(source), str(tmp_path / "out"), "材料")
+
+    assert (result.copied, result.missing) == (2, 0), result.warnings
+    assert result.warnings == []
+    text = Path(result.raw_md).read_text(encoding="utf-8")
+    references = [convert.image_destination(match.group(2))
+                  for match in convert._IMG_RE.finditer(text)]
+    assert len(set(references)) == 2
+    assert [(Path(result.raw_md).parent / ref).read_bytes() for ref in references] == [
+        b"FIRST", b"SECOND"]
+
+
+@pytest.mark.parametrize("reference", ["lost/pic.png", "pic.png", "./pic.png"])
+@pytest.mark.parametrize("second_content", [b"FIRST", b"SECOND"])
+def test_md_basename_fallback_requires_unambiguous_content(tmp_path, second_content, reference):
+    """精确路径不存在时，同名同内容允许回退，不同内容必须报告冲突而非猜测。"""
+    source_dir = tmp_path / "src"
+    for directory, content in (("images", b"FIRST"), ("media", second_content)):
+        target = source_dir / directory
+        target.mkdir(parents=True)
+        (target / "pic.png").write_bytes(content)
+    source = source_dir / "材料.md"
+    original = f"![图]({reference})"
+    source.write_text(original, encoding="utf-8")
+
+    result = convert_to_raw(str(source), str(tmp_path / "out"), "材料")
+    text = Path(result.raw_md).read_text(encoding="utf-8")
+    media = Path(result.images_dir) / "media"
+
+    if second_content == b"FIRST":
+        assert (result.copied, result.missing) == (1, 0), result.warnings
+        assert text == "![图](./材料_images/media/pic.png)"
+        assert (media / "pic.png").read_bytes() == b"FIRST"
+    else:
+        assert (result.copied, result.missing) == (0, 1)
+        assert text == original
+        assert list(media.iterdir()) == []
+        assert any("冲突" in warning and reference in warning
+                   for warning in result.warnings)
+
+
 @pytest.mark.parametrize("attributes", [
     "",
     '{width="1.222222in" height="1.472222in"}',

@@ -120,19 +120,25 @@ def test_parent_review_gates_completion_and_redispatch(tmp_path, monkeypatch):
 
     root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
     task_id = data["task_id"]
+    material.record_unit_event(task_id, unit_id, phase="proposed", attempt_id="worker-1")
     commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
 
     pending = scan_status(unit.parent)
     assert [item.state for item in pending.units] == ["本轮未完成"]
     assert "父复核" in pending.units[0].reason
     assert material.load(root)["runs"][-1]["status"] == "in_progress"
-    assert material.dispatch_plan(task_id)["dispatch"] == [unit.name]
+    assert material.unit_progress(task_id)["units"][0]["phase"] == "awaiting_parent_review"
+    with pytest.raises(BusinessError) as late:
+        material.record_unit_event(task_id, unit_id, phase="read", attempt_id="worker-1")
+    assert late.value.code == "attempt-terminated"
+    assert material.dispatch_plan(task_id)["dispatch"] == [], "已提交的单元待复核期间不应重复派发"
 
     current = read_unit_snapshot(task_id, unit_id)
     record_parent_review(task_id, unit_id, expected_snapshot_sha256=current["snapshot_sha256"],
                          decision="accepted", reviewer_id="parent")
     assert [item.state for item in scan_status(unit.parent).units] == ["已完成"]
     assert material.load(root)["runs"][-1]["status"] == "completed"
+    assert material.unit_progress(task_id)["units"][0]["phase"] == "parent_reviewed"
     assert material.dispatch_plan(task_id)["dispatch"] == []
 
     record_parent_review(task_id, unit_id, expected_snapshot_sha256=current["snapshot_sha256"],
@@ -141,6 +147,71 @@ def test_parent_review_gates_completion_and_redispatch(tmp_path, monkeypatch):
     assert [item.state for item in rejected.units] == ["本轮未完成"]
     assert material.load(root)["runs"][-1]["status"] == "in_progress"
     assert material.dispatch_plan(task_id)["dispatch"] == [unit.name], "退回单元必须重新可派发"
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="worker-2")
+    with pytest.raises(BusinessError) as late_old_attempt:
+        material.record_unit_event(task_id, unit_id, phase="registered", attempt_id="worker-1")
+    assert late_old_attempt.value.code == "attempt-terminated"
+    progress = material.unit_progress(task_id)["units"][0]
+    assert progress["attempt_id"] == "worker-2"
+    assert progress["phase"] == "read" and progress["in_flight"] is True
+
+
+def test_invalidated_pending_review_delivery_returns_to_dispatch(tmp_path, monkeypatch):
+    root, unit, data, unit_id, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    task_id = data["task_id"]
+    material.record_unit_event(task_id, unit_id, phase="proposed", attempt_id="worker-1")
+    commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
+    report_path = unit / "_校对报告.md"
+    report_path.write_text(report_path.read_text(encoding="utf-8") + "\n损坏", encoding="utf-8")
+
+    plan = material.dispatch_plan(task_id)
+
+    assert plan["stop"] is False
+    assert plan["states"][unit.name] == "本轮未完成"
+    assert plan["dispatch"] == [unit.name]
+
+
+def test_dispatch_refills_window_while_first_unit_waits_for_parent(tmp_path, monkeypatch):
+    from jiaodui.source_index import source_digest
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source = tmp_path / "lesson.md"
+    source.write_text("前言木板。\n第二段正文。\n末尾木板。", encoding="utf-8")
+    converted = convert_material(source, material_name="补位测试", mode="lecture")
+    split = split_material(converted.raw_md, subject="高中物理", mode="lecture", boundaries=[
+        {"start_line": 1, "end_line": 1}, {"start_line": 2, "end_line": 3}])
+    root = workspace / "校对" / "补位测试"
+    material.set_execution_policy(root, "automatic")
+    data = material.load(root)
+    first = Path(split.unit_dirs[0])
+    unit_id = data["unit_ids"][first.name]
+    text = (first / f"{first.name}.md").read_text(encoding="utf-8")
+    location = query_locations(text, source_digest(text), "木板")[0]
+    proposal = {
+        "schema_version": 2, "task_id": data["task_id"], "unit_id": unit_id,
+        "run_id": data["current_run_id"], "source_sha256": source_digest(text),
+        "body_sha256": source_digest(text), "proposal_revision": 1,
+        "summary": "一般问题",
+        "corrections": [{"id": "c1", "location_id": location["location_id"],
+                         "expected_original": location["original"], "replacement": "木块",
+                         "reason": "名称与语境不一致。", "category": "term",
+                         "severity": "一般问题", "evidence_ids": ["e1"]}],
+        "evidence": {"assumptions": [{"id": "e1", "text": "按语境应为木块。", "source_locations": []}],
+                     "symbols": [], "images": {"status": "not_applicable", "reason": "无图"},
+                     "calculations": {"status": "not_applicable", "reason": "无计算"}},
+        "self_check": {"status": "passed", "checks": ["real_issue", "replacement_semantics",
+                        "related_coverage", "scope_and_uncertainty", "severity"], "unresolved": []},
+    }
+    material.record_unit_event(data["task_id"], unit_id, phase="proposed", attempt_id="worker-1")
+    snapshot = read_unit_snapshot(data["task_id"], unit_id)
+    commit_unit_submission(data["task_id"], unit_id, proposal, snapshot["snapshot_sha256"])
+
+    plan = material.dispatch_plan(data["task_id"], window=1)
+    assert plan["in_flight"] == []
+    assert plan["dispatch"] == ["单元2"]
+    assert plan["waiting"] == []
 
 
 def test_parent_review_cli_accepts_current_registered_version(tmp_path, monkeypatch):

@@ -50,7 +50,7 @@ def test_slice_preview_and_write_share_saved_mode(tmp_path):
     assert preview["mode"] == "lecture"
     boundaries = tmp_path / "边界.json"
     boundaries.write_text(json.dumps({"raw": converted.raw_md, "subject": "高中物理",
-                                     "boundaries": [{"start_line": 1, "end_line": 3}]}))
+                                     "boundaries": [{"start_line": 1}]}))
     result = slice_material(boundaries)
     assert Path(result.unit_dirs[0]).name == "单元1"
 
@@ -59,7 +59,7 @@ def test_slice_conflicting_explicit_and_boundary_modes_rejected(tmp_path):
     converted = convert_material(source(tmp_path), mode="lecture")
     boundaries = tmp_path / "边界.json"
     boundaries.write_text(json.dumps({"raw": converted.raw_md, "mode": "lecture",
-                                     "boundaries": [{"start_line": 1, "end_line": 3}]}))
+                                     "boundaries": [{"start_line": 1}]}))
     with pytest.raises(JiaoduiError) as err:
         slice_material(boundaries, mode="exam")
     assert err.value.code == "mode-conflict"

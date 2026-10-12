@@ -77,14 +77,14 @@ OPERATIONS: dict[str, dict] = {
         ],
     },
     "differentiate": {
-        "summary": "对表达式求（高阶）导数。",
+        "summary": "对表达式求（高阶）导数，可求导后再代入已知量。",
         "params": [
             _p("expression", True, "str", None,
                "被求导的表达式，如 'x**3 + 2*x'"),
             _p("variable", False, "str", "x", "求导变量名，如 'x'"),
             _p("order", False, "int", 1, "求导阶数（正整数）"),
             _p("substitutions", False, "dict", {},
-               "求导后代入的变量映射（模板契约保留；旧仓未在求导前展开）"),
+               "求导后代入的变量映射，如 {'x': 3}：先对表达式求导，再把映射代入导数结果"),
         ],
     },
     "integrate": {
@@ -100,13 +100,15 @@ OPERATIONS: dict[str, dict] = {
         ],
     },
     "formula": {
-        "summary": "从物理公式中解出目标变量，可选代入已知数值。",
+        "summary": "从物理公式中解出目标变量，可选代入已知数值；多解时显式报歧义。",
         "params": [
             _p("formula", True, "str", None,
                "物理公式（等号形式），如 'v = u + a*t' 或 'E = 1/2 * m * v**2'"),
             _p("solve_for", True, "str", None, "要解出的目标变量名，如 'a' 或 'v'"),
             _p("substitutions", False, "dict", {},
-               "已知量数值映射，如 {'v': 20, 'u': 0, 't': 5}"),
+               "已知量数值映射，如 {'v': 20, 'u': 0, 't': 5}。"
+               "解出多个根（如 v**2 的 ±根）时 result 返回 "
+               "{'ambiguous': true, 'solutions': [...]}，须按物理语义裁定或补假设，不要默认取第一个根"),
         ],
     },
     "dimensional": {
@@ -157,16 +159,18 @@ OPERATIONS: dict[str, dict] = {
         ],
     },
     "circle_from_two_points": {
-        "summary": "由两点及其方向/法向量求解圆的圆心与半径。",
+        "summary": "由入射点切线方向与撞击面法向量求解圆的圆心与半径（磁场偏转轨迹）。",
         "params": [
             _p("entry_point", True, "list[str]", None,
-               "第一个点的坐标，如 ['1.5*h', 'h']（支持符号表达式）"),
+               "入射点坐标，如 ['1.5', '1']（支持符号表达式）"),
             _p("velocity_direction", True, "list[float]", None,
-               "第一个点处的方向向量（切线方向），如 [3, 4]（无需归一化）"),
+               "入射点速度方向（轨迹切线方向），如 [3, 4]（无需归一化）"),
             _p("impact_point", True, "list[str]", None,
-               "第二个点的坐标，如 ['0', '-1.5*h']"),
+               "撞击点坐标，如 ['0.5', '-2']"),
             _p("impact_normal", True, "list[float]", None,
-               "第二个点处的法向量，如 [0, 1]"),
+               "撞击面法向量，须指向入射点所在侧，如 [0, 1]；"
+               "工具要求撞击点半径垂直于该法向量，并在返回前校验两点到圆心等距，"
+               "条件冲突时返回 success=false 而非伪圆"),
         ],
     },
     "chemistry_balance": {

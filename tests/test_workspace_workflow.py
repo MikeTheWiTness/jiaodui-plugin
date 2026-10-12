@@ -197,6 +197,49 @@ def test_changed_markdown_image_starts_new_run(tmp_path, monkeypatch):
     assert (unit / "images" / "pic.png").read_bytes() == second
 
 
+def test_missing_external_image_cannot_reuse_previous_raw_media(tmp_path, monkeypatch):
+    """重转外部材料必须反映源图缺失，使本轮完成失效；显式 source 副本仍可独立复用。"""
+    from jiaodui import material
+    from jiaodui.status import scan_status
+    from jiaodui.workflow import convert_material, split_material
+
+    workspace = tmp_path / "W"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source_dir = tmp_path / "external"
+    source_dir.mkdir()
+    source = source_dir / "卷.md"
+    source.write_text("1．题干 ![](pic.png)。\n", encoding="utf-8")
+    image = source_dir / "pic.png"
+    original_image = _png_bytes("red")
+    image.write_bytes(original_image)
+    converted = convert_material(source, mode="exam")
+    split = split_material(converted.raw_md, subject="高中物理", mode="exam")
+    unit = Path(split.unit_dirs[0])
+    _deliver(unit)
+    root = workspace / "校对" / "卷"
+    before_run = material.load(root)["current_run_id"]
+    assert scan_status(unit.parent).counts()["已完成"] == 1
+
+    assert image.resolve() == (source_dir / "pic.png").resolve()
+    image.unlink()
+    result = convert_material(source, mode="exam")
+
+    assert (result.copied, result.missing) == (0, 1)
+    assert any("图片未找到" in warning for warning in result.warnings)
+    assert "![](pic.png)" in Path(result.raw_md).read_text(encoding="utf-8")
+    assert not (Path(result.images_dir) / "media" / "pic.png").exists()
+    assert material.load(root)["current_run_id"] != before_run
+    assert scan_status(unit.parent).counts()["已完成"] == 0
+
+    # 源副本保留导入时的资源；调用方明确选择该副本时，允许按它自己的相对路径重转。
+    saved_source = root / "source" / "卷.md"
+    assert (saved_source.parent / "pic.png").read_bytes() == original_image
+    restored = convert_material(saved_source, mode="exam")
+    assert (restored.copied, restored.missing) == (1, 0), restored.warnings
+    assert (Path(restored.images_dir) / "media" / "pic.png").read_bytes() == original_image
+
+
 def test_adopt_missing_units_is_recorded(tmp_path, monkeypatch):
     from jiaodui.workflow import split_material
     from jiaodui.status import scan_status
@@ -252,7 +295,7 @@ def test_rejected_resplit_preserves_completed_material(tmp_path, monkeypatch, st
             "###### 单元开始 ######\n新的第一题。\n###### 单元结束 ######\n",
             encoding="utf-8")
     elif strategy == "boundaries":
-        args = {"boundaries": [
+        args = {"scope": "excerpt", "scope_reason": "人工集合变更测试", "boundaries": [
             {"name": "第2题", "text": "被拒绝的新内容 ![](pic.png)"},
             {"name": "第3题", "text": "新的第三题。"},
         ]}
@@ -276,6 +319,46 @@ def test_rejected_resplit_preserves_completed_material(tmp_path, monkeypatch, st
     assert after == before, "拒绝拆分必须发生在任何单元写盘之前"
     assert scan_status(paper).counts()["已完成"] == 2
     assert not (paper / "第3题").exists()
+
+
+@pytest.mark.parametrize("replace_units", [False, True])
+def test_duplicate_slice_names_preserve_completed_material(tmp_path, monkeypatch, replace_units):
+    """重复边界（包括允许替换集合）必须先拒绝，材料全部字节与完成状态不变。"""
+    from jiaodui.status import scan_status
+    from jiaodui.workflow import convert_material, split_material
+
+    workspace = tmp_path / "W"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source_dir = tmp_path / "external"
+    source_dir.mkdir()
+    source = source_dir / "讲义.md"
+    source.write_text("第一段 ![](pic.png)\n第二段\n第三段", encoding="utf-8")
+    (source_dir / "pic.png").write_bytes(_png_bytes("red"))
+    converted = convert_material(source, mode="lecture")
+    result = split_material(converted.raw_md, subject="高中物理", mode="lecture", strategy="none")
+    unit = Path(result.unit_dirs[0])
+    _deliver(unit)
+    # 如果预检发生在写盘后，该蓝图会覆盖原单元红图。
+    (Path(converted.images_dir) / "media" / "pic.png").write_bytes(_png_bytes("blue"))
+    root = workspace / "校对" / "讲义"
+    before = {path.relative_to(root): path.read_bytes()
+              for path in root.rglob("*") if path.is_file()}
+
+    with pytest.raises(JiaoduiError) as err:
+        split_material(converted.raw_md, subject="高中物理", mode="lecture",
+                       replace_units=replace_units, boundaries=[
+                           {"name": "单元1", "start_line": 1, "end_line": 1},
+                           {"name": "单元1", "start_line": 3, "end_line": 3},
+                       ])
+
+    after = {path.relative_to(root): path.read_bytes()
+             for path in root.rglob("*") if path.is_file()}
+    assert after == before, "拒绝重复名称必须早于源文、图片、清单和归档写入"
+    assert err.value.code == "duplicate-unit-name"
+    assert err.value.details["duplicate_names"] == ["单元1"]
+    assert scan_status(unit.parent).counts()["已完成"] == 1
+    assert not (unit.parent / ".superseded").exists()
 
 
 @pytest.mark.parametrize("replacement", ["**例1**\n新的例题正文。\n", ""])
@@ -310,6 +393,7 @@ def test_resplit_can_still_add_units_without_replacement(tmp_path, monkeypatch):
     units = list(map(Path, result.unit_dirs))
     before = [(unit / f"{unit.name}.md").read_bytes() for unit in units]
     added = split_material(converted.raw_md, subject="高中物理", mode="exam",
+                           scope="excerpt", scope_reason="人工增补正文测试",
                            boundaries=[
                                {"name": unit.name, "text": data.decode("utf-8")}
                                for unit, data in zip(units, before)

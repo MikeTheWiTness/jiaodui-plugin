@@ -113,7 +113,177 @@
       },
       "evidence": {
         "type": "object",
-        "additionalProperties": true
+        "additionalProperties": false,
+        "required": [
+          "assumptions",
+          "symbols",
+          "images",
+          "calculations"
+        ],
+        "properties": {
+          "assumptions": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "text",
+                "source_locations"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source_locations": {
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "symbols": {
+            "type": "array"
+          },
+          "images": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "reference_index",
+                    "original_path",
+                    "actual_read_path",
+                    "position",
+                    "readable",
+                    "semantic",
+                    "verdict"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "reference_index": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "original_path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "actual_read_path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "position": {
+                      "type": "object",
+                      "required": [
+                        "line",
+                        "column"
+                      ],
+                      "properties": {
+                        "line": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "column": {
+                          "type": "integer",
+                          "minimum": 1
+                        }
+                      }
+                    },
+                    "readable": {
+                      "type": "boolean"
+                    },
+                    "semantic": {
+                      "type": "string"
+                    },
+                    "verdict": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "reason"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "not_applicable"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            ]
+          },
+          "calculations": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "call_id",
+                    "expression",
+                    "result"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "call_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "expression": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "result": {}
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "status",
+                  "reason"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "const": "not_applicable"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            ]
+          }
+        }
       },
       "self_check": {
         "type": "object",
@@ -126,17 +296,23 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": [
-              "passed",
-              "needs_user"
-            ]
+            "const": "passed"
           },
           "checks": {
             "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
             "items": {
-              "type": "string"
-            },
-            "uniqueItems": true
+              "type": "string",
+              "enum": [
+                "no_issue_review",
+                "real_issue",
+                "related_coverage",
+                "replacement_semantics",
+                "scope_and_uncertainty",
+                "severity"
+              ]
+            }
           },
           "unresolved": {
             "type": "array",

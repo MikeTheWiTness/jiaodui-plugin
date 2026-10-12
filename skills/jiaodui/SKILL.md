@@ -27,7 +27,7 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 1. `jiaodui check-env` 必须通过（Python≥3.12、sympy / python-docx / Pillow / lxml、pandoc）。它只证明本地依赖，**不证明宿主能力**。`matplotlib` 属可选：check-env 按真实 import 区分「未安装 / 已安装但无法加载」；不可用只让**批注内公式图片**降级为 `$…$` 文本，不阻塞流程。
 2. 首次校对派发前，按 [`references/vision-probe.md`](references/vision-probe.md) 派一个干净上下文的子 agent，实际读取**随包 `assets/vision-probe.png` 白底测试图**并描述内容。以 skill 安装位置解析绝对路径；不从教材找图，不现场绘图，不向子 agent 预告图片答案。无图片讲义/试卷同样可以验证；同会话同模型/工具配置验证成功后可复用，配置改变或新会话重测。
 3. 同时确认宿主支持：一层扁平子 agent、真实read_image、结构化单元读取/提交，以及回传一行摘要。
-4. 图片必须用真实读图工具；DSH `read_image` 用 `file_path`。参数错误在预算内最多修正2次，权限拒绝和用户取消不重试。固定探针用随包白底图；教材透明线稿按实际读取清单取白底图，仍无法确认视觉时拒绝校对。单元读取每页最多2000行，与入口识别合计2000字符额度不同。宿主schema与历史run_code调用纪律按需读 `references/failure-modes.md` 第七节，不混用内外层字段。
+4. 图片必须用真实读图工具；DSH `read_image` 用 `file_path`。参数错误在预算内最多修正2次，权限拒绝和用户取消不重试。固定探针用随包白底图；教材透明线稿按实际读取清单取白底图，仍无法确认视觉时拒绝校对。单元读取每页最多2000行，与入口识别合计2000字符额度不同。read limit≤2000；续页调offset。 宿主schema与历史run_code调用纪律按需读 `references/failure-modes.md` 第七节，不混用内外层字段。
 
 ## 3. 完整流程
 产物落点：当前会话工作区为 `W`，首次写入自动创建 `W/校对/<材料名>/`；其内 `source/` 保存源文件副本，`raw/` 保存转换文本与图片，`units/<材料名>/` 保存单元，`校对报告/`、`校对Word/` 保存最终报告，`_校对记录.json` 保存溯源和轮次。插件每次调用注入 W；经 bash 调用写入命令（convert / split / slice 非 preview / parse-report / build-report / build-docx / repair-report --apply）必须传 `--work-root <W>`；repair-report 不带 --apply 时只读预览。只读命令不要求 W。不在源文件旁生成产物；以 CLI JSON 的绝对路径为准。冲突、清单损坏或单元集合不一致时停止相关材料，报告原因，不删产物。历史写入显式 `--legacy-layout` 且仍限 W 内；重跑用 `split --rerun` 开新轮次。
@@ -41,12 +41,12 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
    - **讲义模式默认执行完整导入清理**（与旧仓 `clean_enabled` 默认开启一致，顺序固定）：`fix_latex_escapes` 还原 pandoc 过度转义 → `comprehensive_clean` 去表格竖线 → `clean_intent` 清【出题意图】 → `fix_floating_images` 把浮进选项 A 的题图挪回独立行 → `normalize_option_spacing` 压选项/解答长空格 → `strip_decor_images` 清装饰图。pandoc 会把讲义渲染成网格表，`**例1**`/`**练1**` 落在表格行内（行首是竖线）；不清理则 `section_pattern` 命中不到，整篇会塌成一个超长单元。仅在需要保留原始表格做对照时才加 `--no-clean`（此时六步全不执行）。
 3. 抽查：`jiaodui precheck-split <paper_dir>`（单元根目录，见上方目录参数约定），看单元数、各单元首行、字符数分布、空单元与超长单元；异常才升级智能拆分：
    1. 派**拆分子 agent**（主 agent 不亲自执行）：子 agent 自行运行 `jiaodui slice --raw <raw_md> --mode <mode> --subject <学科> --preview`，在输出的**清理后正文**上定行号；主 agent 只收边界文件路径与一行摘要，**不读预览正文**。
-   2. 边界清单 JSON 必须写明 `"mode"` 与 `"subject"`：`{"raw": "...", "mode": "lecture", "subject": "高中物理", "boundaries": [...]}`。
+   2. 边界清单须含 raw、mode、subject 和源文行区间。默认全量覆盖（含标题）；用户指定节选须写 `scope="excerpt"`、`scope_reason`，详见操作参考。
    3. 主 agent 执行 `jiaodui slice --boundaries <清单.json> --mode <mode> --subject <学科>`——**必须与预览完全同一组参数**。
    - 讲义先清理再切，预览与执行须使用完全相同的 mode/subject/清理参数。新布局未知 mode 不再默认试卷；清单类型与显式类型冲突会拒绝。修改类型先重新 convert 再预览，不沿用旧类型的行号。
 4. 扫描：`jiaodui_task_prepare`（operation=status）（传拆分返回的单元根目录，不传材料根目录），派发未开始 / 未过校验 / 本轮未完成的单元。每个单元派发前先运行只读的 `jiaodui inspect-images --unit <dir> --json`；清单按正文引用顺序绑定引用序号、位置、原图和实际读取图，缺图/无效/不支持远程引用先停止该单元。
 5. 滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。输入包必须显式携带 `references/failure-modes.md` 路径，并列出本轮允许重试的类别、次数和停止范围。
-6. 单元子 agent：先用 `jiaodui_unit_snapshot` 获取当前版本，再通过 `jiaodui_unit_read` 分页读取源文和图片实际读取清单；真实读取配图并核对引用归属；按需使用 operation-specific calc 工具验算。用 `jiaodui_unit_locate` 选择位置，再以该snapshot调用 `jiaodui_unit_submit` 提交schema v2建议。模型不写报告；程序从不可变原稿生成全文、verify、解析并登记。建议含源文/图片hash与当前轮次；版本变化时拒绝写入。
+6. 子 agent 先snapshot，再unit_read/读图/calc/locate，最后unit_submit。插件按snapshot自动绑定身份、hash和revision；模型只提交summary、corrections、evidence，CLI直调用完整schema。
 7. `jiaodui_delivery`（operation=build-report） 生成审阅全文；complete=false时检查failed与unreviewed。待复核单元技术合格全文仍可供父代理通读，技术失败只留占位。完成父复核后再汇总，complete=true才可正式交付。
 8. 主 agent **通读整卷报告全文**（整体把关）：个别单元漏检 → 定向复核；系统性问题 → 停手回报用户。
 9. `jiaodui_delivery`（operation=build-docx），复核 **错误标记数 = 批注锚点数 + 公式兜底数，且缺失数为 0**（无问题单元标题批注单列）。不满足按确定性 bug 处理，**不交付 docx**。
@@ -58,8 +58,9 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 - 滑动窗口补位：空位立即补派下一个单元，并发取宿主上限（默认 8）。首个单元错误达停止条件后，立即停止补位并取消在途任务（`jiaodui_dispatch_plan` / `jiaodui_unit_progress`）；区分此前已发出的与获知错误后新增的调用，确认在途任务已停止后才结束批次。异步派发必须先 await 再判断结果：使用 `await Promise.all(...)` 或在需要完整收集部分失败时使用 `await Promise.allSettled(...)`；逐项验证返回的 `kind` 与任务句柄（`jobId` / `subagentId` / `runId`）。未 await 的 Promise 序列化成 `{}` 不代表派发结果；拿到有效句柄前不得检查状态或结束批次。
 
 ### 4.1 内容判断与建议复核（第7项实验分支）
-- 首轮证据分开保存 assumptions（g、计时原点、方向、近似条件）、symbols、images（真实读取与图文归属）、calculations（当前单元真实call_id及验算结果）。无适用图片/公式时显式记not_applicable及原因；无问题也保留核验依据。
-- 提交前子代理自查：真实问题而非错误选项/转换差异；replacement语义；关联选项/解析/结论覆盖；修改范围与不确定性；严重度。含修改时self_check需通过全部五项；无修改时需no_issue_review。
+- 首轮证据分开保存 assumptions（g、计时原点、方向、近似条件）、symbols、images（真实读取与图文归属）、calculations（本单元计算工具调用ID及结果）。无适用图片/公式时显式记not_applicable及原因；无问题也保留核验依据。
+- 证据不足时先补核验，不把解析扩写或符合题设的结论当成原文错误。
+- 提交前自查问题真实性、修改语义、关联覆盖、范围和严重度；每项引用真实证据ID。含修改时通过五项检查，无修改时使用no_issue_review。
 - 父代理先通读技术合格的整卷审阅报告，再调用 `jiaodui_unit_review` 接受/退回当前snapshot。缺复核时complete=false但可读全文；输入/建议/报告改变后接受失效，最新退回撤销旧接受。Word只接受当前版本复核。父子同模型，不宣称独立模型意见。
 
 ## 5. 子 agent 输入包（只给路径和身份，不给源文全文）

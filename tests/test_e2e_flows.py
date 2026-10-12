@@ -129,14 +129,13 @@ def test_flow_smart_slice_matches_cleaned_lines(tmp_path):
     assert preview.stdout.strip() == ("## 模块一\n\n**例1**（多选）\n题干一\n"
                                       "**例2**（多选）\n题干二")
     lines = preview.stdout.splitlines()
-    i1 = lines.index("**例1**（多选）")
     i2 = lines.index("**例2**（多选）")
     bpath = tmp_path / "boundaries.json"
     bpath.write_text(json.dumps({
         "raw": str(raw), "mode": "lecture", "subject": "高中物理",
         "base_name": "讲义",
         "boundaries": [
-            {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
+            {"name": "单元1", "start_line": 1, "end_line": i2},
             {"name": "单元2", "start_line": i2 + 1, "end_line": len(lines)},
         ],
     }, ensure_ascii=False), encoding="utf-8")

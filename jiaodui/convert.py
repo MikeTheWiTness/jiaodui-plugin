@@ -1433,20 +1433,40 @@ def _organize_images(content, source_dirs, images_dir, base, warnings, *,
             if candidate.is_file() and _inside_search_dirs(candidate):
                 found = candidate
 
+        if found is None and not src.startswith(("/", "\\")):
+            # 首个目录是正文的资源基目录；裸文件名在其他目录中属于 basename 回退。
+            # 带层级的引用先在所有源目录中精确查找，避免被前一个目录的同名图抢占。
+            exact_dirs = search_dirs[:1] if len(Path(src).parts) == 1 else search_dirs
+            for sd in exact_dirs:
+                try:
+                    cand = sd / src
+                    if cand.is_file() and _inside_search_dirs(cand):
+                        found = cand
+                        break
+                except OSError:
+                    continue
+
         if found is None:
+            candidates = []
             for sd in search_dirs:
                 try:
                     cand = sd / name
-                    if cand.is_file():
-                        found = cand
-                        break
-                    if not src.startswith(("/", "\\")):
-                        cand = sd / src
-                        if cand.is_file() and _inside_search_dirs(cand):
-                            found = cand
-                            break
+                    if cand.is_file() and _inside_search_dirs(cand):
+                        candidates.append(cand)
                 except OSError:
                     continue
+            if candidates:
+                # basename 只作兼容回退；不同内容的候选不能任取一个冒充源图。
+                digests = {_digest_or_none(cand) for cand in candidates}
+                if None in digests:
+                    missing += 1
+                    warnings.append(f"图片候选读取失败，保留原引用：{src}")
+                    return m.group(0)
+                if len(digests) > 1:
+                    missing += 1
+                    warnings.append(f"同名图片候选内容冲突，保留原引用：{src}")
+                    return m.group(0)
+                found = candidates[0]
 
         if found is None:
             missing += 1
@@ -1556,14 +1576,13 @@ def _convert_md_to_raw(src, raw_md, images_dir, base, warnings, *, mode=None):
         content = src.read_text(encoding="utf-8", errors="replace")
         warnings.append("源 Markdown 非 UTF-8，已按替换字符读取")
 
+    # Markdown 资源只从本次输入所在目录解析；source/ 副本作为显式输入时同样适用。
+    # 旧 raw 输出不是源目录，不能在原图缺失时无声补齐本次转换。
     source_dirs = [
         src.parent,
         src.parent / "images",
         src.parent / "media",
         src.parent / f"{src.stem}_images" / "media",
-        images_dir,
-        images_dir / "media",
-        raw_md.parent,
     ]
     content, copied, missing = _organize_images(content, source_dirs, images_dir, base, warnings)
     raw_md.write_text(content, encoding="utf-8")

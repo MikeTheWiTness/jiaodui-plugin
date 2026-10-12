@@ -96,7 +96,7 @@
       }
     },
     "differentiate": {
-      "description": "对表达式求（高阶）导数。",
+      "description": "对表达式求（高阶）导数，可求导后再代入已知量。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -118,7 +118,7 @@
           "substitutions": {
             "type": "object",
             "additionalProperties": true,
-            "description": "求导后代入的变量映射（模板契约保留；旧仓未在求导前展开）"
+            "description": "求导后代入的变量映射，如 {'x': 3}：先对表达式求导，再把映射代入导数结果"
           }
         },
         "required": [
@@ -156,7 +156,7 @@
       }
     },
     "formula": {
-      "description": "从物理公式中解出目标变量，可选代入已知数值。",
+      "description": "从物理公式中解出目标变量，可选代入已知数值；多解时显式报歧义。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -172,7 +172,7 @@
           "substitutions": {
             "type": "object",
             "additionalProperties": true,
-            "description": "已知量数值映射，如 {'v': 20, 'u': 0, 't': 5}"
+            "description": "已知量数值映射，如 {'v': 20, 'u': 0, 't': 5}。解出多个根（如 v**2 的 ±根）时 result 返回 {'ambiguous': true, 'solutions': [...]}，须按物理语义裁定或补假设，不要默认取第一个根"
           }
         },
         "required": [
@@ -298,7 +298,7 @@
       }
     },
     "circle_from_two_points": {
-      "description": "由两点及其方向/法向量求解圆的圆心与半径。",
+      "description": "由入射点切线方向与撞击面法向量求解圆的圆心与半径（磁场偏转轨迹）。",
       "parameters": {
         "type": "object",
         "additionalProperties": false,
@@ -308,28 +308,28 @@
             "items": {
               "type": "string"
             },
-            "description": "第一个点的坐标，如 ['1.5*h', 'h']（支持符号表达式）"
+            "description": "入射点坐标，如 ['1.5', '1']（支持符号表达式）"
           },
           "velocity_direction": {
             "type": "array",
             "items": {
               "type": "number"
             },
-            "description": "第一个点处的方向向量（切线方向），如 [3, 4]（无需归一化）"
+            "description": "入射点速度方向（轨迹切线方向），如 [3, 4]（无需归一化）"
           },
           "impact_point": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "第二个点的坐标，如 ['0', '-1.5*h']"
+            "description": "撞击点坐标，如 ['0.5', '-2']"
           },
           "impact_normal": {
             "type": "array",
             "items": {
               "type": "number"
             },
-            "description": "第二个点处的法向量，如 [0, 1]"
+            "description": "撞击面法向量，须指向入射点所在侧，如 [0, 1]；工具要求撞击点半径垂直于该法向量，并在返回前校验两点到圆心等距，条件冲突时返回 success=false 而非伪圆"
           }
         },
         "required": [

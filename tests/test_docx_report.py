@@ -2201,6 +2201,41 @@ def _commented_texts(path) -> list[str | None]:
 
 
 @PANDOC_REQUIRED
+def test_build_docx_ignores_report_of_skipped_unit(tmp_path):
+    paper = tmp_path / "跳过旧报告"
+    _write_unit_report(paper, "第1题",
+        "# 第1题 校对报告\n\n一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+        "旧报告【1|木板|木块】\n\n### 修改原因\n1. 术语。\n")
+    _write_unit_report(paper, "第2题",
+        "# 第2题 校对报告\n\n无问题\n\n### 标记原文\n编号：第2题\n内容：\n"
+        "本题无误。\n\n### 修改原因\n无\n")
+    (paper / "第1题" / ".skip_proofread").touch()
+
+    result = build_docx(str(paper), legacy_layout=True)
+
+    assert result.ok, result.to_dict()
+    assert result.excluded_units == []
+    assert [unit["unit"] for unit in result.units] == ["第2题"]
+    assert result.marker_count == 0
+
+
+@PANDOC_REQUIRED
+def test_build_docx_preserves_real_empty_leading_table_cell(tmp_path):
+    paper = tmp_path / "真实空单元格"
+    _write_unit_report(paper, "第1题",
+        "# 第1题 校对报告\n\n一般问题\n\n### 标记原文\n编号：第1题\n内容：\n"
+        "|  | 前【1|木板|木块】后 | 10 |\n| --- | --- | --- |\n"
+        "\n### 修改原因\n1. 术语。\n")
+
+    result = build_docx(str(paper), legacy_layout=True)
+
+    assert result.ok, (result.excluded_units, result.warnings)
+    assert result.anchor_count == 1
+    assert _table_rows(result.out_path) == [["", "前木板后", "10"]]
+    assert _commented_texts(result.out_path) == ["木板"]
+
+
+@PANDOC_REQUIRED
 def test_cjk_table_keeps_columns_and_cell_anchor_keeps_offset(tmp_path):
     """回归（P1×2）：中文列按显示宽度补齐、格内锚点保留原偏移。
 

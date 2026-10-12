@@ -77,7 +77,14 @@ assert.equal(unitRead.parameters.properties.max_lines.maximum,2000);
 const submit=registered.get('jiaodui_unit_submit');
 assert.equal(submit.parameters.properties.proposal.type,'object');
 assert.equal(submit.parameters.properties.proposal.properties.schema_version.const,2);
+assert.equal(submit.parameters.properties.proposal.properties.evidence.additionalProperties,false);
+assert.deepEqual(submit.parameters.properties.proposal.properties.evidence.required,['assumptions','symbols','images','calculations']);
+assert.deepEqual(submit.parameters.properties.proposal.properties.corrections.items.required,
+  ['category','evidence_ids','expected_original','id','location_id','reason','replacement','severity']);
 assert.equal(submit.parameters.properties.proposal.properties.corrections.items.additionalProperties,false);
+for (const key of ['task_id','unit_id','run_id','source_sha256','body_sha256','proposal_revision']) {
+  assert.ok(!submit.parameters.properties.proposal.required.includes(key),`${key}应由snapshot自动绑定`);
+}
 const calc=registered.get('jiaodui_calc_evaluate');
 assert.equal(calc.parameters.additionalProperties,false);
 assert.deepEqual(calc.parameters.required,['expression']);
@@ -89,6 +96,25 @@ await unitRead.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),start_line
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-read','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--start-line','1','--max-lines','2000']);
 await calc.execute({expression:'1+2'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','calc','evaluate','--param','expression="1+2"']);
+let submittedProposal;
+const snapshotForSubmit={snapshot_sha256:'d'.repeat(64),run_id:'run-current',source_sha256:'e'.repeat(64),body_sha256:'f'.repeat(64),next_proposal_revision:3};
+ctx.subprocess.spawn=spec=>{
+  requests.push(spec);
+  const isSnapshot=spec.argv.includes('unit-snapshot');
+  const isSubmit=spec.argv.includes('unit-submit');
+  if (isSubmit) submittedProposal=JSON.parse(spec.argv[spec.argv.indexOf('--proposal-json')+1]);
+  const text=isSnapshot?JSON.stringify({ok:true,snapshot:snapshotForSubmit}):isSubmit?'{"ok":true,"verified":true}':'{}';
+  return {done:Promise.resolve({exitCode:0}),collected:{stdout:{readFrom(){return {text,lossy:false}}},stderr:{readFrom(){return {text:'',lossy:false}}}}};
+};
+await submit.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),expected_snapshot_sha256:'d'.repeat(64),proposal:{schema_version:2,summary:'无问题',corrections:[],evidence:{assumptions:[{id:'e1',text:'已核对',source_locations:[]}],symbols:[],images:{status:'not_applicable',reason:'无图'},calculations:{status:'not_applicable',reason:'无计算'}},self_check:{status:'passed',checks:['no_issue_review'],unresolved:[]}}},exec);
+assert.deepEqual(requests.at(-2).argv.slice(1),['--json','unit-snapshot','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32)]);
+assert.equal(submittedProposal.task_id,'a'.repeat(32));
+assert.equal(submittedProposal.unit_id,'b'.repeat(32));
+assert.equal(submittedProposal.run_id,'run-current');
+assert.equal(submittedProposal.source_sha256,'e'.repeat(64));
+assert.equal(submittedProposal.body_sha256,'f'.repeat(64));
+assert.equal(submittedProposal.proposal_revision,3);
+assert.equal(requests.at(-1).argv[requests.at(-1).argv.indexOf('--expected-snapshot-sha256')+1],'d'.repeat(64));
 // P4：父侧准备/交付工具必须结构化传参，且只拼真实存在的子命令与参数
 const prepare=registered.get('jiaodui_task_prepare');
 assert.equal(prepare.parameters.additionalProperties,false);
@@ -157,14 +183,15 @@ assert.deepEqual(requests.at(-1).argv.slice(1),['--json','dispatch-plan','--task
 // P5：恢复入口按错误码分类，category 只留给父代理判断类
 const recovery=registered.get('jiaodui_unit_recovery');
 assert.equal(recovery.parameters.additionalProperties,false);
-assert.deepEqual(recovery.parameters.required,['task_id','unit_id','attempt_id','fingerprint']);
+assert.deepEqual(recovery.parameters.required,['task_id','unit_id','attempt_id','failure']);
 // B1 守卫：插件里恢复类别的 enum 必须与 core 的 CATEGORIES 一致（JS 侧无法 import
 // Python，容易静默漂移；期望值由 Python 单一源经 argv 注入）。
 assert.deepEqual(recovery.parameters.properties.category.enum,JSON.parse(process.argv[2]));
-await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t1',error_code:'usage',fingerprint:'f'.repeat(64)},exec);
-assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t1','--error-code','usage','--fingerprint','f'.repeat(64)]);
-await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t2',category:'targeted_review',fingerprint:'f'.repeat(64),expected_run_id:'r'.repeat(32)},exec);
-assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t2','--category','targeted_review','--expected-run-id','r'.repeat(32),'--fingerprint','f'.repeat(64)]);
+const failure={message:'字段校验失败',details:{missing:['source_sha256']},call_id:'ignored'};
+await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t1',error_code:'usage',failure},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t1','--error-code','usage','--failure-json',JSON.stringify(failure)]);
+await recovery.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),attempt_id:'t2',category:'targeted_review',failure:{message:'父审退回'},expected_run_id:'r'.repeat(32)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-recovery','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--attempt-id','t2','--category','targeted_review','--expected-run-id','r'.repeat(32),'--failure-json',JSON.stringify({message:'父审退回'})]);
 // 未提供的可选参数不得拼进 argv（no_clean 省略时不能出现 --no-clean）
 await prepare.execute({operation:'split',path:'/tmp/a_raw.md',subject:'高中物理',mode:'lecture'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','split','/tmp/a_raw.md','--subject','高中物理','--mode','lecture']);

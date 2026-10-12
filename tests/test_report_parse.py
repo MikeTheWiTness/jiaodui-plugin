@@ -109,3 +109,41 @@ def test_verification_note_does_not_hide_later_duplicate_reason():
     from jiaodui.report_parse import parse_reason_entries
     text = "1. 原因甲。\n核验说明：额外说明。\n1. 原因乙。"
     assert parse_reason_entries(text) == [(1, "原因甲。"), (1, "原因乙。")]
+
+
+def test_decimal_continuation_does_not_end_previous_reason():
+    text = "1. 代入结果如下：\n0.2 是第一项，0.35 是第二项。\n继续说明。"
+    assert parse_reasons(text) == {
+        1: "代入结果如下：\n0.2 是第一项，0.35 是第二项。\n继续说明。"
+    }
+
+
+def test_reason_parser_does_not_treat_decimal_evidence_as_reason_numbers():
+    from jiaodui.report_parse import parse_reason_entries
+
+    evidence = """无
+
+核验说明：
+{
+  "calculations": [
+    {
+      "result": [
+        0.2,
+        0.2,
+        0.35,
+        10,
+        2,
+        1,
+        0.5,
+        0.45,
+        0.1,
+        0
+      ]
+    }
+  ]
+}"""
+    assert parse_reason_entries(evidence) == []
+    assert parse_reasons("0.2") == {}
+    assert parse_reasons("10.0, 0.2") == {}
+    assert parse_reasons("1. 原因") == {1: "原因"}
+    assert parse_reasons("1.原因") == {1: "原因"}

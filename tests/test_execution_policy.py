@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -126,11 +127,13 @@ def test_exhausted_call_budget_blocks_image_schema_fix(tmp_path, monkeypatch):
     root, task_id, unit_id = _scene(tmp_path, monkeypatch)
 
     for index in range(2):  # call_correction 额度 2，用满
-        allowed = material.record_recovery_attempt(task_id, unit_id, None, f"{index}" * 64,
+        fingerprint = hashlib.sha256(f"used-{index}".encode()).hexdigest()
+        allowed = material.record_recovery_attempt(task_id, unit_id, None, fingerprint,
                                                    attempt_id=f"use-{index}", error_code="usage")
         assert allowed["allowed"] is True
 
-    blocked = material.record_recovery_attempt(task_id, unit_id, None, "b" * 64,
+    blocked_fingerprint = hashlib.sha256(b"blocked-image-fix").hexdigest()
+    blocked = material.record_recovery_attempt(task_id, unit_id, None, blocked_fingerprint,
                                                attempt_id="img-blocked", error_code="images.missing")
 
     assert blocked["allowed"] is False

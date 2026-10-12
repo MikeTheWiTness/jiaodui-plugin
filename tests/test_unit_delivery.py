@@ -15,6 +15,7 @@ from jiaodui.unit_delivery import (
     preview_unit_submission,
     read_unit_snapshot,
 )
+from jiaodui.inspect_images import inspect_unit_images
 from jiaodui.verify import verify_unit
 from jiaodui.workflow import convert_material, split_material
 
@@ -62,6 +63,86 @@ def _prepared(tmp_path, monkeypatch):
     }
     snapshot = read_unit_snapshot(data["task_id"], unit_id)
     return workspace, root, unit, data, unit_id, text, proposal, snapshot
+
+
+def test_image_evidence_is_bound_to_inspected_references_before_write(tmp_path, monkeypatch):
+    from PIL import Image
+    from jiaodui.paths import find_source_md
+    from jiaodui.source_index import query_locations
+
+    _, root, unit, data, unit_id, _, proposal, _ = _prepared(tmp_path, monkeypatch)
+    source_path = find_source_md(unit)
+    source_text = source_path.read_text(encoding="utf-8") + "\n![题图](./images/diagram.png)\n"
+    source_path.write_text(source_text, encoding="utf-8")
+    image_path = unit / "images" / "diagram.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (2, 2), "white").save(image_path)
+    manifest = inspect_unit_images(unit, source_path=source_path)
+    reference = manifest["references"][0]
+    current_data = material.load(root)
+    current_data["unit_inputs"][unit.name] = material.unit_inputs(root, unit)
+    material.write(root, current_data)
+    proposal = dict(proposal)
+    proposal["source_sha256"] = hashlib.sha256(source_text.encode()).hexdigest()
+    proposal["body_sha256"] = proposal["source_sha256"]
+    location = query_locations(source_text, proposal["body_sha256"], "木板")[-1]
+    proposal["corrections"] = [{**proposal["corrections"][0],
+                                "location_id": location["location_id"],
+                                "expected_original": location["original"]}]
+    snapshot = read_unit_snapshot(data["task_id"], unit_id)
+    before_manifest = (root / material.MANIFEST).read_bytes()
+    with pytest.raises(BusinessError) as error:
+        preview_unit_submission(data["task_id"], unit_id, proposal,
+                                snapshot["snapshot_sha256"])
+    assert error.value.code == "proposal.evidence-images"
+    assert (root / material.MANIFEST).read_bytes() == before_manifest
+    assert not (unit / "_校对报告.md").exists()
+    assert not (unit / "_校对数据.json").exists()
+
+    proposal["evidence"] = dict(proposal["evidence"])
+    proposal["evidence"]["images"] = [{
+        "id": "img1", "reference_index": reference["reference_index"],
+        "original_path": reference["original_path"],
+        "actual_read_path": reference["actual_read_path"],
+        "position": {"line": reference["position"]["line"],
+                     "column": reference["position"]["column"]},
+        "readable": True, "semantic": "题图", "verdict": "与题干一致",
+    }]
+    preview = preview_unit_submission(data["task_id"], unit_id, proposal,
+                                     snapshot["snapshot_sha256"])
+    assert preview["ok"]
+    committed = commit_unit_submission(data["task_id"], unit_id, proposal,
+                                       snapshot["snapshot_sha256"])
+    assert committed["registered"] and committed["verified"]
+
+
+def test_no_issue_submission_with_decimal_calculation_evidence(tmp_path, monkeypatch):
+    from jiaodui.report_parse import parse_reason_entries
+
+    _, _, unit, data, unit_id, _, proposal, _ = _prepared(tmp_path, monkeypatch)
+    values = [0.2, 0.2, 0.35, 10, 2, 1, 0.5, 0.45, 0.1, 0]
+    expression = "calculation evidence regression"
+    call_id = material.record_calc_call(
+        data["task_id"], unit_id, "evaluate", {"expression": expression},
+        {"success": True, "result": values},
+    )
+    proposal["summary"] = "无问题"
+    proposal["corrections"] = []
+    proposal["evidence"]["calculations"] = [{
+        "id": "calc1", "call_id": call_id, "expression": expression, "result": values,
+    }]
+    proposal["self_check"] = {"status": "passed", "checks": ["no_issue_review"], "unresolved": []}
+    snapshot = read_unit_snapshot(data["task_id"], unit_id)
+
+    committed = commit_unit_submission(data["task_id"], unit_id, proposal,
+                                       snapshot["snapshot_sha256"])
+    report = (unit / "_校对报告.md").read_text(encoding="utf-8")
+
+    assert committed["registered"] and committed["verified"]
+    assert verify_unit(unit).ok
+    _, _, reasons = split_sections(report)
+    assert parse_reason_entries(reasons) == []
+    assert "核验说明" in report
 
 
 def test_preview_is_read_only_and_commit_registers_generated_report(tmp_path, monkeypatch):
@@ -118,6 +199,7 @@ def test_new_snapshot_cannot_reuse_old_proposal_revision(tmp_path, monkeypatch):
     task_id = data["task_id"]
     first = commit_unit_submission(task_id, unit_id, proposal, snapshot["snapshot_sha256"])
     current = read_unit_snapshot(task_id, unit_id)
+    assert current["next_proposal_revision"] == 2
     with pytest.raises(BusinessError) as error:
         commit_unit_submission(task_id, unit_id, proposal, current["snapshot_sha256"])
     assert error.value.code == "proposal-revision-stale"

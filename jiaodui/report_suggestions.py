@@ -37,7 +37,7 @@ _CORRECTION_KEYS = {
 
 
 def proposal_json_schema() -> dict[str, Any]:
-    """导出结构化建议schema，供DSH工具注册复用。"""
+    """导出完整结构化建议schema，供DSH工具注册复用。"""
     correction = {
         "type": "object", "additionalProperties": False,
         "required": sorted(_CORRECTION_KEYS),
@@ -57,10 +57,70 @@ def proposal_json_schema() -> dict[str, Any]:
         "type": "object", "additionalProperties": False,
         "required": ["status", "checks", "unresolved"],
         "properties": {
-            "status": {"type": "string", "enum": ["passed", "needs_user"]},
-            "checks": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+            "status": {"type": "string", "const": "passed"},
+            "checks": {
+                "type": "array", "minItems": 1, "uniqueItems": True,
+                "items": {"type": "string", "enum": sorted(_REQUIRED_SELF_CHECKS | {"no_issue_review"})},
+            },
             "unresolved": {"type": "array", "items": {"type": "string"}},
         },
+    }
+    not_applicable = {
+        "type": "object", "additionalProperties": False,
+        "required": ["status", "reason"],
+        "properties": {
+            "status": {"type": "string", "const": "not_applicable"},
+            "reason": {"type": "string", "minLength": 1},
+        },
+    }
+    assumptions = {
+        "type": "array", "minItems": 1,
+        "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["id", "text", "source_locations"],
+            "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "text": {"type": "string", "minLength": 1},
+                "source_locations": {"type": "array"},
+            },
+        },
+    }
+    images = {
+        "oneOf": [
+            {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["id", "reference_index", "original_path", "actual_read_path",
+                             "position", "readable", "semantic", "verdict"],
+                "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "reference_index": {"type": "integer", "minimum": 1},
+                    "original_path": {"type": "string", "minLength": 1},
+                    "actual_read_path": {"type": "string", "minLength": 1},
+                    "position": {"type": "object", "required": ["line", "column"],
+                                 "properties": {"line": {"type": "integer", "minimum": 1},
+                                                "column": {"type": "integer", "minimum": 1}}},
+                    "readable": {"type": "boolean"},
+                    "semantic": {"type": "string"},
+                    "verdict": {"type": "string"},
+                },
+            }},
+            not_applicable,
+        ],
+    }
+    calculations = {
+        "oneOf": [
+            {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["id", "call_id", "expression", "result"],
+                "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "call_id": {"type": "string", "minLength": 1},
+                    "expression": {"type": "string", "minLength": 1},
+                    "result": {},
+                },
+            }},
+            not_applicable,
+        ],
     }
     properties = {
         "schema_version": {"type": "integer", "const": 2},
@@ -72,7 +132,16 @@ def proposal_json_schema() -> dict[str, Any]:
         "proposal_revision": {"type": "integer", "minimum": 1},
         "summary": {"type": "string", "enum": ["无问题", "轻微问题", "一般问题", "严重错误"]},
         "corrections": {"type": "array", "items": correction},
-        "evidence": {"type": "object", "additionalProperties": True},
+        "evidence": {
+            "type": "object", "additionalProperties": False,
+            "required": ["assumptions", "symbols", "images", "calculations"],
+            "properties": {
+                "assumptions": assumptions,
+                "symbols": {"type": "array"},
+                "images": images,
+                "calculations": calculations,
+            },
+        },
         "self_check": self_check,
     }
     return {"type": "object", "additionalProperties": False,
@@ -111,29 +180,70 @@ def _collect_evidence_ids(value: Any) -> set[str]:
     return found
 
 
+def _validate_image_evidence(evidence: Any, image_manifest: dict) -> None:
+    """将提案图片证据逐项绑定到单元源文的实际引用清单。"""
+    references = image_manifest.get("references", [])
+    if not references:
+        if (not isinstance(evidence, dict) or set(evidence) != {"status", "reason"}
+                or evidence.get("status") != "not_applicable"):
+            raise _error("proposal.evidence-images", "源文没有图片引用时，images 必须声明 not_applicable")
+        return
+    if not isinstance(evidence, list):
+        raise _error("proposal.evidence-images", "源文包含图片引用，images 必须逐项提供证据，不能声明 not_applicable")
+    by_index = {item["reference_index"]: item for item in references}
+    if len(evidence) != len(references):
+        raise _error("proposal.evidence-images", "图片证据数量必须与源文图片引用数量一致")
+    seen: set[int] = set()
+    for item in evidence:
+        index = item["reference_index"]
+        reference = by_index.get(index)
+        if reference is None or index in seen:
+            raise _error("proposal.evidence-images", f"图片证据 reference_index={index} 不对应唯一的源文引用")
+        seen.add(index)
+        position = item["position"]
+        actual_position = reference.get("position", {})
+        if (item["original_path"] != reference.get("original_path")
+                or item["actual_read_path"] != reference.get("actual_read_path")
+                or position.get("line") != actual_position.get("line")
+                or position.get("column") != actual_position.get("column")
+                or item["readable"] is not True):
+            raise _error(
+                "proposal.evidence-images",
+                f"图片证据 {index} 的路径、正文位置或 readable 与 inspect-images 清单不一致；"
+                "请逐字使用清单中的 original_path、actual_read_path、position，并确认 readable=true")
+
+
 _REQUIRED_SELF_CHECKS = {
     "real_issue", "replacement_semantics", "related_coverage", "scope_and_uncertainty", "severity",
 }
 
 
 def _validate_first_pass_evidence(evidence: dict) -> set[str]:
+    allowed = {"assumptions", "symbols", "images", "calculations"}
+    unknown = sorted(str(key) for key in set(evidence) - allowed)
+    if unknown:
+        raise _error("proposal.evidence",
+                     "evidence包含未支持字段：" + "、".join(unknown)
+                     + "；允许字段为 " + "、".join(sorted(allowed)))
     assumptions = evidence.get("assumptions")
     if not isinstance(assumptions, list) or not assumptions:
         raise _error("proposal.evidence-assumptions", "必须记录首轮假设/核验依据")
     identities: set[str] = set()
     for index, entry in enumerate(assumptions):
-        # 逐项点名缺哪个字段：只说「需含 id/text/source_locations」时，调用方无法判断
-        # 是第几项、哪个字段不合格，只能整体重写。
+        # 逐项点名缺哪个字段；只报整体schema错误会迫使调用方重写整份证据。
         problems: list[str] = []
         if not isinstance(entry, dict):
             problems.append("不是对象")
         else:
+            unknown = sorted(str(key) for key in set(entry) - {"id", "text", "source_locations"})
+            if unknown:
+                problems.append("不支持字段 " + "、".join(unknown))
             if not isinstance(entry.get("id"), str) or not entry["id"]:
-                problems.append("id 缺失或为空")
+                problems.append("id缺失或为空")
             if not isinstance(entry.get("text"), str) or not entry["text"].strip():
-                problems.append("text 缺失或为空")
+                problems.append("text缺失或为空")
             if not isinstance(entry.get("source_locations"), list):
-                problems.append("source_locations 缺失或不是数组")
+                problems.append("source_locations缺失或不是数组")
         if problems:
             raise _error("proposal.evidence-assumptions",
                          f"假设证据需含id、text和source_locations；"
@@ -153,8 +263,36 @@ def _validate_first_pass_evidence(evidence: dict) -> set[str]:
     }
     for key, value in (("images", images), ("calculations", calculations)):
         if isinstance(value, list):
+            if key == "images":
+                required = item_fields[key]
+                for index, entry in enumerate(value):
+                    missing = [field for field in required
+                               if not isinstance(entry, dict) or field not in entry]
+                    if missing:
+                        raise _error(
+                            "proposal.evidence-images",
+                            f"images[{index}] 缺少必需字段：" + "、".join(missing))
+                    unknown = sorted(str(field) for field in set(entry) - set(required))
+                    if unknown:
+                        raise _error("proposal.evidence-images",
+                                     f"images[{index}] 包含不支持字段：" + "、".join(unknown))
+                    position = entry["position"]
+                    if (not isinstance(entry["id"], str) or not entry["id"]
+                            or type(entry["reference_index"]) is not int
+                            or entry["reference_index"] < 1
+                            or not isinstance(entry["original_path"], str) or not entry["original_path"]
+                            or not isinstance(entry["actual_read_path"], str) or not entry["actual_read_path"]
+                            or not isinstance(position, dict)
+                            or type(position.get("line")) is not int or position["line"] < 1
+                            or type(position.get("column")) is not int or position["column"] < 1
+                            or type(entry["readable"]) is not bool
+                            or not isinstance(entry["semantic"], str)
+                            or not isinstance(entry["verdict"], str)):
+                        raise _error("proposal.evidence-images",
+                                     f"images[{index}] 的引用索引、路径、正文位置或语义字段类型无效")
             continue
-        if (not isinstance(value, dict) or value.get("status") != "not_applicable"
+        if (not isinstance(value, dict) or set(value) != {"status", "reason"}
+                or value.get("status") != "not_applicable"
                 or not isinstance(value.get("reason"), str) or not value["reason"].strip()):
             # 5讲 单元2 的根因：契约只示范了 not_applicable，模型带图时无从照抄形态
             raise _error(
@@ -258,6 +396,9 @@ def _validate_calculation_evidence(evidence: dict, calls: list[dict] | None, *, 
         if not isinstance(item, dict):
             problems.append("不是对象")
         else:
+            unknown = sorted(str(key) for key in set(item) - {"id", "call_id", "expression", "result"})
+            if unknown:
+                problems.append("包含未支持字段 " + "、".join(unknown))
             if not isinstance(item.get("id"), str) or not item["id"]:
                 problems.append("id 缺失或为空")
             if not isinstance(item.get("call_id"), str):
@@ -314,6 +455,10 @@ def _validate_self_check(self_check: Any, *, has_corrections: bool) -> None:
             or self_check["unresolved"]):
         raise _error("proposal.self-check", "建议自查未通过或存在未解决争议")
     checks = set(self_check["checks"])
+    allowed = _REQUIRED_SELF_CHECKS | {"no_issue_review"}
+    unknown = sorted(checks - allowed)
+    if unknown:
+        raise _error("proposal.self-check", "自查包含未支持检查项：" + "、".join(unknown))
     required = _REQUIRED_SELF_CHECKS if has_corrections else {"no_issue_review"}
     if not required <= checks:
         # 必需项是固定字面量；不列出缺失项时调用方只能猜拼写。实测（第 11 讲 单元3）
@@ -386,13 +531,13 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
     elif payload.get("summary") != "无问题":
         raise _error("proposal.summary", "无修改建议时summary必须为无问题")
 
-    evidence_ids = _validate_first_pass_evidence(payload["evidence"])
-    evidence_ids |= _validate_calculation_evidence(
+    available_evidence_ids = _validate_first_pass_evidence(payload["evidence"])
+    available_evidence_ids |= _validate_calculation_evidence(
         payload["evidence"], calc_calls, task_id=expected_task_id, unit_id=expected_unit_id,
         run_id=expected_run_id, source_sha256=file_digest)
     resolved: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
-    for item in corrections:
+    for index, item in enumerate(corrections):
         if not isinstance(item, dict) or set(item) != _CORRECTION_KEYS:
             raise _error("proposal.correction-schema", "修改项字段不符合schema v2")
         correction_id = item["id"]
@@ -410,10 +555,15 @@ def render_suggestions(source_text: str, payload: dict, *, expected_task_id: str
             raise _error("proposal.category", "每项修改必须提供类别")
         if not isinstance(item["severity"], str) or item["severity"] not in _SEVERITY_RANK:
             raise _error("proposal.severity", "每项修改必须声明有效严重度")
-        if (not isinstance(item["evidence_ids"], list) or not item["evidence_ids"]
-                or any(not isinstance(identity, str) or identity not in evidence_ids
-                       for identity in item["evidence_ids"])):
-            raise _error("proposal.evidence-reference", "每项修改必须引用已提交的证据ID")
+        evidence_ids = item.get("evidence_ids")
+        if (not isinstance(evidence_ids, list) or not evidence_ids
+                or any(not isinstance(identity, str) for identity in evidence_ids)):
+            raise _error("proposal.evidence-reference",
+                         f"corrections[{index}] 必须引用至少一个非空证据ID")
+        unresolved = sorted(set(evidence_ids) - available_evidence_ids)
+        if unresolved:
+            raise _error("proposal.evidence-reference",
+                         f"corrections[{index}] 引用了不存在的证据ID：" + "、".join(unresolved))
         if not isinstance(item["location_id"], str):
             raise _error("proposal.location", "location_id必须为字符串")
         try:

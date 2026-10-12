@@ -252,10 +252,10 @@ _TEMPLATES: dict[str, Template] = {
     ),
     "differentiate": Template(
         _SAFE_IMPORTS
-        + "\n$substitutions\n"
-        + "expr = _safe_sympify($expression)\n"
+        + "\nexpr = _safe_sympify($expression)\n"
         + "var = Symbol($variable)\n"
         + "result = diff(expr, var, $order)\n"
+        + "$subs_call\n"
         + _SERIALIZER
     ),
     "integrate": Template(
@@ -274,8 +274,27 @@ _TEMPLATES: dict[str, Template] = {
         + "_eq = Eq(_lhs, _rhs)\n"
         + "_tgt = Symbol($solve_for)\n"
         + "_sol = solve(_eq, _tgt, dict=True)\n"
-        + "result = _sol[0][_tgt] if _sol else None\n"
-        + "$subs_call\n"
+        + "_values = [_s[_tgt] for _s in _sol]\n"
+        + "$formula_subs\n"
+        + "_values = [_v for _v in _values if _v is not None]\n"
+        + "def _same(a, b):\n"
+        + "    # 代入后不同根可能塌缩为同一数值（x**2=0 的 ±根），必须去重后再判歧义\n"
+        + "    d = simplify(a - b)\n"
+        + "    if d == 0:\n"
+        + "        return True\n"
+        + "    return d == 0\n"
+        + "_unique = []\n"
+        + "for _v in _values:\n"
+        + "    if not any(_same(_v, _u) for _u in _unique):\n"
+        + "        _unique.append(_v)\n"
+        + "_values = _unique\n"
+        + "# 单一解才直接给标量；多解显式报歧义，绝不静默取首解（R6）\n"
+        + "if len(_values) == 1:\n"
+        + "    result = _values[0]\n"
+        + "elif len(_values) > 1:\n"
+        + "    result = {'ambiguous': True, 'solutions': _values}\n"
+        + "else:\n"
+        + "    result = None\n"
         + _SERIALIZER
     ),
     "dimensional": Template(
@@ -462,9 +481,13 @@ def build_code(operation: str, **params) -> str:
                 subs_pairs.append(f'Symbol({var_name!r}): _safe_sympify({var_value!r})')
             else:
                 subs_pairs.append(f'Symbol({var_name!r}): {var_value!r}')
-        subs_call = "result = result.subs({" + ", ".join(subs_pairs) + "})"
+        subs_map = "{" + ", ".join(subs_pairs) + "}"
+        subs_call = f"result = result.subs({subs_map})"
+        # formula 在解出全部根之后再逐个代入已知量（单一解/多解都先代入）
+        formula_subs = f"_values = [_v.subs({subs_map}) for _v in _values]"
     else:
         subs_call = ""
+        formula_subs = ""
 
     var_names = " ".join(params.get("variables", ["x"]))
 
@@ -550,6 +573,10 @@ def build_code(operation: str, **params) -> str:
     impact_point = params.get("impact_point", ["0", "0"])
     impact_normal = params.get("impact_normal", [0, 1])
 
+    if len(entry_point) != 2 or len(impact_point) != 2:
+        raise ValueError("circle_from_two_points 的 entry_point 与 impact_point 必须各含 2 个坐标")
+    if len(velocity_direction) != 2 or len(impact_normal) != 2:
+        raise ValueError("circle_from_two_points 的 velocity_direction 与 impact_normal 必须各含 2 个分量")
     setup_code = (
         f"_px, _py = _safe_sympify({entry_point[0]!r}, local_dict=_LOCALS), _safe_sympify({entry_point[1]!r}, local_dict=_LOCALS)\n"
         f"_ix, _iy = _safe_sympify({impact_point[0]!r}, local_dict=_LOCALS), _safe_sympify({impact_point[1]!r}, local_dict=_LOCALS)\n"
@@ -557,24 +584,57 @@ def build_code(operation: str, **params) -> str:
         f"_v = Matrix([{velocity_direction[0]}, {velocity_direction[1]}])\n"
         f"_I = Point(_ix, _iy)\n"
         f"_n = Matrix([{impact_normal[0]}, {impact_normal[1]}])\n"
+        "def _zero(val):\n"
+        "    if val == 0:\n"
+        "        return True\n"
+        "    try:\n"
+        "        return float(val) == 0.0\n"
+        "    except Exception:\n"
+        "        return getattr(val, 'is_zero', None) is True\n"
+        "def _positive(val):\n"
+        "    # 返回 True/False/None：None 表示符号语境下无法判定，交由调用方决定是否放行\n"
+        "    try:\n"
+        "        return float(val) > 0.0\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    p = getattr(val, 'is_positive', None)\n"
+        "    return bool(p) if p is not None else None\n"
         "if _v.is_zero_matrix:\n"
         "    raise ValueError('入射点速度方向向量为零，无法确定切线')\n"
         "if _n.is_zero_matrix:\n"
         "    raise ValueError('撞击点法向量为零，无法确定约束')\n"
-        "if (_ix - _px)**2 + (_iy - _py)**2 <= 1e-12:\n"
+        "_v = _v / sqrt(_v.dot(_v))\n"
+        "_n = _n / sqrt(_n.dot(_n))\n"
+        "if _zero((_ix - _px)**2 + (_iy - _py)**2):\n"
         "    raise ValueError('两个点重合，无法确定圆')\n"
     )
     solve_code = (
         "Cx, Cy = symbols('Cx Cy')\n"
-        "_eq1 = Eq((Cx - _P.x)*_v[0] + (Cy - _P.y)*_v[1], 0)\n"
-        "_eq2 = Eq((Cx - _I.x)*_n[0] + (Cy - _I.y)*_n[1], 0)\n"
-        "_sol = solve([_eq1, _eq2], (Cx, Cy), dict=True)\n"
-        "if _sol:\n"
-        "    _C = Point(_sol[0][Cx], _sol[0][Cy])\n"
-        "    _R = simplify(_C.distance(_P))\n"
-        "    result = {'center': [str(_C.x), str(_C.y)], 'radius': str(_R)}\n"
-        "else:\n"
-        "    result = {'error': 'no_solution'}\n"
+        "# 两个方向约束：入射点半径垂直于速度方向；撞击点半径垂直于撞击面法向量\n"
+        "_c1 = _P.x*_v[0] + _P.y*_v[1]\n"
+        "_c2 = _I.x*_n[0] + _I.y*_n[1]\n"
+        "_det = _v[0]*_n[1] - _n[0]*_v[1]\n"
+        "if _zero(_det):\n"
+        "    raise ValueError('方向约束退化：入射速度方向与撞击面法向量平行，无法确定唯一圆心')\n"
+        "_C = Point((_c1*_n[1] - _c2*_v[1])/_det, (_v[0]*_c2 - _n[0]*_c1)/_det)\n"
+        "# 真实几何约束：同一圆必须让两点到圆心等距；否则是条件冲突，必须报错而非返回伪圆（R5）\n"
+        "_d2P = expand((_C.x - _P.x)**2 + (_C.y - _P.y)**2)\n"
+        "_d2I = expand((_C.x - _I.x)**2 + (_C.y - _I.y)**2)\n"
+        "_gap = simplify(_d2P - _d2I)\n"
+        "_scale = max(abs(float(_d2P)), abs(float(_d2I)), 1e-30) if _d2P.is_number and _d2I.is_number else None\n"
+        "_equidistant = _zero(_gap)\n"
+        "if not _equidistant and _scale is not None:\n"
+        "    _equidistant = abs(float(_gap)) <= 1e-9 * _scale\n"
+        "if not _equidistant:\n"
+        "    raise ValueError('几何条件冲突：按两方向约束解出的圆心到入射点与撞击点距离不等（'\n"
+        "                     + str(simplify(sqrt(_d2P))) + ' vs ' + str(simplify(sqrt(_d2I)))\n"
+        "                     + '），两点不在同一圆上，不能返回伪圆；请核对坐标或法向量；'\n"
+        "                     + '若坐标含符号而方向/法向量是近似小数，请先代入数值再算')\n"
+        "_side = simplify((_P.x - _I.x)*_n[0] + (_P.y - _I.y)*_n[1])\n"
+        "if _positive(_side) is False:\n"
+        "    raise ValueError('撞击面法向量方向与约定不符：应指向入射点所在侧（点积 ' + str(_side) + ' <= 0）')\n"
+        "result = {'center': [str(simplify(_C.x)), str(simplify(_C.y))],\n"
+        "          'radius': str(simplify(sqrt(_d2P)))}\n"
     )
 
     # Chemistry params
@@ -598,6 +658,7 @@ def build_code(operation: str, **params) -> str:
     return template.safe_substitute(
         var_declarations=var_declarations,
         subs_call=subs_call,
+        formula_subs=formula_subs,
         substitutions="",
         expression=json_repr(params.get("expression", "")),
         expression_str=json_repr(params.get("expression", "")),

@@ -49,6 +49,77 @@ class TestSplitExam:
         assert "【答案】A 解析A" in _text(tmp_path / "out" / "paper" / "第1题" / "第1题.md")
         assert "【答案】B 解析B" in _text(tmp_path / "out" / "paper" / "第2题" / "第2题.md")
 
+    @pytest.mark.parametrize("numbers, config", [
+        ((1, 3), {}),
+        ((5, 6), {}),
+        ((1, 3), {"exam_question_pattern": r"^\d+[.．]"}),
+    ])
+    def test_end_answers_follow_original_numbers(self, tmp_path, numbers, config):
+        """缺号、节选与无捕获组规则都按原题号回填，目录仍连续编号。"""
+        first, second = numbers
+        raw = (f"{first}．题干甲\n{second}．题干乙\n参考答案\n"
+               "1. A\n解析一。\n2. B\n解析二。\n3. C\n解析三。\n"
+               "5. E\n解析五。\n6. F\n解析六。\n")
+        result = split_exam(raw, str(tmp_path / "out"), "paper", config)
+        expected = {1: ("A", "解析一。"), 3: ("C", "解析三。"),
+                    5: ("E", "解析五。"), 6: ("F", "解析六。")}
+        assert [unit["name"] for unit in result.units] == ["第1题", "第2题"]
+        for unit, number, stem in zip(result.units, numbers, ("题干甲", "题干乙")):
+            answer, explanation = expected[number]
+            assert _text(Path(unit["file"])) == f"{number}．{stem}\n【答案】{answer}\n{explanation}"
+        assert result.warnings == []
+
+    def test_missing_end_answer_reports_original_number(self, tmp_path):
+        result = split_exam("3．题干\n参考答案\n1. A\n", str(tmp_path / "out"), "paper", {})
+        assert _text(Path(result.units[0]["file"])) == "3．题干"
+        assert any("第1题" in warning and "原题号3" in warning and "无对应条目" in warning
+                   for warning in result.warnings)
+
+    def test_duplicate_original_number_does_not_guess_end_answer(self, tmp_path):
+        raw = "3．题干甲\n3．题干乙\n参考答案\n1. A\n2. B\n3. C\n"
+        result = split_exam(raw, str(tmp_path / "out"), "paper", {})
+        assert [_text(Path(unit["file"])) for unit in result.units] == ["3．题干甲", "3．题干乙"]
+        assert any("原题号3" in warning and "重复" in warning for warning in result.warnings)
+
+    def test_duplicate_answer_number_does_not_take_last_entry(self, tmp_path):
+        raw = "3．题干\n参考答案\n1. A\n3. C\n解析甲。\n3. D\n解析乙。\n"
+        result = split_exam(raw, str(tmp_path / "out"), "paper", {})
+        assert _text(Path(result.units[0]["file"])) == "3．题干"
+        assert any("参考答案" in warning and "题号3" in warning and "重复" in warning
+                   for warning in result.warnings)
+
+    def test_unnumbered_custom_question_does_not_use_output_index(self, tmp_path):
+        raw = "题目甲：质量为3kg\n参考答案\n1. A\n"
+        result = split_exam(raw, str(tmp_path / "out"), "paper",
+                            {"exam_question_pattern": r"^题目[甲乙]"})
+        assert _text(Path(result.units[0]["file"])) == "题目甲：质量为3kg"
+        assert any("第1题" in warning and "原题号" in warning and "无法识别" in warning
+                   for warning in result.warnings)
+
+    @pytest.mark.parametrize("heading, pattern", [
+        ("第2部分第3题", r"^第\d+部分第(\d+)题"),
+        ("3．题干", r"^(?=(\d+)[.．])"),
+    ])
+    def test_captured_question_number_takes_precedence(self, tmp_path, heading, pattern):
+        raw = f"{heading}\n参考答案\n1. A\n2. B\n3. C\n"
+        result = split_exam(raw, str(tmp_path / "out"), "paper", {"exam_question_pattern": pattern})
+        assert _text(Path(result.units[0]["file"])) == f"{heading}\n【答案】C"
+        assert result.warnings == []
+
+    def test_multiple_uncaptured_prefix_numbers_do_not_guess(self, tmp_path):
+        raw = "第2部分第3题\n参考答案\n1. A\n2. B\n3. C\n"
+        result = split_exam(raw, str(tmp_path / "out"), "paper",
+                            {"exam_question_pattern": r"^第\d+部分第\d+题"})
+        assert _text(Path(result.units[0]["file"])) == "第2部分第3题"
+        assert any("原题号" in warning and "无法识别" in warning for warning in result.warnings)
+
+    def test_nonconsecutive_inline_answers_stay_with_source(self, tmp_path):
+        raw = "5．题干甲\n【答案】E\n6．题干乙\n【答案】F\n"
+        result = split_exam(raw, str(tmp_path / "out"), "paper", {})
+        assert [_text(Path(unit["file"])) for unit in result.units] == [
+            "5．题干甲\n【答案】E", "6．题干乙\n【答案】F"]
+        assert result.warnings == []
+
     def test_no_match_warns_and_returns_empty(self, tmp_path):
         result = split_exam("没有任何题号的文本", str(tmp_path / "out"), "paper", {})
         assert result.units == []
@@ -361,30 +432,61 @@ class TestSliceByBoundaries:
 
     def test_text_based(self, tmp_path):
         boundaries = [{"name": "单元1", "text": "甲"}, {"name": "单元2", "text": "乙"}]
-        result = slice_by_boundaries("忽略", boundaries, str(tmp_path / "out"), "sl", "lecture")
+        result = slice_by_boundaries("忽略", boundaries, str(tmp_path / "out"), "sl", "lecture",
+                                     scope="excerpt", scope_reason="人工提供节选正文")
         assert len(result.units) == 2
         assert _text(tmp_path / "out" / "sl" / "单元1" / "单元1.md") == "甲"
 
     def test_name_fallback_by_mode(self, tmp_path):
         boundaries = [{"name": "开场", "text": "x"}]
-        slice_by_boundaries("", boundaries, str(tmp_path / "out"), "sl", "exam")
+        slice_by_boundaries("", boundaries, str(tmp_path / "out"), "sl", "exam",
+                            scope="excerpt", scope_reason="人工正文命名测试")
         assert (tmp_path / "out" / "sl" / "第1题" / "第1题.md").exists()
-        slice_by_boundaries("", boundaries, str(tmp_path / "out2"), "sl", "lecture")
+        slice_by_boundaries("", boundaries, str(tmp_path / "out2"), "sl", "lecture",
+                            scope="excerpt", scope_reason="人工正文命名测试")
         assert (tmp_path / "out2" / "sl" / "单元1" / "单元1.md").exists()
 
-    def test_empty_boundaries_warns(self, tmp_path):
-        result = slice_by_boundaries("x", [], str(tmp_path / "out"), "sl", "exam")
-        assert result.units == []
-        assert result.warnings
+    @pytest.mark.parametrize("mode, names, duplicate", [
+        ("lecture", ("单元1", "单元1"), "单元1"),
+        ("exam", ("开场", "第1题"), "第1题"),
+        ("lecture", ("单元2", "小节"), "单元2"),
+    ])
+    def test_duplicate_final_names_rejected_before_any_write(self, tmp_path, mode, names, duplicate):
+        from jiaodui.errors import JiaoduiError
 
-    def test_start_line_out_of_range_gives_empty_unit(self, tmp_path):
+        out = tmp_path / "out"
+        callbacks = []
+        boundaries = [{"name": name, "text": content}
+                      for name, content in zip(names, ("甲", "乙"))]
+        with pytest.raises(JiaoduiError) as err:
+            slice_by_boundaries("源正文", boundaries, str(out), "sl", mode,
+                                before_write=callbacks.append)
+        assert err.value.code == "duplicate-unit-name"
+        assert err.value.details["duplicate_names"] == [duplicate]
+        assert callbacks == []
+        assert not out.exists()
+
+    def test_empty_boundaries_reject_uncovered_source(self, tmp_path):
+        from jiaodui.errors import JiaoduiError
+
+        with pytest.raises(JiaoduiError) as error:
+            slice_by_boundaries("x", [], str(tmp_path / "out"), "sl", "exam")
+        assert error.value.code == "slice-coverage-invalid"
+        assert error.value.details["uncovered_ranges"] == [{"start_line": 1, "end_line": 1}]
+        assert not (tmp_path / "out").exists()
+
+    def test_start_line_out_of_range_is_rejected(self, tmp_path):
+        from jiaodui.errors import JiaoduiError
         boundaries = [{"name": "第1题", "start_line": 99, "end_line": 120}]
-        slice_by_boundaries("a\nb", boundaries, str(tmp_path / "out"), "sl", "exam")
-        assert _text(tmp_path / "out" / "sl" / "第1题" / "第1题.md") == ""
+        with pytest.raises(JiaoduiError) as error:
+            slice_by_boundaries("a\nb", boundaries, str(tmp_path / "out"), "sl", "exam")
+        assert error.value.code == "invalid-boundaries"
+        assert not (tmp_path / "out").exists()
 
     def test_no_clean_md_produced(self, tmp_path):
         boundaries = [{"name": "第1题", "text": "x"}]
-        slice_by_boundaries("ignored", boundaries, str(tmp_path / "out"), "sl", "exam")
+        slice_by_boundaries("ignored", boundaries, str(tmp_path / "out"), "sl", "exam",
+                            scope="excerpt", scope_reason="人工正文产物命名测试")
         assert not list((tmp_path / "out").rglob("*_clean.md"))
 
     def test_lecture_boundaries_must_follow_cleaned_text(self, tmp_path):
@@ -408,11 +510,10 @@ class TestSliceByBoundaries:
         assert cleaned == ("## 模块一\n\n**例1**（多选）\n题干一\n"
                            "**例2**（多选）\n题干二")
         lines = cleaned.splitlines()
-        i1 = lines.index("**例1**（多选）")
         i2 = lines.index("**例2**（多选）")
         assert "|" not in cleaned
         boundaries = [
-            {"name": "单元1", "start_line": i1 + 1, "end_line": i2},
+            {"name": "单元1", "start_line": 1, "end_line": i2},
             {"name": "单元2", "start_line": i2 + 1, "end_line": len(lines)},
         ]
         result = slice_by_boundaries(str(raw_path), boundaries,

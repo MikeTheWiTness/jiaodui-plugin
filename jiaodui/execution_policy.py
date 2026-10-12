@@ -1,4 +1,4 @@
-"""执行策略与恢复预算的纯机制（无 IO、无 json）。
+"""执行策略与恢复预算的纯机制（无文件 IO）。
 
 模块形状取自 main 的 `execution_policy.py`：策略与落盘分离，机制可单测。
 分支侧原先把这些内嵌在 `material.py` 里，B1 把它搬出来，并采纳 main 的两条语义：
@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 
 from .errors import BusinessError
@@ -136,11 +138,36 @@ def migrate_legacy_spent(policy: dict) -> dict[str, int]:
 
 
 def validate_fingerprint(fingerprint: object) -> str:
-    """失败指纹必须是小写 64 位 SHA-256。"""
+    """失败指纹必须是小写 64 位 SHA-256，拒绝常见占位值。"""
     if not isinstance(fingerprint, str) or not _SHA256_RE.fullmatch(fingerprint):
-        # 采纳 main 的码：比笼统的 recovery-invalid 更能指认问题
         raise BusinessError("SHA-256失败指纹无效", code="invalid-attempt-fingerprint")
+    if fingerprint in {"0" * 64, "1" * 64, "f" * 64}:
+        raise BusinessError("失败指纹不能使用全零/全一占位值", code="invalid-attempt-fingerprint")
     return fingerprint
+
+
+def fingerprint_failure(failure: object, *, error_code: str | None,
+                        category: str | None) -> str:
+    """从稳定失败字段派生指纹，忽略调用ID、时间戳等易变元数据。"""
+    if not isinstance(failure, dict):
+        raise BusinessError("failure必须是包含message的对象", code="invalid-attempt-failure")
+    message = failure.get("message")
+    details = failure.get("details", {})
+    if not isinstance(details, dict):
+        raise BusinessError("failure.details必须是JSON对象", code="invalid-attempt-failure")
+    if not isinstance(message, str) or not message.strip():
+        raise BusinessError("failure.message必须是非空字符串", code="invalid-attempt-failure")
+    try:
+        canonical = json.dumps(
+            {"error_code": error_code or "category:" + str(category),
+             "message": message, "details": details},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise BusinessError("failure.details必须是有限的JSON数据",
+                            code="invalid-attempt-failure") from exc
+    if len(canonical.encode("utf-8")) > 65536:
+        raise BusinessError("failure载荷超过64KiB", code="invalid-attempt-failure")
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def validate_attempt(attempt_id: object, fingerprint: object) -> tuple[str, str]:

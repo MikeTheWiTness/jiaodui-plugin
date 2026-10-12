@@ -13,9 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .error_classification import RECOVERY_CATEGORIES, classify_error
-from .execution_policy import (attempt_decision, charge, is_current_policy,
-                               is_readable_policy, migrate_legacy_spent, new_policy,
-                               validate_attempt)
+from .execution_policy import (attempt_decision, charge, fingerprint_failure,
+                               is_current_policy, is_readable_policy, migrate_legacy_spent,
+                               new_policy, validate_attempt)
 from .errors import BusinessError, JiaoduiError, NotFoundError
 from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
@@ -327,7 +327,9 @@ def find_unit_by_id(task_id: str, unit_id: str) -> tuple[Path, Path]:
                         details={"task_id": task_id, "unreadable_materials": broken})
 
 
-TERMINAL_PHASES: frozenset[str] = frozenset({"registered", "parent_reviewed", "deliverable"})
+TERMINAL_PHASES: frozenset[str] = frozenset({
+    "registered", "awaiting_parent_review", "parent_reviewed", "needs_revision", "cancelled", "deliverable",
+})
 """到达这些阶段即为终态：不再是在途单元，也不会被判超时。"""
 
 
@@ -415,12 +417,16 @@ def dispatch_plan(task_id: str, *, window: int = 8) -> dict:
     paper = relative_path(root, data["paths"]["paper"])
     progress = unit_progress(task_id)
     in_flight = [item["unit"] for item in progress["units"] if item["in_flight"]]
+    awaiting_review = [item["unit"] for item in progress["units"]
+                       if item["phase"] == "awaiting_parent_review"
+                       and unit_needs_parent_review(root, data, paper / item["unit"])]
     cancelled = [{"unit": item["unit"], **(item["cancelled"] or {})}
                  for item in progress["units"] if item["cancelled"]]
     report = scan_status(paper)
     dispatchable = [item.unit for item in report.units
                     if item.state in {NOT_STARTED, DELIVERED_UNVERIFIED, CURRENT_PENDING}
-                    and item.unit not in in_flight]
+                    and item.unit not in in_flight
+                    and item.unit not in awaiting_review]
     free = max(0, window - len(in_flight))
     stopped = bool(cancelled)
     return {"ok": True, "task_id": task_id, "run_id": progress["run_id"],
@@ -529,8 +535,9 @@ def set_execution_policy(root: Path, mode: str, origin: str = "user") -> dict:
         return policy
 
 
-def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fingerprint: str,
-                            *, attempt_id: str, error_code: str | None = None,
+def record_recovery_attempt(task_id: str, unit_id: str, category: str | None,
+                            fingerprint: str | None = None, *, attempt_id: str,
+                            error_code: str | None = None, failure: dict | None = None,
                             expected_run_id: str | None = None) -> dict:
     """在当前轮次消费一个分类预算，并按失败指纹留痕。
 
@@ -539,11 +546,20 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
     - 只给 `category`：仅允许父代理判断类的 `targeted_review`，其余必须给错误码；
     - 未分类码、用户取消、权限拒绝一律拒绝，且不消耗任何预算。
 
-    `attempt_id` 是幂等键（UNIFY-PLAN B3，采纳 main 的 `attempt_id` 语义）：
-    同一 attempt 重放不再扣费并返回原结果（`idempotent=true`）；同一 attempt 换了指纹
-    或换了类别 → `attempt-id-conflict`。指纹只标识「同一失败」，不承担幂等。
+    `failure` 优先用于从稳定的 message/details 派生 SHA-256；忽略 call_id 与时间戳。
+    旧调用仍可直接传 fingerprint。`attempt_id` 是幂等键：同一 attempt 重放不再扣费；
+    同一 attempt 换了指纹或类别 → `attempt-id-conflict`。
     `expected_run_id` 是 CAS 防护：与当前轮次不一致即 `run-changed`。
     """
+    if failure is not None:
+        derived = fingerprint_failure(failure, error_code=error_code, category=category)
+        if fingerprint is not None and fingerprint != derived:
+            raise BusinessError("fingerprint与failure派生值不一致",
+                                code="invalid-attempt-fingerprint")
+        fingerprint = derived
+    if fingerprint is None:
+        raise BusinessError("必须提供failure载荷或SHA-256指纹",
+                            code="invalid-attempt-fingerprint")
     attempt_id, fingerprint = validate_attempt(attempt_id, fingerprint)
     if category is not None and category not in RECOVERY_CATEGORIES:
         raise BusinessError(f"未知恢复类别：{category!r}", code="recovery-invalid")
@@ -596,6 +612,7 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None, fi
             return {**(decision["result"] or {}), "idempotent": True}
         unit_state = run.setdefault("recovery", {}).setdefault(unit_id, {})
         result = charge(unit_state, category, fingerprint)
+        result["fingerprint"] = fingerprint
         if not result["allowed"]:
             # 被拒 = 不改变状态 → **不写盘、不记 attempt、不追加事件**（采纳 main：
             # main 的 spend() 抛错时同样不改盘）。否则反复重试被拒的 attempt 会撑大清单。
@@ -640,6 +657,17 @@ def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str
                                          "run_id": run["run_id"]})
         # 采纳 main：没有当前执行授权就不该留下工作痕迹（顺序同 main，先判轮次再判授权）
         require_current_policy(run, data)
+        previous = run.setdefault("unit_state", {}).get(unit_id) or {}
+        terminated = run.setdefault("terminated_attempts", {})
+        if attempt_id in terminated:
+            raise BusinessError("该 attempt 已由持久提交、复核或取消结果终结", code="attempt-terminated",
+                                details={"attempt_id": attempt_id, "phase": terminated[attempt_id]})
+        if (previous.get("attempt_id") == attempt_id
+                and previous.get("phase") in {"awaiting_parent_review", "parent_reviewed",
+                                               "needs_revision", "cancelled"}):
+            terminated[attempt_id] = previous.get("phase")
+            raise BusinessError("该 attempt 已由持久提交、复核或取消结果终结", code="attempt-terminated",
+                                details={"attempt_id": attempt_id, "phase": previous.get("phase")})
         event = {"at": now(), "unit_id": unit_id, "phase": phase,
                  "attempt_id": attempt_id, "agent_id": agent_id}
         run.setdefault("unit_events", {}).setdefault(unit_id, []).append(event)
@@ -654,14 +682,31 @@ _ALLOWED_CANCELLATIONS = {"user": {"user_cancel"},
                           "host": {"technical_timeout", "superseded"}}
 
 
+def _last_technical_cancellation(run: dict, unit_id: str) -> dict | None:
+    """返回该单元当前仍生效的最后一条技术取消，忽略用户取消。"""
+    active: list[dict] = []
+    for item in (run.get("cancellations") or []):
+        if item.get("unit_id") != unit_id:
+            continue
+        if item.get("revoked"):
+            for index in range(len(active) - 1, -1, -1):
+                candidate = active[index]
+                if (candidate.get("initiator") == item.get("revoked_initiator")
+                        and candidate.get("reason") == item.get("revoked_reason")):
+                    active.pop(index)
+                    break
+        elif item.get("initiator") in {"parent", "host"}:
+            active.append(item)
+    return active[-1] if active else None
+
+
 def _last_cancellation(run: dict, unit_id: str) -> dict | None:
-    """取该单元最后一条取消记录的**生效**条目；末尾是撤销记录则视为未取消。"""
+    """返回有效取消；同轮用户取消优先于后续技术取消，技术撤销不能覆盖它。"""
     entries = [item for item in (run.get("cancellations") or [])
                if item.get("unit_id") == unit_id]
-    if not entries:
-        return None
-    last = entries[-1]
-    return None if last.get("revoked") else last
+    user_cancel = next((item for item in entries
+                        if item.get("initiator") == "user" and not item.get("revoked")), None)
+    return user_cancel or _last_technical_cancellation(run, unit_id)
 
 
 def record_unit_cancel(task_id: str, unit_id: str, *, attempt_id: str, initiator: str,
@@ -694,18 +739,18 @@ def record_unit_cancel(task_id: str, unit_id: str, *, attempt_id: str, initiator
                                 details={"expected_run_id": expected_run_id,
                                          "run_id": run["run_id"]})
         require_current_policy(run, data)
-        standing = _last_cancellation(run, unit_id)
         if revoke:
+            standing = _last_technical_cancellation(run, unit_id)
             if standing is None:
+                effective = _last_cancellation(run, unit_id)
+                if effective and effective.get("initiator") == "user":
+                    raise BusinessError("用户取消不可撤销：这是人的决定，只能由用户重新发起",
+                                        code="cancel-invalid",
+                                        details={"unit_id": unit_id,
+                                                 "initiator": "user",
+                                                 "reason": effective.get("reason")})
                 raise BusinessError("该单元当前没有可撤销的取消记录", code="cancel-invalid",
                                     details={"unit_id": unit_id})
-            if standing.get("initiator") == "user":
-                # 用户取消是人的决定，不是父代理可以代撤销的；只能由用户重新发起。
-                raise BusinessError("用户取消不可撤销：这是人的决定，只能由用户重新发起",
-                                    code="cancel-invalid",
-                                    details={"unit_id": unit_id,
-                                             "initiator": standing.get("initiator"),
-                                             "reason": standing.get("reason")})
             entry = {"at": now(), "unit_id": unit_id, "attempt_id": attempt_id,
                      "agent_id": agent_id, "revoked": True,
                      "revoked_initiator": standing.get("initiator"),
@@ -714,6 +759,12 @@ def record_unit_cancel(task_id: str, unit_id: str, *, attempt_id: str, initiator
             entry = {"at": now(), "unit_id": unit_id, "attempt_id": attempt_id,
                      "agent_id": agent_id, "initiator": initiator, "reason": reason}
         run.setdefault("cancellations", []).append(entry)
+        if not revoke and initiator != "user":
+            state = run.setdefault("unit_state", {}).get(unit_id)
+            if state:
+                state.update({"phase": "cancelled", "last_event_at": entry["at"]})
+                if state.get("attempt_id"):
+                    run.setdefault("terminated_attempts", {})[state["attempt_id"]] = "cancelled"
         write(root, data)
         return entry
 
@@ -813,6 +864,8 @@ def unit_needs_parent_review(root: Path, data: dict, unit: Path) -> bool:
         return False  # 数据缺失/损坏由 verify 与 registered 判定，这里不重复拒绝
     if not isinstance(unit_data, dict) or unit_data.get("schema_version") != 2:
         return False
+    if not registered(root, data, unit):
+        return False
     return not review_current(root, data, unit.name)
 
 
@@ -855,6 +908,14 @@ def register_locked(root: Path, unit: Path, text: str, expected_run_id: str) -> 
     data["unit_records"].append({"unit": unit.name, "run_id": data["current_run_id"],
                                  "report_sha256": digest, "data_sha256": data_digest,
                                  "recorded_at": now(), "inputs": data["unit_inputs"][unit.name]})
+    unit_data = json.loads(data_file.read_text(encoding="utf-8"))
+    unit_id = data["unit_ids"][unit.name]
+    state = data["runs"][-1].setdefault("unit_state", {}).get(unit_id, {})
+    state.update({"phase": "awaiting_parent_review" if unit_data.get("schema_version") == 2 else "registered",
+                  "last_event_at": now()})
+    if state.get("attempt_id"):
+        data["runs"][-1].setdefault("terminated_attempts", {})[state["attempt_id"]] = state["phase"]
+    data["runs"][-1]["unit_state"][unit_id] = state
     data["runs"][-1]["status"] = "completed" if run_units_complete(root, data) else "in_progress"
     write(root, data)
 

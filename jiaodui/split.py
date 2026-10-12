@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import statistics
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,7 +24,7 @@ from .config import (get_compiled_title_patterns, get_exam_question_pattern,
                      get_lecture_split_mode, get_nav_patterns, get_section_pattern,
                      normalize_subject_config)
 from .decor_utils import strip_decor_images
-from .errors import ContractError
+from .errors import BusinessError, ContractError
 from .image_utils import ImageCopyResult, copy_md_images
 from .inspect_images import prepare_white_backgrounds
 from .log import log
@@ -126,6 +127,7 @@ class SplitResult:
     missing: int = 0
     conflicts: int = 0
     warnings: list[str] = field(default_factory=list)
+    coverage: dict | None = None
 
 
 @dataclass
@@ -143,6 +145,7 @@ class PrecheckResult:
     length_max: int = 0
     units: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    coverage: dict | None = None
 
 
 # ─── 单元标记解析器（移植自 core/manual_split.py） ─────────────
@@ -334,9 +337,20 @@ def _collect_blocks(lines: list[str], qs: re.Pattern) -> list[list[str]]:
     return blocks
 
 
-def _assemble_exam_unit(block: list[str], idx: int, answer_mode: str,
+def _original_question_number(block: list[str], qs: re.Pattern) -> int | None:
+    """优先取规则捕获的唯一数字；无数字捕获时取匹配前缀的唯一数字，不猜多个候选。"""
+    matched = qs.match(block[0].strip())
+    if matched is None:
+        return None
+    captured = [value for value in matched.groups() if value is not None and value.isdecimal()]
+    numbers = captured or re.findall(r"\d+", matched.group(0))
+    candidates = {int(number) for number in numbers}
+    return candidates.pop() if len(candidates) == 1 else None
+
+
+def _assemble_exam_unit(block: list[str], question_number: int | None, answer_mode: str,
                         end_answers: dict | None) -> list[str]:
-    """按答案模式组装单题正文（去掉题号加粗壳行）。"""
+    """按答案模式组装单题正文（去掉题号加粗壳行），文末答案按原题号匹配。"""
     def is_title(l: str) -> bool:
         return bool(re.match(r'^\*\*.*\*\*$', l.strip()))
 
@@ -357,8 +371,8 @@ def _assemble_exam_unit(block: list[str], idx: int, answer_mode: str,
         return stem + ans + exp
 
     stem = [l for l in block if not is_title(l)]
-    if end_answers and idx in end_answers:
-        return stem + end_answers[idx]["explanation"]
+    if end_answers and question_number in end_answers:
+        return stem + end_answers[question_number]["explanation"]
     return stem
 
 
@@ -405,8 +419,8 @@ def detect_answer_mode(lines: list[str]) -> str:
     return "inline" if inline_count > len(blocks) / 2 else "end"
 
 
-def parse_end_answers(answer_lines: list[str]) -> dict[int, dict]:
-    """解析末尾参考答案区：题号 → {"answer": 答案, "explanation": 详解行}。"""
+def parse_end_answers(answer_lines: list[str], *, warnings: list[str] | None = None) -> dict[int, dict]:
+    """解析末尾参考答案：题号 → 答案/详解；重复题号不回填，可通过 warnings 返回诊断。"""
     if not answer_lines:
         return {}
     qa = re.compile(r'^(\d+)[.．]\s*(.*)')
@@ -416,6 +430,7 @@ def parse_end_answers(answer_lines: list[str]) -> dict[int, dict]:
     if start >= len(answer_lines):
         return {}
     result: dict[int, dict] = {}
+    duplicates: set[int] = set()
     i = start
     while i < len(answer_lines):
         m = qa.match(answer_lines[i].strip())
@@ -433,7 +448,13 @@ def parse_end_answers(answer_lines: list[str]) -> dict[int, dict]:
             i += 1
         if not any("【答案】" in l for l in exp_lines):
             exp_lines.insert(0, f"【答案】{ans}")
-        result[qnum] = {"answer": ans, "explanation": exp_lines}
+        if qnum in result:
+            result.pop(qnum)
+            duplicates.add(qnum)
+            if warnings is not None:
+                warnings.append(f"末尾参考答案题号{qnum}重复，未回填该题号的答案")
+        elif qnum not in duplicates:
+            result[qnum] = {"answer": ans, "explanation": exp_lines}
     return result
 
 
@@ -478,20 +499,30 @@ def split_exam(raw_md: str, output_root: str, base_name: str, config: dict,
 
     if before_write is not None:
         before_write([f"第{idx}题" for idx in range(1, len(blocks) + 1)])
-    end_answers = parse_end_answers(ans_lines) if answer_mode == "end" else None
+    end_answers = parse_end_answers(ans_lines, warnings=result.warnings) if answer_mode == "end" else None
+    question_numbers = [_original_question_number(block, qs) for block in blocks]
+    duplicate_numbers = {number for number, count in Counter(question_numbers).items()
+                         if number is not None and count > 1}
+    if answer_mode == "end" and ans_start is not None:
+        for number in sorted(duplicate_numbers):
+            result.warnings.append(f"题干原题号{number}重复，未回填该题号的末尾参考答案")
     target_root = ensure_tree(Path(output_root) / base_name)
     target_root.mkdir(parents=True, exist_ok=True)
     if src_media is not None and not src_media.exists():
         log(f"   🔍 图片源目录不存在: {src_media}")
 
-    for idx, block in enumerate(blocks, start=1):
-        final_lines = _assemble_exam_unit(block, idx, answer_mode, end_answers)
+    for idx, (block, number) in enumerate(zip(blocks, question_numbers), start=1):
+        answer_number = None if number in duplicate_numbers else number
+        final_lines = _assemble_exam_unit(block, answer_number, answer_mode, end_answers)
         unit_name = f"第{idx}题"
         unit_dir, md_path, img_result = _write_unit(
             target_root, unit_name, "\n".join(final_lines), src_media)
         _record(result, unit_dir, md_path, unit_name, img_result)
-        if answer_mode == "end" and end_answers and idx not in end_answers:
-            result.warnings.append(f"{unit_name} 在末尾参考答案中无对应条目")
+        if answer_mode == "end" and ans_start is not None:
+            if number is None:
+                result.warnings.append(f"{unit_name} 无法识别原题号，未回填末尾参考答案")
+            elif number not in duplicate_numbers and number not in end_answers:
+                result.warnings.append(f"{unit_name}（原题号{number}）在末尾参考答案中无对应条目")
 
     if result.missing:
         result.warnings.append(f"有 {result.missing} 张图片未找到")
@@ -732,14 +763,14 @@ def split_by_strategy(raw_md: str, output_root: str, base_name: str, config: dic
     from .errors import UsageError
     if strategy not in {"manual", "none"} or mode not in {"lecture", "exam"}:
         raise UsageError("人工/整篇拆分需要有效 strategy 和 mode")
-    content, _ = _load_raw(raw_md, base_name, config)
+    content, src_media = _load_raw(raw_md, base_name, config)
     if clean and mode == "lecture":
         content = _clean_lecture(content, _ensure_normalized(config))
     units = parse_unit_markers(content) if strategy == "manual" else [{"content": content}]
-    boundaries = [{"text": unit["content"]} for unit in units]
-    # 正文已经清理，禁止在写盘阶段再次清理导致边界变化。
-    return slice_by_boundaries(raw_md, boundaries, output_root, base_name, mode,
-                               clean=False, config=config, before_write=before_write)
+    planned = [(_boundary_unit_name("", index, mode), unit["content"],
+                _boundary_unit_name("", index, mode)) for index, unit in enumerate(units, 1)]
+    # 人工标记和整篇策略已有明确范围，共用写盘，不冒充智能行区间覆盖。
+    return _write_slice_plan(planned, output_root, base_name, src_media, SplitResult(), before_write)
 
 _CONTRACT_UNIT_NAME_RE = re.compile(r"^(第\d+题|板块\d+|单元\d+)$")
 
@@ -751,36 +782,58 @@ def _boundary_unit_name(name: str, idx: int, mode: str) -> str:
     return f"单元{idx}" if str(mode).lower() == "lecture" else f"第{idx}题"
 
 
-def _slice_lines(lines: list[str], start_line, end_line) -> str:
-    """按 1 基、含端点的行号切片；越界自动收敛，非法输入回退全篇。"""
-    total = len(lines)
-    if total == 0:
-        return ""
-    try:
-        start = int(start_line) if start_line is not None else 1
-    except (TypeError, ValueError):
-        start = 1
-    try:
-        end = int(end_line) if end_line is not None else total
-    except (TypeError, ValueError):
-        end = total
-    start = max(1, start)
-    end = min(total, end)
-    if start > total or end < start:
-        return ""
-    return "\n".join(lines[start - 1:end])
+def _slice_line_range(start_line, end_line, total: int, index: int) -> tuple[int, int]:
+    """行号为 1 基、含端点；非法区间拒绝，不自动收敛或回退全篇。"""
+    start = 1 if start_line is None else start_line
+    end = total if end_line is None else end_line
+    if type(start) is not int or type(end) is not int or not 1 <= start <= end <= total:
+        raise BusinessError("切片行区间无效，未写入单元", code="invalid-boundaries",
+                            details={"boundary_index": index, "start_line": start,
+                                     "end_line": end, "total_lines": total})
+    return start, end
+
+
+def _line_ranges(numbers: list[int]) -> list[dict]:
+    """把有序行号合并成连续区间，仅返回位置，不把源文灌入诊断。"""
+    ranges: list[dict] = []
+    for number in numbers:
+        if ranges and ranges[-1]["end_line"] == number - 1:
+            ranges[-1]["end_line"] = number
+        else:
+            ranges.append({"start_line": number, "end_line": number})
+    return ranges
+
+
+def _write_slice_plan(planned: list[tuple], output_root: str, base_name: str,
+                      src_media: Path | None, result: SplitResult,
+                      before_write: Callable[[list[str]], None] | None) -> SplitResult:
+    """切片与人工/整篇策略共用写盘；调用方已经完成计划核对。"""
+    if before_write is not None:
+        before_write([unit_name for unit_name, _, _ in planned])
+    target_root = ensure_tree(Path(output_root) / base_name)
+    target_root.mkdir(parents=True, exist_ok=True)
+    for unit_name, unit_content, title in planned:
+        unit_dir, md_path, img_result = _write_unit(target_root, unit_name, unit_content, src_media)
+        _record(result, unit_dir, md_path, title, img_result)
+    if result.missing:
+        result.warnings.append(f"有 {result.missing} 张图片未找到")
+    return result
 
 
 def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
                         base_name: str, mode: str = "exam",
                         *, clean: bool = True,
                         config: dict | None = None,
+                        scope: str = "full", scope_reason: str | None = None,
                         before_write: Callable[[list[str]], None] | None = None) -> SplitResult:
     """按边界清单确定性切片（智能拆分用）。
 
-    boundaries 兼容两种写法：
-    - {"name": "第1题", "start_line": 1, "end_line": 20}（1 基、含端点）
-    - {"name": "第1题", "text": "..."}
+    boundaries 使用 1 基、含端点的行区间：
+    - {"name": "第1题", "start_line": 1, "end_line": 20}
+    - 历史 {"name": "第1题", "text": "..."} 仅在显式 excerpt + 原因时接受。
+
+    默认 full 要求清理后非空行恰好覆盖一次；excerpt 允许遗漏，必须声明原因。
+    全量及节选均拒绝非空行重复覆盖，失败发生在任何单元写盘之前。
 
     mode 决定兜底命名：`exam` → 第N题，`lecture` → 单元N；边界名本身已是契约名
     时沿用边界名。写盘纪律与 split_exam / split_lecture 完全一致。
@@ -798,39 +851,55 @@ def slice_by_boundaries(raw_md: str, boundaries: list[dict], output_root: str,
         content = _clean_lecture(content, config)
     lines = content.splitlines()
     result = SplitResult()
-    if not boundaries:
-        result.warnings.append("边界清单为空")
-        if before_write is not None:
-            before_write([])
-        return result
-
+    if scope not in {"full", "excerpt"}:
+        raise BusinessError("切片范围须为 full 或 excerpt", code="slice-scope-required")
+    if scope == "excerpt" and (not isinstance(scope_reason, str) or not scope_reason.strip()):
+        raise BusinessError("明确节选必须填写 scope_reason，未写入单元", code="slice-scope-required")
     planned = []
+    counts = [0] * len(lines)
+    has_text = False
     for idx, boundary in enumerate(boundaries, start=1):
         if not isinstance(boundary, dict):
-            result.warnings.append(f"第 {idx} 条边界不是对象，已跳过")
-            continue
+            raise BusinessError("切片边界须为对象", code="invalid-boundaries",
+                                details={"boundary_index": idx})
         name = str(boundary.get("name") or "").strip()
         if boundary.get("text") is not None:
             unit_content = str(boundary["text"])
+            has_text = True
         else:
-            unit_content = _slice_lines(lines, boundary.get("start_line"),
-                                        boundary.get("end_line"))
+            start, end = _slice_line_range(boundary.get("start_line"), boundary.get("end_line"),
+                                           len(lines), idx)
+            unit_content = "\n".join(lines[start - 1:end])
+            for index in range(start - 1, end):
+                counts[index] += 1
         unit_name = _boundary_unit_name(name, idx, mode)
         planned.append((unit_name, unit_content, name or unit_name))
 
-    # 一次解析后先核对计划，避免先覆盖旧源文、再因集合不一致而拒绝。
-    if before_write is not None:
-        before_write([unit_name for unit_name, _, _ in planned])
-    target_root = ensure_tree(Path(output_root) / base_name)
-    target_root.mkdir(parents=True, exist_ok=True)
-    for unit_name, unit_content, title in planned:
-        unit_dir, md_path, img_result = _write_unit(
-            target_root, unit_name, unit_content, src_media)
-        _record(result, unit_dir, md_path, title, img_result)
-
-    if result.missing:
-        result.warnings.append(f"有 {result.missing} 张图片未找到")
-    return result
+    duplicate_names = sorted(name for name, count in Counter(
+        unit_name for unit_name, _, _ in planned).items() if count > 1)
+    if duplicate_names:
+        raise BusinessError(
+            "切片后的单元名重复，未写入单元或清单：" + "、".join(duplicate_names),
+            code="duplicate-unit-name", details={"duplicate_names": duplicate_names})
+    if scope == "full" and has_text:
+        raise BusinessError("全量切片必须使用源文行区间；text 仅用于明确节选并填写原因",
+                            code="slice-line-ranges-required")
+    nonempty = [index for index, line in enumerate(lines) if line.strip()]
+    missing = _line_ranges([index + 1 for index in nonempty if counts[index] == 0])
+    overlap = _line_ranges([index + 1 for index in nonempty if counts[index] > 1])
+    result.coverage = {"scope": scope, "reason": scope_reason if scope == "excerpt" else None,
+                       "checked": not has_text, "total_lines": len(lines),
+                       "nonempty_lines": len(nonempty),
+                       "uncovered_ranges": None if has_text else missing,
+                       "overlapping_ranges": overlap}
+    if overlap or (scope == "full" and missing):
+        raise BusinessError("切片存在未覆盖或重复覆盖的非空正文，未写入单元或清单",
+                            code="slice-coverage-invalid", details=result.coverage)
+    if scope == "excerpt":
+        result.warnings.append(f"校对范围为明确节选：{scope_reason}")
+        if has_text:
+            result.warnings.append("text 节选无法核对源文行覆盖，不代表全材料完成")
+    return _write_slice_plan(planned, output_root, base_name, src_media, result, before_write)
 
 
 # ─── 拆分预检 ──────────────────────────────────────────────
@@ -849,6 +918,10 @@ def precheck_split(paper_dir: str, *, overlong_threshold: int | None = None) -> 
     root = input_path(paper_dir)
     threshold = OVERLONG_THRESHOLD if overlong_threshold is None else int(overlong_threshold)
     result = PrecheckResult()
+    from . import material
+    material_root = material.find_material(root)
+    if material_root is not None:
+        result.coverage = material.load(material_root)["params"].get("slice_coverage")
     unit_dirs = scan_unit_dirs(root)
     if not unit_dirs:
         result.warnings.append(f"未找到任何单元目录: {root}")

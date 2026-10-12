@@ -67,6 +67,10 @@ const CALC_SCHEMAS = JSON.parse(
 const PROPOSAL_SCHEMA = JSON.parse(
   readFileSync(fileURLToPath(new URL('./proposal-schema.json', import.meta.url)), 'utf8'),
 ).schema
+const SUBMIT_PROPOSAL_SCHEMA = structuredClone(PROPOSAL_SCHEMA)
+for (const key of ['task_id', 'unit_id', 'run_id', 'source_sha256', 'body_sha256', 'proposal_revision']) {
+  SUBMIT_PROPOSAL_SCHEMA.required = SUBMIT_PROPOSAL_SCHEMA.required.filter(field => field !== key)
+}
 
 const TASK_PREPARE_OPERATIONS = ['check-env', 'inspect-source', 'convert', 'split',
   'precheck-split', 'status', 'execution-policy']
@@ -160,49 +164,93 @@ function registerStructuredTools(ctx, cliTool) {
     properties: { task_id: { type: 'string' }, unit_id: { type: 'string' } },
   }, args => ['unit-snapshot', '--task-id', args.task_id, '--unit-id', args.unit_id])
 
-  register('jiaodui_unit_submit', '校验结构化修改建议并生成、登记完整报告。', {
-    type: 'object', additionalProperties: false,
-    required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
-    properties: {
-      task_id: { type: 'string' }, unit_id: { type: 'string' },
-      proposal: PROPOSAL_SCHEMA, expected_snapshot_sha256: { type: 'string' },
-      preview: { type: 'boolean', default: false },
+  ctx.tools.register({
+    name: 'jiaodui_unit_submit',
+    description: '校验结构化修改建议并生成、登记完整报告。task/unit/run身份、源文hash与proposal_revision由插件按当前snapshot自动绑定；expected_snapshot_sha256仍执行CAS保护。',
+    parameters: {
+      type: 'object', additionalProperties: false,
+      required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
+      properties: {
+        task_id: { type: 'string' }, unit_id: { type: 'string' },
+        proposal: SUBMIT_PROPOSAL_SCHEMA,
+        expected_snapshot_sha256: { type: 'string' },
+        preview: { type: 'boolean', default: false },
+      },
     },
-  }, args => ['unit-submit', '--task-id', args.task_id, '--unit-id', args.unit_id,
-    '--proposal-json', JSON.stringify(args.proposal), '--expected-snapshot-sha256',
-    args.expected_snapshot_sha256, ...(args.preview ? ['--preview'] : [])])
+    output: cliTool.output,
+    timeoutMs: cliTool.timeoutMs,
+    isConcurrencySafe: cliTool.isConcurrencySafe,
+    async execute(args, exec) {
+      const snapshotResult = await cliTool.execute({ args: ['--json', 'unit-snapshot',
+        '--task-id', args.task_id, '--unit-id', args.unit_id] }, exec)
+      if (snapshotResult.exitCode !== 0) return snapshotResult
+      let snapshotPayload
+      try {
+        snapshotPayload = JSON.parse(snapshotResult.stdout)
+      } catch {
+        throw new Error('unit-snapshot 未返回有效JSON，未执行 unit-submit')
+      }
+      const snapshot = snapshotPayload?.snapshot
+      if (!snapshot || typeof snapshot.snapshot_sha256 !== 'string'
+          || !('next_proposal_revision' in snapshot)
+          || (snapshot.next_proposal_revision !== null
+              && typeof snapshot.next_proposal_revision !== 'number')) {
+        throw new Error('unit-snapshot 缺少提交绑定字段，未执行 unit-submit')
+      }
+      const proposal = {
+        ...args.proposal,
+        task_id: args.task_id,
+        unit_id: args.unit_id,
+        run_id: snapshot.run_id,
+        source_sha256: snapshot.source_sha256,
+        body_sha256: snapshot.body_sha256,
+        proposal_revision: snapshot.next_proposal_revision ?? 1,
+      }
+      return cliTool.execute({ args: ['--json', 'unit-submit', '--task-id', args.task_id,
+        '--unit-id', args.unit_id, '--proposal-json', JSON.stringify(proposal),
+        '--expected-snapshot-sha256', args.expected_snapshot_sha256,
+        ...(args.preview ? ['--preview'] : [])] }, exec)
+    },
+  })
 
-  register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定，attempt_id 作幂等键（重放不再扣费）。', {
+  register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定，fingerprint由core从failure.message/details派生。每个新的恢复动作使用新的attempt_id，并先用相同ID记录unit-event。', {
     type: 'object', additionalProperties: false,
-    required: ['task_id', 'unit_id', 'attempt_id', 'fingerprint'],
+    required: ['task_id', 'unit_id', 'attempt_id', 'failure'],
     properties: {
       task_id: { type: 'string' }, unit_id: { type: 'string' },
       error_code: {
         type: 'string',
-        description: '失败的工具/宿主错误码（如 usage / not_found / calc_failed / verify_failed / images.missing / host-timeout）。类别由它决定；未分类码会被拒绝。给了它时请省略 category。',
+        description: '失败的工具/宿主错误码（如 usage / not_found / calc_failed / verify_failed / images.missing / host-timeout）。类别由它决定；给了它时请省略 category。',
       },
       category: {
         type: 'string',
         enum: ['call_correction', 'calc_representation', 'report_repair',
           'targeted_review', 'technical_redispatch', 'image_schema_fix'],
-        description: '只用于父代理判断类的 targeted_review。**错误驱动的恢复请省略本字段**：类别由 error_code 确定性派生；填了但与映射不一致会整次被拒，并在 details.expected_category 给出应填值。',
+        description: '只用于父代理判断类的 targeted_review。错误驱动的恢复请省略本字段。',
       },
       attempt_id: {
         type: 'string', minLength: 1, maxLength: 200,
-        description: '本次尝试的幂等键：同 attempt 重放不再扣费；换指纹或换类别即 attempt-id-conflict。须与该单元 unit-event 的 attempt_id 一致。',
+        description: '与unit-event一致的幂等键。每个新的恢复动作都用新值；不得复用已用于其他失败或类别的attempt_id。',
       },
       expected_run_id: {
         type: 'string',
         description: 'CAS 防护：与当前轮次不一致即 run-changed（可选）。',
       },
-      fingerprint: { type: 'string', pattern: '^[0-9a-f]{64}$' },
+      failure: {
+        type: 'object', additionalProperties: false, required: ['message'],
+        description: '失败工具返回的稳定错误内容。只复制message/details，不要加入call_id、时间戳或自造哈希。',
+        properties: {
+          message: { type: 'string', minLength: 1 },
+          details: { type: 'object', additionalProperties: true },
+        },
+      },
     },
   }, args => ['unit-recovery', '--task-id', args.task_id, '--unit-id', args.unit_id,
     '--attempt-id', args.attempt_id,
     ...(args.error_code ? ['--error-code', args.error_code] : []),
     ...(args.category ? ['--category', args.category] : []),
     ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : []),
-    '--fingerprint', args.fingerprint])
+    '--failure-json', JSON.stringify(args.failure)])
 
   register('jiaodui_unit_progress', '只读汇总单元心跳：阶段 / attempt / 最后事件时间 / 在途与超时判定。', {
     type: 'object', additionalProperties: false,

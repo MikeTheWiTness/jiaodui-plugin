@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from jiaodui.report_suggestions import render_suggestions
+from jiaodui.report_suggestions import _validate_image_evidence, render_suggestions
 from jiaodui.report_parse import split_sections
 from jiaodui.markers import split_marked_body
 from jiaodui.verify import verify_report_text
@@ -47,6 +47,28 @@ def proposal(source: str, *, phrase: str = "木板", start: int | None = None) -
         "self_check": {"status": "passed", "checks": ["real_issue", "replacement_semantics",
                          "related_coverage", "scope_and_uncertainty", "severity"], "unresolved": []},
     }
+
+
+def test_proposal_schema_exposes_nested_evidence_contract():
+    from jiaodui.report_suggestions import proposal_json_schema
+
+    schema = proposal_json_schema()
+    properties = schema["properties"]
+    evidence = properties["evidence"]
+    evidence_properties = evidence["properties"]
+
+    assert evidence["additionalProperties"] is False
+    assert set(evidence["required"]) == {"assumptions", "symbols", "images", "calculations"}
+    assert evidence_properties["assumptions"]["items"]["required"] == [
+        "id", "text", "source_locations"]
+    assert evidence_properties["images"]["oneOf"][0]["type"] == "array"
+    assert evidence_properties["calculations"]["oneOf"][0]["type"] == "array"
+    assert set(properties["self_check"]["properties"]["checks"]["items"]["enum"]) == {
+        "real_issue", "replacement_semantics", "related_coverage",
+        "scope_and_uncertainty", "severity", "no_issue_review"}
+    correction = properties["corrections"]["items"]
+    assert correction["properties"]["evidence_ids"]["minItems"] == 1
+
 
 
 def test_generator_replaces_only_selected_duplicate_and_restores_exact_source():
@@ -94,6 +116,30 @@ def test_word_consumers_keep_markers_after_source_reason_heading():
     body, _ = _report_sections(candidate.text)
     assert "编号：末尾【1|木板|木块】。" in body
     assert split_marked_body(body) == source
+
+
+def test_correction_rejects_unresolved_evidence_ids():
+    source = "木板。"
+    payload = proposal(source)
+    payload["corrections"][0]["evidence_ids"] = ["missing-evidence"]
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.evidence-reference"
+    assert "corrections[0]" in str(error.value)
+    assert "missing-evidence" in str(error.value)
+
+
+def test_image_evidence_requires_verifiable_reference_fields():
+    source = "木板。"
+    payload = proposal(source)
+    payload["evidence"]["images"] = [{"id": "img1", "reference_index": 1}]
+    with pytest.raises(ValueError) as error:
+        render_suggestions(source, payload, expected_task_id="a" * 32,
+                           expected_unit_id="b" * 32, expected_run_id="run-1")
+    assert error.value.code == "proposal.evidence-images"
+    assert "original_path" in str(error.value)
+    assert "actual_read_path" in str(error.value)
 
 
 def test_self_check_and_first_pass_evidence_are_required():
@@ -525,3 +571,56 @@ def test_image_evidence_error_lists_accepted_shapes():
         "readable": True, "semantic": "波形图", "verdict": "与题干一致",
     }]
     assert _render(source, payload).summary == "一般问题"
+
+
+def test_image_evidence_must_match_real_reference_manifest():
+    reference = {
+        "reference_index": 1,
+        "original_path": "/unit/images/diagram.png",
+        "actual_read_path": "/unit/images/diagram.png",
+        "position": {"line": 4, "column": 2},
+        "file_status": "ok",
+    }
+    manifest = {"references": [reference]}
+    evidence = [{
+        "id": "img1", "reference_index": 1,
+        "original_path": reference["original_path"],
+        "actual_read_path": reference["actual_read_path"],
+        "position": {"line": 4, "column": 2},
+        "readable": True, "semantic": "受力图", "verdict": "一致",
+    }]
+    _validate_image_evidence(evidence, manifest)
+
+    with pytest.raises(ValueError, match="not_applicable"):
+        _validate_image_evidence({"status": "not_applicable", "reason": "无图"}, manifest)
+    for field, value in (("reference_index", 999),
+                         ("original_path", "/missing.png"),
+                         ("actual_read_path", "/missing-read.png"),
+                         ("position", {"line": 999, "column": 999})):
+        invalid = [dict(evidence[0], **{field: value})]
+        with pytest.raises(ValueError) as error:
+            _validate_image_evidence(invalid, manifest)
+        assert error.value.code == "proposal.evidence-images"
+
+
+def test_image_evidence_requires_exactly_one_record_per_reference():
+    references = [
+        {"reference_index": index, "original_path": f"/unit/{index}.png",
+         "actual_read_path": f"/unit/{index}.png", "position": {"line": index, "column": 1}}
+        for index in (1, 2)
+    ]
+    evidence = [{
+        "id": f"img{ref['reference_index']}",
+        "reference_index": ref["reference_index"],
+        "original_path": ref["original_path"],
+        "actual_read_path": ref["actual_read_path"],
+        "position": ref["position"], "readable": True,
+        "semantic": "图", "verdict": "一致",
+    } for ref in references]
+    _validate_image_evidence(evidence, {"references": references})
+    for invalid in (evidence[:1], [*evidence, evidence[0]]):
+        with pytest.raises(ValueError) as error:
+            _validate_image_evidence(invalid, {"references": references})
+        assert error.value.code == "proposal.evidence-images"
+    _validate_image_evidence(
+        {"status": "not_applicable", "reason": "确无图片引用"}, {"references": []})

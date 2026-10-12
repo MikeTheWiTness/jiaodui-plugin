@@ -10,9 +10,15 @@ from typing import Any
 
 from . import material
 from .errors import BusinessError, NotFoundError
+from .inspect_images import inspect_unit_images
 from .paths import data_path, find_source_md, report_path
 from .report_parse import parse_proofread_md, split_sections
-from .report_suggestions import ReportCandidate, extract_body, render_suggestions
+from .report_suggestions import (
+    ReportCandidate,
+    _validate_image_evidence,
+    extract_body,
+    render_suggestions,
+)
 from .verify import verify_report_text, verify_unit
 from .workdir import ensure_inside
 
@@ -38,6 +44,22 @@ def _current(root: Path, unit: Path) -> tuple[dict, Path, str]:
     return data, source, source.read_bytes().decode("utf-8")
 
 
+def _next_proposal_revision(data_file: Path) -> int | None:
+    """读取当前结构化提案 revision；历史/损坏数据不猜 revision。"""
+    if not data_file.is_file():
+        return 1
+    try:
+        previous = json.loads(data_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(previous, dict) or previous.get("schema_version") != 2:
+        return 1
+    revision = previous.get("proposal_revision")
+    if type(revision) is not int or revision < 1:
+        return None
+    return revision + 1
+
+
 def _snapshot(root: Path, unit: Path) -> dict:
     data, source, source_text = _current(root, unit)
     inputs = material.unit_inputs(root, unit)
@@ -56,6 +78,7 @@ def _snapshot(root: Path, unit: Path) -> dict:
         "body_sha256": hashlib.sha256(extract_body(source_text).encode("utf-8")).hexdigest(),
         "report_sha256": material.sha256(report) if report.is_file() else None,
         "data_sha256": material.sha256(data_file) if data_file.is_file() else None,
+        "next_proposal_revision": _next_proposal_revision(data_file),
     }
     value["snapshot_sha256"] = _canonical_hash(value)
     return value
@@ -97,11 +120,14 @@ def _candidate(root: Path, unit: Path, snapshot: dict, proposal: dict) -> tuple[
     parsed = parse_proofread_md(candidate.text)
     if parsed is None:
         raise BusinessError("生成报告无法被现有解析器读取", code="parse-failed")
-    from .inspect_images import inspect_unit_images
     images = inspect_unit_images(unit, source_path=source_path, allow_legacy_transparent=False)
     if not images["ok"]:
         raise BusinessError("单元图片资源未通过闸门", code="images-invalid",
                             details={"errors": images["errors"]})
+    try:
+        _validate_image_evidence(proposal["evidence"]["images"], images)
+    except ValueError as exc:
+        raise BusinessError(str(exc), code=getattr(exc, "code", "proposal.evidence-images")) from exc
     return candidate, {"parsed": parsed, "images": images}
 
 
