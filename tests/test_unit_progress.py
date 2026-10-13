@@ -153,6 +153,7 @@ def test_user_cancel_cannot_be_revoked_by_parent(tmp_path, monkeypatch):
 
 def test_user_cancel_survives_later_technical_cancel_and_revoke(tmp_path, monkeypatch):
     root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="timeout-1")
     material.record_unit_cancel(task_id, unit_id, attempt_id="user-1",
                                 initiator="user", reason="user_cancel")
     material.record_unit_cancel(task_id, unit_id, attempt_id="timeout-1",
@@ -166,6 +167,108 @@ def test_user_cancel_survives_later_technical_cancel_and_revoke(tmp_path, monkey
     assert plan["cancelled"][0]["initiator"] == "user"
     assert plan["cancelled"][0]["reason"] == "user_cancel"
     assert len(material.load(root)["runs"][-1]["cancellations"]) == 3
+
+
+@pytest.mark.parametrize("initiator", ["parent", "host"])
+@pytest.mark.parametrize("reason", ["technical_timeout", "superseded"])
+def test_late_technical_cancel_cannot_stop_replacement_attempt(tmp_path, monkeypatch, initiator, reason):
+    """A 取消、撤销、B 开始后，A 的迟到取消不得改盘或停止 B。"""
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    run_id = material.load(root)["current_run_id"]
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="A",
+                               agent_id="agent-A", expected_run_id=run_id)
+    material.record_unit_cancel(task_id, unit_id, attempt_id="A", initiator=initiator,
+                                reason=reason, expected_run_id=run_id)
+    material.record_unit_cancel(task_id, unit_id, attempt_id="revoke-A", initiator=initiator,
+                                reason=reason, revoke=True, expected_run_id=run_id)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="B",
+                               agent_id="agent-B", expected_run_id=run_id)
+    manifest = root / material.MANIFEST
+    before = manifest.read_bytes()
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_cancel(task_id, unit_id, attempt_id="A", initiator=initiator,
+                                    reason=reason, expected_run_id=run_id)
+    assert error.value.code == "attempt-terminated"
+    assert manifest.read_bytes() == before
+    progress = material.unit_progress(task_id, unit_id=unit_id)["units"][0]
+    assert progress["phase"] == "read" and progress["in_flight"] is True
+    assert progress["attempt_id"] == "B" and progress["agent_id"] == "agent-B"
+    assert material.load(root)["runs"][-1]["terminated_attempts"] == {"A": "cancelled"}
+    assert material.dispatch_plan(task_id)["stop"] is False
+
+    material.record_unit_cancel(task_id, unit_id, attempt_id="B", initiator=initiator,
+                                reason=reason, expected_run_id=run_id)
+    assert material.unit_progress(task_id, unit_id=unit_id)["units"][0]["in_flight"] is False
+    assert material.dispatch_plan(task_id)["stop"] is True
+    assert material.load(root)["runs"][-1]["terminated_attempts"] == {
+        "A": "cancelled", "B": "cancelled"}
+
+
+@pytest.mark.parametrize("phase", [None, "read", "registered"])
+def test_technical_cancel_requires_current_nonterminal_attempt(tmp_path, monkeypatch, phase):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    if phase:
+        material.record_unit_event(task_id, unit_id, phase=phase, attempt_id="B")
+    before = (root / material.MANIFEST).read_bytes()
+    target = "B" if phase == "registered" else "A"
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_cancel(task_id, unit_id, attempt_id=target,
+                                    initiator="parent", reason="technical_timeout")
+    assert error.value.code == ("attempt-terminated" if phase == "registered" else "attempt-changed")
+    assert (root / material.MANIFEST).read_bytes() == before
+    assert material.dispatch_plan(task_id)["stop"] is False
+
+
+def test_replayed_revoke_remains_bound_to_original_cancellation(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="A")
+    cancelled = material.record_unit_cancel(task_id, unit_id, attempt_id="A",
+                                            initiator="parent", reason="technical_timeout")
+    revoked = material.record_unit_cancel(task_id, unit_id, attempt_id="revoke-A",
+                                          initiator="parent", reason="technical_timeout", revoke=True)
+    assert revoked["revoked_attempt_id"] == "A"
+    assert revoked["revoked_at"] == cancelled["at"]
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="B")
+    material.record_unit_cancel(task_id, unit_id, attempt_id="B",
+                                initiator="parent", reason="technical_timeout")
+    before = (root / material.MANIFEST).read_bytes()
+    replay = material.record_unit_cancel(task_id, unit_id, attempt_id="revoke-A",
+                                         initiator="parent", reason="technical_timeout", revoke=True)
+    assert replay["idempotent"] is True
+    assert replay["revoked_attempt_id"] == "A"
+    assert (root / material.MANIFEST).read_bytes() == before
+    assert material.dispatch_plan(task_id)["cancelled"][0]["attempt_id"] == "B"
+    assert material.dispatch_plan(task_id)["stop"] is True
+
+
+def test_revoke_requires_matching_cancellation_origin_and_reason(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="A")
+    material.record_unit_cancel(task_id, unit_id, attempt_id="A",
+                                initiator="host", reason="superseded")
+    before = (root / material.MANIFEST).read_bytes()
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_cancel(task_id, unit_id, attempt_id="revoke-A",
+                                    initiator="parent", reason="technical_timeout", revoke=True)
+    assert error.value.code == "cancel-invalid"
+    assert (root / material.MANIFEST).read_bytes() == before
+    assert material.dispatch_plan(task_id)["stop"] is True
+
+
+def test_user_cancel_ignores_attempt_cas_and_survives_rejected_old_timeout(tmp_path, monkeypatch):
+    root, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    material.record_unit_event(task_id, unit_id, phase="read", attempt_id="B")
+    material.record_unit_cancel(task_id, unit_id, attempt_id="A",
+                                initiator="user", reason="user_cancel")
+    before = (root / material.MANIFEST).read_bytes()
+    with pytest.raises(BusinessError) as error:
+        material.record_unit_cancel(task_id, unit_id, attempt_id="A",
+                                    initiator="parent", reason="technical_timeout")
+    assert error.value.code == "attempt-changed"
+    assert (root / material.MANIFEST).read_bytes() == before
+    plan = material.dispatch_plan(task_id)
+    assert plan["stop"] is True
+    assert plan["cancelled"][0]["initiator"] == "user"
 
 
 def test_revoke_without_standing_cancel_is_rejected(tmp_path, monkeypatch):
@@ -385,6 +488,9 @@ def test_cli_unit_cancel_records_and_revokes_end_to_end(tmp_path, monkeypatch):
     assert bad.returncode == 6, bad.stderr
     assert json.loads(bad.stdout or bad.stderr)["error"]["code"] == "cancel-invalid"
 
+    heartbeat = run("unit-event", "--task-id", task_id, "--unit-id", unit_id,
+                    "--phase", "read", "--attempt-id", "cli-1")
+    assert heartbeat.returncode == 0, heartbeat.stderr
     recorded = run("unit-cancel", "--task-id", task_id, "--unit-id", unit_id,
                    "--attempt-id", "cli-1", "--initiator", "parent",
                    "--reason", "technical_timeout")

@@ -692,7 +692,10 @@ def _last_technical_cancellation(run: dict, unit_id: str) -> dict | None:
             for index in range(len(active) - 1, -1, -1):
                 candidate = active[index]
                 if (candidate.get("initiator") == item.get("revoked_initiator")
-                        and candidate.get("reason") == item.get("revoked_reason")):
+                        and candidate.get("reason") == item.get("revoked_reason")
+                        and ("revoked_attempt_id" not in item
+                             or (candidate.get("attempt_id") == item["revoked_attempt_id"]
+                                 and candidate.get("at") == item.get("revoked_at")))):
                     active.pop(index)
                     break
         elif item.get("initiator") in {"parent", "host"}:
@@ -716,8 +719,11 @@ def record_unit_cancel(task_id: str, unit_id: str, *, attempt_id: str, initiator
 
     - 取消来源与原因必须配对：`user` 只配 `user_cancel`；`parent`/`host` 只配
       `technical_timeout`/`superseded`（父代理技术取消不得冒称用户取消）。
-    - `revoke=True` 追加一条撤销记录（append-only，可审计），让父代理在技术性停止后
-      无需 `--rerun` 就能继续派发；**用户取消不可撤销**（那是人的决定，不是父代理的）。
+    - 技术取消必须匹配当前单元的未终结 attempt；迟到取消拒绝且不写盘。
+      用户取消按用户意图停止，不受 attempt 匹配限制。
+    - `revoke=True` 追加一条撤销记录（append-only，可审计），关联被撤销事件的
+      attempt_id 与时间；撤销调用的 attempt_id 为幂等键，重放不写盘。
+      父代理技术性停止后无需 `--rerun` 就能继续派发；**用户取消不可撤销**。
     """
     if initiator not in _ALLOWED_CANCELLATIONS or reason not in _ALLOWED_CANCELLATIONS[initiator]:
         raise BusinessError("取消来源与原因不匹配", code="cancel-invalid",
@@ -739,7 +745,18 @@ def record_unit_cancel(task_id: str, unit_id: str, *, attempt_id: str, initiator
                                 details={"expected_run_id": expected_run_id,
                                          "run_id": run["run_id"]})
         require_current_policy(run, data)
+        state = (run.get("unit_state") or {}).get(unit_id) or {}
         if revoke:
+            # 撤销的 attempt_id 是调用幂等键；重放不能撤掉后来新 attempt 的取消。
+            previous = next((item for item in (run.get("cancellations") or [])
+                             if item.get("unit_id") == unit_id and item.get("revoked")
+                             and item.get("attempt_id") == attempt_id), None)
+            if previous is not None:
+                if (previous.get("revoked_initiator") != initiator
+                        or previous.get("revoked_reason") != reason):
+                    raise BusinessError("撤销幂等键已用于其他取消来源或原因",
+                                        code="attempt-id-conflict")
+                return {**previous, "idempotent": True}
             standing = _last_technical_cancellation(run, unit_id)
             if standing is None:
                 effective = _last_cancellation(run, unit_id)
@@ -751,20 +768,37 @@ def record_unit_cancel(task_id: str, unit_id: str, *, attempt_id: str, initiator
                                                  "reason": effective.get("reason")})
                 raise BusinessError("该单元当前没有可撤销的取消记录", code="cancel-invalid",
                                     details={"unit_id": unit_id})
+            if (standing.get("initiator") != initiator or standing.get("reason") != reason):
+                raise BusinessError("撤销来源与原因必须匹配当前技术取消", code="cancel-invalid",
+                                    details={"unit_id": unit_id,
+                                             "initiator": standing.get("initiator"),
+                                             "reason": standing.get("reason")})
             entry = {"at": now(), "unit_id": unit_id, "attempt_id": attempt_id,
                      "agent_id": agent_id, "revoked": True,
                      "revoked_initiator": standing.get("initiator"),
-                     "revoked_reason": standing.get("reason")}
+                     "revoked_reason": standing.get("reason"),
+                     "revoked_attempt_id": standing.get("attempt_id"),
+                     "revoked_at": standing.get("at")}
         else:
+            if initiator != "user":
+                terminated = (run.get("terminated_attempts") or {})
+                if (attempt_id in terminated
+                        or (state.get("attempt_id") == attempt_id
+                            and state.get("phase") in TERMINAL_PHASES)):
+                    raise BusinessError("技术取消目标 attempt 已终结", code="attempt-terminated",
+                                        details={"attempt_id": attempt_id,
+                                                 "phase": terminated.get(attempt_id, state.get("phase"))})
+                if state.get("attempt_id") != attempt_id:
+                    raise BusinessError("技术取消目标不是当前单元 attempt", code="attempt-changed",
+                                        details={"attempt_id": attempt_id,
+                                                 "current_attempt_id": state.get("attempt_id"),
+                                                 "unit_id": unit_id, "run_id": run["run_id"]})
             entry = {"at": now(), "unit_id": unit_id, "attempt_id": attempt_id,
                      "agent_id": agent_id, "initiator": initiator, "reason": reason}
         run.setdefault("cancellations", []).append(entry)
         if not revoke and initiator != "user":
-            state = run.setdefault("unit_state", {}).get(unit_id)
-            if state:
-                state.update({"phase": "cancelled", "last_event_at": entry["at"]})
-                if state.get("attempt_id"):
-                    run.setdefault("terminated_attempts", {})[state["attempt_id"]] = "cancelled"
+            state.update({"phase": "cancelled", "last_event_at": entry["at"]})
+            run.setdefault("terminated_attempts", {})[attempt_id] = "cancelled"
         write(root, data)
         return entry
 
