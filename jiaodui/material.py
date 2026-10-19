@@ -660,6 +660,9 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None,
                 code="recovery-error-code-required")
     else:
         classified = classify_error(error_code)
+        if classified.get("interactive"):
+            raise BusinessError(classified["reason"], code="recovery-interactive-code",
+                                details={"error_code": classified["code"]})
         if not classified["recoverable"]:
             hint = classified.get("suggestion") or []
             raise BusinessError(
@@ -957,6 +960,12 @@ def registered(root: Path, data: dict, unit: Path) -> bool:
     # 否则下游（build-report / build-docx）会消费一份与报告不再对应的结构化结果。
     data_file = data_path(unit)
     if not data_file.is_file():
+        return False
+    try:
+        unit_data = json.loads(data_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return False
+    if not isinstance(unit_data, dict) or unit_data.get("legacy_manual") is True:
         return False
     digest = sha256(report)
     data_digest = sha256(data_file)

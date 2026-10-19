@@ -116,16 +116,14 @@ def test_untyped_slice_requires_mode_before_reading_full_preview(tmp_path):
 
 
 def test_changing_import_type_invalidates_previous_delivery(tmp_path):
-    from jiaodui.workflow import parse_unit
+    from v2_helpers import deliver_v2
     from jiaodui.status import scan_status
     path = tmp_path / "材料.md"
     path.write_text("1．题干。")
     converted = convert_material(path, mode="exam")
     result = split_material(converted.raw_md, subject="高中物理")
     unit = Path(result.unit_dirs[0])
-    text = (unit / "第1题.md").read_text()
-    (unit / "_校对报告.md").write_text(f"无问题\n### 标记原文\n{text}\n### 修改原因\n无\n")
-    parse_unit(unit)
+    deliver_v2(unit)
     assert scan_status(unit.parent).counts()["已完成"] == 1
     convert_material(path, mode="lecture")
     assert scan_status(unit.parent).counts()["已完成"] == 0
@@ -144,7 +142,8 @@ def test_manual_strategy_copies_referenced_images(tmp_path):
     assert (Path(split.unit_dirs[0]) / "images/图.png").read_bytes() == b"known-image"
 
 
-def test_real_lecture_import_split_and_existing_gate(tmp_path):
+def test_real_lecture_import_split_and_legacy_report_gate(tmp_path):
+    """新布局仍保真导入；冻结 v1 报告只在显式历史副本中交付，保留 28 处批注验收。"""
     from jiaodui.verify import verify_unit
     from jiaodui.docx_report import build_docx
     from jiaodui.workflow import parse_unit
@@ -162,7 +161,10 @@ def test_real_lecture_import_split_and_existing_gate(tmp_path):
     split = split_material(result.raw_md, subject="高中物理")
     assert len(split.unit_dirs) == 5 and split.missing == 0
     assert split.copied == 5
-    for directory, image_name in zip(map(Path, split.unit_dirs),
+    # 冻结语料是历史 v1 报告，不冒充新布局结构化完成；复制到无清单布局验证兼容链。
+    legacy_paper = tmp_path / "legacy" / "第 6 讲校对测试"
+    shutil.copytree(Path(split.unit_dirs[0]).parent, legacy_paper)
+    for directory, image_name in zip((legacy_paper / Path(p).name for p in split.unit_dirs),
                                      ["image4.png", "image5.png", "image6.png", "image7.png", "image8.png"],
                                      strict=True):
         source = (directory / f"{directory.name}.md").read_text(encoding="utf-8")
@@ -172,9 +174,9 @@ def test_real_lecture_import_split_and_existing_gate(tmp_path):
         shutil.copy2(fixture / "units/第 6 讲校对测试" / directory.name / "_校对报告.md",
                      directory / "_校对报告.md")
         assert verify_unit(directory).ok
-        parse_unit(directory)
+        parse_unit(directory, legacy_layout=True)
 
-    delivery = build_docx(str(Path(split.unit_dirs[0]).parent))
+    delivery = build_docx(str(legacy_paper), legacy_layout=True)
     assert delivery.ok, delivery.warnings
     assert (delivery.marker_count, delivery.anchor_count, delivery.formula_fallback_count) == (28, 28, 0)
     with zipfile.ZipFile(delivery.out_path) as archive:

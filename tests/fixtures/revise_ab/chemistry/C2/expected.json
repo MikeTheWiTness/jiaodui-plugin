@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "sample_id": "chemistry/C2",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "c2",
+      "old_text": "图中容器标记为Y。",
+      "new_text": "图中容器标记为X。",
+      "span": {
+        "line": 3,
+        "start_column": 1,
+        "end_column": 10
+      },
+      "reason": "图中容器中央交叉笔画为X。"
+    }
+  ],
+  "reasoning": [
+    "仅检查示意图标记，不据此推断药品、实验可行性或安全性。"
+  ],
+  "image_observations": [
+    {
+      "path": "images/container.png",
+      "reference_index": 1,
+      "visible": "白底开口容器轮廓，中央两条交叉斜线组成X，无Y。"
+    }
+  ]
+}

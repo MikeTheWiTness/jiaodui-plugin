@@ -50,7 +50,7 @@
 ```
 - `corrections / summary / marked_text` 为必需；`tool_calls` 有可记录的工具调用时填写，无调用允许缺省。
 - summary 头部识别不到时记 `未声明`（不冒充「无问题」）；「无问题」却含修正标记时同样记 `未声明`。
-- `parse-report` 默认**拒绝解析未通过 verify-report 的报告**；仅历史产物兼容可显式加 `--legacy`。图片检查复用该闸门，拒绝可确定的缺图、无效引用和不支持的远程引用；闸门只能验证正文引用与资源绑定，不能证明模型理解了正确的图片语义归属，归属必须由真实宿主验收。新布局通过后同时在材料 `_校对记录.json` 登记本轮 run_id、报告 SHA 与单元输入摘要；必须登记成功才回报完成。历史写入另需 `--legacy-layout`，仍限于指定工作区，不登记为新交付。
+- 正常新布局只走结构化 `unit-submit` + 父代理 `unit-review`；core 生成报告、校验图片并登记本轮 run_id、报告 SHA 与单元输入摘要，复核接受且登记成功才算完成。新布局 v1 Markdown 仅可显式 `parse-report --manual-legacy` 人工兼容：校验通过后只写单元数据、标记 `legacy_manual`，不登记本轮完成，下游拒绝消费。无材料清单的历史布局保持 `parse-report` / `repair-report` 兼容行为；历史写入仍须 `--legacy-layout` 且限于指定工作区。
 
 ## 四、docx 计数口径（build-docx）
 - 输出逐项计数：错误标记数 `marker_count`、批注锚点数 `anchor_count`、公式可见兜底数 `formula_fallback_count`、缺失数 `missing_count`、记账异常 `over_count`、图片未嵌入 `image_missing_count`、批注公式降级 `comment_formula_fallback_count`、无问题单元标题批注数 `heading_comment_count`。

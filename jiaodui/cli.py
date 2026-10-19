@@ -251,10 +251,10 @@ def cmd_unit_submit(args: argparse.Namespace) -> int:
         raise BusinessError("proposal-json不是有效JSON", code="proposal-json-invalid") from exc
     if args.preview:
         payload = preview_unit_submission(args.task_id, args.unit_id, proposal,
-                                          args.expected_snapshot_sha256)
+                                          args.expected_snapshot_sha256, bind_current=args.bind_current)
     else:
         payload = commit_unit_submission(args.task_id, args.unit_id, proposal,
-                                         args.expected_snapshot_sha256)
+                                         args.expected_snapshot_sha256, bind_current=args.bind_current)
     _json_out(payload)
     return ExitCode.OK
 
@@ -314,7 +314,7 @@ def cmd_unit_cancel(args: argparse.Namespace) -> int:
 def cmd_unit_schema(args: argparse.Namespace) -> int:
     from .report_suggestions import proposal_json_schema
 
-    _json_out({"schema": proposal_json_schema()})
+    _json_out({"schema": proposal_json_schema(bind_current=args.bind_current)})
     return ExitCode.OK
 
 
@@ -361,7 +361,8 @@ def cmd_verify_report(args: argparse.Namespace) -> int:
 
 def cmd_parse_report(args: argparse.Namespace) -> int:
     from .workflow import parse_unit
-    payload = parse_unit(args.unit, source=args.source, legacy=args.legacy, legacy_layout=args.legacy_layout)
+    payload = parse_unit(args.unit, source=args.source, legacy=args.legacy,
+                         legacy_layout=args.legacy_layout, manual_legacy=args.manual_legacy)
     if args.json:
         _json_out(payload)
     else:
@@ -378,6 +379,7 @@ def cmd_repair_report(args: argparse.Namespace) -> int:
         args.unit,
         source_path=args.source,
         apply=args.apply,
+        manual_legacy=args.manual_legacy,
         work_root=getattr(args, "work_root", None),
     )
     payload = result.to_dict()
@@ -643,6 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
     proposal_input.add_argument("--proposal-json", help="结构化建议 JSON（兼容小提案）")
     proposal_input.add_argument("--proposal-json-file", help="UTF-8 编码的结构化建议 JSON 文件")
     sp.add_argument("--expected-snapshot-sha256", required=True)
+    sp.add_argument("--bind-current", action="store_true", help="由 core 在锁内绑定当前身份与提案版本")
     sp.add_argument("--preview", action="store_true", help="只预览，不写入报告或数据")
     sp.set_defaults(func=cmd_unit_submit)
 
@@ -700,6 +703,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_unit_cancel)
 
     sp = sub.add_parser("unit-schema", help="输出结构化建议schema v2")
+    sp.add_argument("--bind-current", action="store_true", help="导出允许 core 绑定六项身份版本字段的 schema")
     sp.set_defaults(func=cmd_unit_schema)
 
     sp = sub.add_parser("unit-review", help="按snapshot接受或退回当前结构化建议")
@@ -720,12 +724,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--unit", required=True)
     sp.add_argument("--source")
     sp.add_argument("--legacy", action="store_true", help="允许解析未通过校验的历史报告")
+    sp.add_argument("--manual-legacy", action="store_true", help="人工兼容解析 v1，仅写数据，不登记本轮完成")
     sp.set_defaults(func=cmd_parse_report)
 
     sp = sub.add_parser("repair-report", help="预览或显式应用报告正文完整性修复")
     sp.add_argument("--unit", required=True)
     sp.add_argument("--source")
     sp.add_argument("--apply", action="store_true", help="原子替换报告并运行完整 verify-unit 复验")
+    sp.add_argument("--manual-legacy", action="store_true", help="人工兼容修复 v1，不登记本轮完成")
     sp.set_defaults(func=cmd_repair_report)
 
     sp = sub.add_parser("calc-schema", help="导出计算operation参数schema")

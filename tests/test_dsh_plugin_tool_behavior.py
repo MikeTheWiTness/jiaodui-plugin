@@ -76,6 +76,8 @@ assert.deepEqual(locate.parameters.required,['task_id','unit_id','phrase']);
 const unitRead=registered.get('jiaodui_unit_read');
 assert.equal(unitRead.parameters.properties.max_lines.maximum,2000);
 const submit=registered.get('jiaodui_unit_submit');
+const bundledBindSchema=JSON.parse(readFileSync('./packages/dsh-jiaodui/tools/proposal-schema-bind-current.json','utf8')).schema;
+assert.deepEqual(submit.parameters.properties.proposal,bundledBindSchema);
 assert.equal(submit.parameters.properties.proposal.type,'object');
 assert.equal(submit.parameters.properties.proposal.properties.schema_version.const,2);
 assert.equal(submit.parameters.properties.proposal.properties.evidence.additionalProperties,false);
@@ -102,30 +104,24 @@ assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-read','--task-id'
 await calc.execute({expression:'1+2'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','calc','evaluate','--param','expression="1+2"']);
 let submittedProposal;
-const snapshotForSubmit={snapshot_sha256:'d'.repeat(64),run_id:'run-current',source_sha256:'e'.repeat(64),body_sha256:'f'.repeat(64),next_proposal_revision:3};
 let proposalTempPath;
 ctx.subprocess.spawn=spec=>{
   requests.push(spec);
-  const isSnapshot=spec.argv.includes('unit-snapshot');
   const isSubmit=spec.argv.includes('unit-submit');
   if (isSubmit) {
     const fileIndex=spec.argv.indexOf('--proposal-json-file')+1;
     proposalTempPath=spec.argv[fileIndex];
     submittedProposal=JSON.parse(readFileSync(proposalTempPath,'utf8'));
   }
-  const text=isSnapshot?JSON.stringify({ok:true,snapshot:snapshotForSubmit}):isSubmit?'{"ok":true,"verified":true}':'{}';
+  const text=isSubmit?'{"ok":true,"verified":true}':'{}';
   return {done:Promise.resolve({exitCode:0}),collected:{stdout:{readFrom(){return {text,lossy:false}}},stderr:{readFrom(){return {text:'',lossy:false}}}}};
 };
 const longEvidenceText='题'.repeat(200000);
+const beforeSubmitRequestCount=requests.length;
 await submit.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),expected_snapshot_sha256:'d'.repeat(64),proposal:{schema_version:2,summary:'无问题',corrections:[],evidence:{assumptions:[{id:'e1',text:longEvidenceText,source_locations:[]}],symbols:[],images:{status:'not_applicable',reason:'无图'},calculations:{status:'not_applicable',reason:'无计算'}},self_check:{status:'passed',checks:['no_issue_review'],unresolved:[]}}},exec);
-assert.deepEqual(requests.at(-2).argv.slice(1),['--json','unit-snapshot','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32)]);
-assert.equal(submittedProposal.task_id,'a'.repeat(32));
-assert.equal(submittedProposal.unit_id,'b'.repeat(32));
-assert.equal(submittedProposal.run_id,'run-current');
-assert.equal(submittedProposal.source_sha256,'e'.repeat(64));
-assert.equal(submittedProposal.body_sha256,'f'.repeat(64));
-assert.equal(submittedProposal.proposal_revision,3);
-assert.ok(!requests.at(-1).argv.includes('--bind-current'));
+assert.equal(requests.length,beforeSubmitRequestCount+1,'提交不应读取 unit-snapshot');
+assert.ok(requests.at(-1).argv.includes('--bind-current'));
+for (const key of ['task_id','unit_id','run_id','source_sha256','body_sha256','proposal_revision']) assert.ok(!(key in submittedProposal));
 assert.equal(submittedProposal.evidence.assumptions[0].text.length,200000);
 assert.ok(requests.at(-1).argv.join('').length<8192,'提案内容不得进入 argv');
 assert.ok(requests.at(-1).argv.includes('--proposal-json-file'));
@@ -301,7 +297,7 @@ def test_repo_venv_cli_discovery_is_platform_specific(tmp_path):
     package_root = repository_root / "packages" / "dsh-jiaodui"
     tools_dir = package_root / "tools"
     tools_dir.mkdir(parents=True)
-    for filename in ("index.js", "calc-schemas.json", "proposal-schema.json"):
+    for filename in ("index.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json"):
         shutil.copy2(ROOT / "packages" / "dsh-jiaodui" / "tools" / filename,
                      tools_dir / filename)
     shutil.copy2(ROOT / "packages" / "dsh-jiaodui" / "package.json",

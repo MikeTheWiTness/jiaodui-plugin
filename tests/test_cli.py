@@ -73,6 +73,61 @@ def test_unit_submit_rejects_invalid_json_file_with_structured_error(tmp_path):
     assert error["code"] == "proposal-json-invalid"
 
 
+def test_unit_schema_bind_current_exports_only_six_fewer_required_fields():
+    full_result = run("unit-schema", "--json")
+    bind_result = run("unit-schema", "--bind-current", "--json")
+    assert bind_result.returncode == 0, bind_result.stderr
+    full = json.loads(full_result.stdout)["schema"]
+    bound = json.loads(bind_result.stdout)["schema"]
+    assert set(full["required"]) - set(bound["required"]) == {
+        "task_id", "unit_id", "run_id", "source_sha256", "body_sha256", "proposal_revision"}
+    assert full["properties"] == bound["properties"]
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_unit_submit_cli_passes_bind_current_to_core(monkeypatch, preview):
+    from jiaodui import cli, unit_delivery
+
+    calls = []
+    def submit(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"ok": True}
+    target = "preview_unit_submission" if preview else "commit_unit_submission"
+    monkeypatch.setattr(unit_delivery, target, submit)
+    args = ["unit-submit", "--task-id", "a" * 32, "--unit-id", "b" * 32,
+            "--proposal-json", '{"schema_version":2}',
+            "--expected-snapshot-sha256", "c" * 64, "--bind-current"]
+    if preview:
+        args.append("--preview")
+    assert cli.main(args) == 0
+    assert calls[0][1] == {"bind_current": True}
+    assert calls[0][0][2] == {"schema_version": 2}
+
+
+def test_parse_report_cli_passes_manual_legacy_to_core(monkeypatch):
+    from jiaodui import cli, workflow
+
+    calls = []
+    def parse(*args, **kwargs):
+        calls.append(kwargs)
+        return {"data": "unused"}
+    monkeypatch.setattr(workflow, "parse_unit", parse)
+    assert cli.main(["parse-report", "--unit", "unused", "--manual-legacy", "--json"]) == 0
+    assert calls[0]["manual_legacy"] is True
+
+
+def test_repair_report_cli_passes_manual_legacy_to_core(monkeypatch):
+    from jiaodui import cli, report_repair
+
+    calls = []
+    def repair(*args, **kwargs):
+        calls.append(kwargs)
+        return report_repair.RepairResult(ok=True)
+    monkeypatch.setattr(report_repair, "repair_unit_report", repair)
+    assert cli.main(["repair-report", "--unit", "unused", "--apply", "--manual-legacy", "--json"]) == 0
+    assert calls[0]["manual_legacy"] is True
+
+
 def test_unit_submit_requires_one_proposal_input():
     result = run("unit-submit", "--task-id", "a" * 32, "--unit-id", "b" * 32,
                  "--expected-snapshot-sha256", "c" * 64)

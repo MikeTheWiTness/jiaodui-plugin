@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S1",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [],
+  "reasoning": [
+    "匀速直线运动：速度矢量不变，故加速度与合力均为零。"
+  ]
+}

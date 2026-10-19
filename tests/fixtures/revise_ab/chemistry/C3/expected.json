@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "sample_id": "chemistry/C3",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "c3",
+      "old_text": "24 g碳完全反应生成44 g二氧化碳。",
+      "new_text": "24 g碳完全反应生成88 g二氧化碳。",
+      "span": {
+        "line": 3,
+        "start_column": 1,
+        "end_column": 21
+      },
+      "reason": "n(C)=24/12=2 mol，按1:1生成2 mol CO2，质量2×44=88 g。"
+    }
+  ],
+  "reasoning": [
+    "第2行12 g→44 g正确，不能随第3行全局修改。运行时仍须调用化学计量工具。"
+  ],
+  "interventions": [
+    {
+      "trigger": "首交故意无问题后",
+      "action": "父复核退回",
+      "issue": "请区分12 g与24 g两组碳的质量，重新核验第3行的二氧化碳质量。",
+      "expected_added": [
+        "c3"
+      ],
+      "expected_retained": []
+    }
+  ]
+}

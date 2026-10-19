@@ -46,7 +46,7 @@
 | 原文字段定位不到（`locate.unknown`，warning） | 不改也可通过；建议核对 LaTeX 装饰（转义美元、空格、零宽字符）后重抄原文字段 |
 | 改为与原文无法区分（`marker.manual-review`） | 不拒绝；请把「改为」写成实际不同的修正，或在原因中说明该处差异 |
 
-**程序化重建（`repair-report`，不改源文）**：`integrity.missing-paragraph` / `integrity.extra-paragraph` / `integrity.changed` 若由未标记正文被转录改动引起，可先运行 `jiaodui repair-report --unit <dir>` 预览。它只从单元源文重建 `### 标记原文`，把原报告的完整标记插回源文对应位置；字段在源文中**必须唯一且逐字命中**，标记顺序单调、区间不重叠。预览给出 diff 与每个字段的源文行号；确认后用 `--apply` 原子替换报告并自动复验，复验失败恢复原报告。字段找不到、命中多处、乱序、重叠、编号重复、语法 / 原因 / 严重度无效或图片检查失败一律拒绝，原报告不变。修复不判断「改为」或原因是否正确；`verify-report` 仍是唯一闸门，修复通过后仍须重跑 verify-report 再 parse-report 登记，修复不自动登记、不生成汇总或 Word。
+**程序化重建（`repair-report`，不改源文；新布局人工兼容须带 `--manual-legacy`）**：`integrity.missing-paragraph` / `integrity.extra-paragraph` / `integrity.changed` 若由未标记正文被转录改动引起，新布局须运行 `jiaodui repair-report --unit <dir> --manual-legacy` 预览。它只从单元源文重建 `### 标记原文`，把原报告的完整标记插回源文对应位置；字段在源文中**必须唯一且逐字命中**，标记顺序单调、区间不重叠。预览给出 diff 与每个字段的源文行号；确认后用 `--apply` 原子替换报告并自动复验，复验失败恢复原报告。字段找不到、命中多处、乱序、重叠、编号重复、语法 / 原因 / 严重度无效或图片检查失败一律拒绝，原报告不变。修复不判断「改为」或原因是否正确；`verify-report` 仍是唯一闸门，修复通过后仍须重跑 verify-report。新布局 v1 人工修复须带 `--manual-legacy`，再以 `parse-report --manual-legacy` 写单元数据但不登记本轮完成；正常交付走 `unit-submit` + 父代理 `unit-review`。旧布局保持兼容。
 
 ## 五、环境与报告缺失
 | 症状 | 自修动作 |
@@ -120,7 +120,7 @@ const results = settled.map((item) => {
 
 // 若有失败，先依据已收集句柄取消在途任务并留痕；不要补派或进入下游。
 ```
-- `jiaodui` 使用 `args` 数组传参，每个参数独立，不额外加 shell 引号。以下是对具名 `jiaodui` 工具的参数示例；`verify-report` 成功后才调用 `parse-report`，路径需替换为实际路径：
+- `jiaodui` 使用 `args` 数组传参，每个参数独立，不额外加 shell 引号。以下是对具名 `jiaodui` 工具的参数示例；新布局仅 `--manual-legacy` 兼容路径可调用 `parse-report`（不登记）；正常路径走 `unit-submit` 与父代理 `unit-review`。旧布局保持兼容。
 
 ```json
 {

@@ -38,8 +38,8 @@ FOREIGN_SUBJECT_TERMS = {
     "jiaodui-chemistry": ("受力图", "量纲分析", "牛顿", "电路图"),
 }
 
-# 入口正文必须留在宿主工具结果修剪阈值内（Unicode 码点）
-SKILL_ENTRY_MAX_CHARS = 8192
+# 入口≤7850 Unicode码点；后续分支净增≤0，预留宿主8192阈值余量。
+SKILL_ENTRY_MAX_CHARS = 7850
 
 # 曾被文档漏记、必须出现在 skill 文档（入口或 references）里的实参
 MUST_BE_DOCUMENTED = (
@@ -102,13 +102,14 @@ def test_skill_documents_parameters_that_had_drifted(skill: str):
 
 @pytest.mark.parametrize("skill", sorted(SKILLS))
 def test_skill_entry_stays_within_pruner_char_budget(skill: str):
-    """入口正文必须 ≤ 8192 码点，否则宿主压缩时会裁掉流程主体。"""
-    entry = (_skill_dir(skill) / "SKILL.md").read_text(encoding="utf-8")
-    length = len(entry)
-    assert length <= SKILL_ENTRY_MAX_CHARS, (
-        f"{skill}/SKILL.md 为 {length} 码点，超过宿主修剪阈值 {SKILL_ENTRY_MAX_CHARS}；"
-        "细节请移入 references/operation-manual.md"
-    )
+    """入口正文必须 ≤ 7850 码点，为宿主修剪阈值预留余量。"""
+    for root in SKILLS[skill]:
+        entry = (root / "SKILL.md").read_text(encoding="utf-8")
+        length = len(entry)
+        assert length <= SKILL_ENTRY_MAX_CHARS, (
+            f"{root.relative_to(ROOT)}/SKILL.md 为 {length} 码点，超过入口预算 {SKILL_ENTRY_MAX_CHARS}；"
+            "细节请移入 references/operation-manual.md"
+        )
 
 
 @pytest.mark.parametrize("skill", sorted(SKILLS))
@@ -191,6 +192,22 @@ def test_repair_preview_is_documented_as_explicit_gate_auxiliary(skill: str):
     assert "verify-report" in skill_text
     assert "repair-report" in failures
     assert "唯一闸门" in skill_text or "唯一闸门" in failures
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+@pytest.mark.parametrize("root_index", [0, 1])
+def test_new_layout_v1_manual_legacy_is_not_registered_as_complete(skill: str, root_index: int):
+    """文档区分新布局结构化交付、v1人工兼容与旧布局历史行为。"""
+    root = SKILLS[skill][root_index]
+    entry = (root / "SKILL.md").read_text(encoding="utf-8")
+    manual = (root / "references" / "operation-manual.md").read_text(encoding="utf-8")
+    contract = (root / "references" / "report-contract.md").read_text(encoding="utf-8")
+    failures = (root / "references" / "failure-modes.md").read_text(encoding="utf-8")
+    assert "--manual-legacy" in entry and "不登记本轮" in entry
+    assert "unit-submit" in manual and "父代理 `unit-review`" in manual
+    assert "legacy_manual" in manual and "历史布局继续兼容" in manual
+    assert "legacy_manual" in contract and "下游拒绝消费" in contract
+    assert "不登记本轮完成" in failures and "旧布局保持兼容" in failures
 
 
 def _unknown_documented_commands(text: str) -> set[str]:

@@ -15,6 +15,7 @@ from .paths import data_path, find_source_md, report_path
 from .report_parse import parse_proofread_md, split_sections
 from .report_suggestions import (
     ReportCandidate,
+    bind_current_proposal,
     _validate_image_evidence,
     extract_body,
     render_suggestions,
@@ -132,13 +133,19 @@ def _candidate(root: Path, unit: Path, snapshot: dict, proposal: dict) -> tuple[
 
 
 def preview_unit_submission(task_id: str, unit_id: str, proposal: dict,
-                            expected_snapshot_sha256: str) -> dict:
+                            expected_snapshot_sha256: str, *, bind_current: bool = False) -> dict:
     root, unit = material.find_unit_by_id(task_id, unit_id)
-    snapshot = _snapshot(root, unit)
-    if snapshot["snapshot_sha256"] != expected_snapshot_sha256:
-        raise BusinessError("预览使用的单元版本已改变", code="snapshot-stale",
-                            details={"current_snapshot_sha256": snapshot["snapshot_sha256"]})
-    candidate, checked = _candidate(root, unit, snapshot, proposal)
+    with material.locked(root):
+        snapshot = _snapshot(root, unit)
+        if snapshot["snapshot_sha256"] != expected_snapshot_sha256:
+            raise BusinessError("预览使用的单元版本已改变", code="snapshot-stale",
+                                details={"current_snapshot_sha256": snapshot["snapshot_sha256"]})
+        if bind_current:
+            try:
+                proposal = bind_current_proposal(proposal, snapshot)
+            except ValueError as exc:
+                raise BusinessError(str(exc), code=getattr(exc, "code", "proposal-invalid")) from exc
+        candidate, checked = _candidate(root, unit, snapshot, proposal)
     return {"ok": True, "preview": True, "snapshot": snapshot,
             "report_sha256": hashlib.sha256(candidate.text.encode("utf-8")).hexdigest(),
             "proposal_sha256": candidate.proposal_sha256,
@@ -171,7 +178,7 @@ def _restore(path: Path, previous: bytes | None) -> None:
 
 
 def commit_unit_submission(task_id: str, unit_id: str, proposal: dict,
-                           expected_snapshot_sha256: str) -> dict:
+                           expected_snapshot_sha256: str, *, bind_current: bool = False) -> dict:
     """在材料锁内以CAS提交报告/数据，并将清单登记作为最后提交标志。"""
     root, unit = material.find_unit_by_id(task_id, unit_id)
     report = report_path(unit)
@@ -182,6 +189,11 @@ def commit_unit_submission(task_id: str, unit_id: str, proposal: dict,
         if snapshot["snapshot_sha256"] != expected_snapshot_sha256:
             raise BusinessError("提交使用的单元版本已改变，拒绝覆盖", code="snapshot-stale",
                                 details={"current_snapshot_sha256": snapshot["snapshot_sha256"]})
+        if bind_current:
+            try:
+                proposal = bind_current_proposal(proposal, snapshot)
+            except ValueError as exc:
+                raise BusinessError(str(exc), code=getattr(exc, "code", "proposal-invalid")) from exc
         candidate, checked = _candidate(root, unit, snapshot, proposal)
         if data_file.is_file():
             try:

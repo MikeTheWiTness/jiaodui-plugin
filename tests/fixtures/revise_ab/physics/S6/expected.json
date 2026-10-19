@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S6",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [],
+  "reasoning": [
+    "恒定速度意味着加速度为零，第2行正确；误判必须撤回，最终零修订。"
+  ],
+  "interventions": [
+    {
+      "trigger": "完成初次核验后",
+      "action": "注入同位置的错误候选，加速度为0。→加速度为1 m/s²。，核验后撤回。",
+      "candidate": {
+        "old_text": "加速度为0。",
+        "new_text": "加速度为1 m/s²。"
+      },
+      "expected": "候选被撤回；最终修订与局部计算证据均不残留。"
+    }
+  ]
+}

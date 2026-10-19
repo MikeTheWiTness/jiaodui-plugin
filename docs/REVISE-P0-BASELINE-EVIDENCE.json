@@ -1,0 +1,51 @@
+{
+  "scope": "P0 candidate baseline only; no main merge or push",
+  "base_commit": "c5af3545fa357179c972bed46d965be50b472fbd",
+  "prerequisite_commit": "c098568dce77c1780ae8cc913975cd505619fd57",
+  "source_snapshot": "2bafba7bdc9960229b58e8e376d4f98fefa2b19e",
+  "tests": {
+    "main": {
+      "passed": 1273,
+      "skipped": 5,
+      "subtests": 4
+    },
+    "prerequisite_dual": {
+      "passed": 1320,
+      "skipped": 5,
+      "subtests": 4
+    },
+    "P0_dual": {
+      "passed": 1452,
+      "skipped": 5,
+      "subtests": 4
+    }
+  },
+  "frozen_manifest_sha256": "cd000e065a958795e6deb468607cad1c46b10114157d7b56ebcdeeb1c5b2abd8",
+  "source_protection": {
+    "verified_file_count": 322,
+    "staged_entries_sha256": "cdf6da6ce4899390217fce3288e8e24fbaaef742b5a14268b22e590513524aec",
+    "cached_diff_sha256": "619f09a4729fb6ab0535069112d1d2ce1cf72ff2c06cad6bae15477608b5c417",
+    "unstaged_diff_sha256": "66ba58f9d40bd287d46e509f3542ab4648f29096b2d8002c841ef13150771f99",
+    "index_sha256_after_TREE_refresh": "68064a816e9e45de96c6dd8babed8263731f24005242aed18a8bac20eff1d6fe",
+    "index_cache_note": "Audit git write-tree refreshed TREE cache; staged entries/content unchanged, disclosed in baseline record"
+  },
+  "wheel": {
+    "name": "jiaodui-0.1.0-py3-none-any.whl",
+    "sha256": "a20645bed7eac43af7413e972e9cd53b57f85085ea8126b9912f74f7e96eb6e6",
+    "P0_modules_match_source": true,
+    "experiment_modules_absent": true,
+    "independent_venv_install": true,
+    "installed_site_packages_import_verified": true,
+    "chemistry_config_loaded": true,
+    "bind_schema_required_difference": 6,
+    "registered": true,
+    "verified": true,
+    "marker_count": 1,
+    "parent_review_current": true
+  },
+  "independent_review": {
+    "scope": "read-only boundary and hash review",
+    "reproducible_findings": 0
+  },
+  "formal_AB_decision": null
+}

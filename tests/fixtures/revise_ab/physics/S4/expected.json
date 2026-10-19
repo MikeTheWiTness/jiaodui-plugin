@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S4",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "p4a",
+      "old_text": "$E_k=mv^2$",
+      "new_text": "$E_k=\\frac{1}{2}mv^2$",
+      "span": {
+        "line": 2,
+        "start_column": 4,
+        "end_column": 14
+      },
+      "reason": "动能为质量乘速度平方的一半。",
+      "required_original": "$E_k=mv^2$"
+    },
+    {
+      "id": "p4b",
+      "old_text": "**动能为18 J**",
+      "new_text": "**动能为9 J**",
+      "span": {
+        "line": 3,
+        "start_column": 4,
+        "end_column": 15
+      },
+      "reason": "二分之一乘2乘9等于9 J。",
+      "required_original": "**动能为18 J**"
+    }
+  ],
+  "reasoning": [
+    "公式与加粗均完整覆盖分隔符；E=1/2×2×3²=9 J。"
+  ],
+  "structure_probes": [
+    {
+      "old_text": "mv^2",
+      "required_original": "$E_k=mv^2$"
+    },
+    {
+      "old_text": "动能为18 J",
+      "required_original": "**动能为18 J**"
+    }
+  ]
+}

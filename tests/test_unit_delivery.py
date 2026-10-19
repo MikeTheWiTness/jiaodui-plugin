@@ -250,6 +250,51 @@ def test_bad_proposal_never_mutates_existing_files(tmp_path, monkeypatch):
     assert [(unit / name).read_bytes() for name in ("_校对报告.md", "_校对数据.json")] == before
 
 
+def test_bind_current_fills_all_identity_fields_from_locked_snapshot(tmp_path, monkeypatch):
+    _, _, unit, data, unit_id, _, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    bound = {key: value for key, value in proposal.items()
+             if key not in {"task_id", "unit_id", "run_id", "source_sha256", "body_sha256", "proposal_revision"}}
+
+    result = commit_unit_submission(data["task_id"], unit_id, bound,
+                                    snapshot["snapshot_sha256"], bind_current=True)
+
+    assert result["registered"] and result["verified"]
+    stored = json.loads((unit / "_校对数据.json").read_text(encoding="utf-8"))["proposal"]
+    assert {key: stored[key] for key in ("task_id", "unit_id", "run_id",
+                                          "source_sha256", "body_sha256",
+                                          "proposal_revision")} == {
+        "task_id": snapshot["task_id"], "unit_id": snapshot["unit_id"],
+        "run_id": snapshot["run_id"], "source_sha256": snapshot["source_sha256"],
+        "body_sha256": snapshot["body_sha256"], "proposal_revision": 1,
+    }
+
+
+@pytest.mark.parametrize("revision", [True, 1.0])
+def test_bind_current_rejects_non_integer_revision_as_conflict(tmp_path, monkeypatch, revision):
+    _, _, unit, data, unit_id, _, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    proposal["proposal_revision"] = revision
+
+    with pytest.raises(BusinessError) as error:
+        commit_unit_submission(data["task_id"], unit_id, proposal,
+                               snapshot["snapshot_sha256"], bind_current=True)
+
+    assert error.value.code == "proposal-binding-conflict"
+    assert not (unit / "_校对报告.md").exists()
+
+
+def test_bind_current_rejects_conflicting_identity_without_writing(tmp_path, monkeypatch):
+    _, _, unit, data, unit_id, _, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    proposal["run_id"] = "stale-run"
+
+    with pytest.raises(BusinessError) as error:
+        commit_unit_submission(data["task_id"], unit_id, proposal,
+                               snapshot["snapshot_sha256"], bind_current=True)
+
+    assert error.value.code == "proposal-binding-conflict"
+    assert not (unit / "_校对报告.md").exists()
+    assert not (unit / "_校对数据.json").exists()
+
+
 def _prepare_special(tmp_path, monkeypatch, source_text: str, phrase: str):
     """为「含标记特殊字符的源文」准备一次真实提交现场（复用与 _prepared 相同的装配）。"""
     from pathlib import Path

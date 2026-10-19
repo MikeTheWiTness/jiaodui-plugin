@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S9",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "p9a",
+      "old_text": "电压为5 V。",
+      "new_text": "电压为6 V。",
+      "span": {
+        "line": 2,
+        "start_column": 1,
+        "end_column": 8
+      },
+      "reason": "U=IR=3×2=6 V。"
+    },
+    {
+      "id": "p9b",
+      "old_text": "功率为12 W。",
+      "new_text": "功率为18 W。",
+      "span": {
+        "line": 3,
+        "start_column": 1,
+        "end_column": 9
+      },
+      "reason": "P=I²R=9×2=18 W。"
+    }
+  ],
+  "reasoning": [
+    "请求重放后最终仍是2条修订，各一次；不能只检查成功状态。"
+  ],
+  "interventions": [
+    {
+      "trigger": "p9a对应工具已成功但响应尚未交付模型",
+      "action": "harness丢弃该次响应，以完全相同请求重试，再继续p9b。",
+      "expected": "p9a不重复，p9b不丢失；本候选未实际执行响应丢弃。"
+    }
+  ]
+}

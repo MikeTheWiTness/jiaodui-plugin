@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import markers
-from .errors import NotFoundError
+from .errors import BusinessError, NotFoundError
 from .report_parse import strip_reference_preamble
 from .verify import verify_report_text, verify_unit
 
@@ -321,9 +321,11 @@ def repair_unit_report(
     source_path: str | Path | None = None,
     apply: bool = False,
     work_root: str | Path | None = None,
+    manual_legacy: bool = False,
+    _material_lock_held: bool = False,
 ) -> RepairResult:
     """预览或原子应用单元报告修复；应用失败时恢复原报告。"""
-    from .material import find_material
+    from . import material
     from .paths import find_source_md, report_path
     from .workdir import ensure_inside, input_path, workspace_scope
     from .inspect_images import inspect_unit_images
@@ -344,10 +346,28 @@ def repair_unit_report(
         if not result.ok:
             return result
 
+        material_root = material.find_material(unit)
+        if apply and manual_legacy and material_root is not None and not _material_lock_held:
+            with material.locked(material_root):
+                return repair_unit_report(
+                    unit, source_path=src_path, apply=True, work_root=work_root,
+                    manual_legacy=True, _material_lock_held=True,
+                )
+        material_data = None
+        if apply and material_root is not None:
+            if not manual_legacy:
+                raise BusinessError("新布局禁止应用 v1 报告修复；人工兼容需显式 --manual-legacy",
+                                    code="parse-v1-new-layout-forbidden")
+            material_data = material.load(material_root)
+            if unit.parent != material.check_units(material_root, material_data):
+                raise BusinessError("单元不属于当前材料", code="unit-path-mismatch")
+            from .workflow import _check_manual_legacy_overwrite
+            _check_manual_legacy_overwrite(unit, material_root, material_data)
+
         image_result = inspect_unit_images(
             unit,
             source_path=src_path,
-            allow_legacy_transparent=find_material(unit) is None,
+            allow_legacy_transparent=material_root is None,
         )
         result.image_result = image_result
         image_diagnostics = _image_diagnostics(image_result)
@@ -373,6 +393,9 @@ def repair_unit_report(
                     issues=[issue.to_dict() for issue in post.errors],
                 ))
                 return result
+            if material_root is not None:
+                from .workflow import _save_legacy_manual_data
+                _save_legacy_manual_data(unit, result.text)
         except Exception:
             if target.is_file() and target.read_bytes() != original_bytes:
                 _atomic_write(target, original_bytes)

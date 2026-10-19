@@ -89,13 +89,9 @@ function render(args, value) {
 const CALC_SCHEMAS = JSON.parse(
   readFileSync(fileURLToPath(new URL('./calc-schemas.json', import.meta.url)), 'utf8'),
 ).operations
-const PROPOSAL_SCHEMA = JSON.parse(
-  readFileSync(fileURLToPath(new URL('./proposal-schema.json', import.meta.url)), 'utf8'),
+const SUBMIT_PROPOSAL_SCHEMA = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./proposal-schema-bind-current.json', import.meta.url)), 'utf8'),
 ).schema
-const SUBMIT_PROPOSAL_SCHEMA = structuredClone(PROPOSAL_SCHEMA)
-for (const key of ['task_id', 'unit_id', 'run_id', 'source_sha256', 'body_sha256', 'proposal_revision']) {
-  SUBMIT_PROPOSAL_SCHEMA.required = SUBMIT_PROPOSAL_SCHEMA.required.filter(field => field !== key)
-}
 
 /**
  * 子代理工具面：unit 只暴露单元读取/定位/快照/提交/恢复/心跳与全部 calc_*。
@@ -215,7 +211,7 @@ function registerStructuredTools(ctx, cliTool, visible) {
 
   if (visible('jiaodui_unit_submit')) ctx.tools.register({
     name: 'jiaodui_unit_submit',
-    description: '校验结构化修改建议并生成、登记完整报告。task/unit/run身份、源文hash与proposal_revision由插件按当前snapshot自动绑定；expected_snapshot_sha256仍执行CAS保护。',
+    description: '校验结构化修改建议并生成、登记完整报告。core 在材料锁内绑定 task/unit/run 身份、源文摘要与 proposal_revision；expected_snapshot_sha256 仍执行 CAS 保护。',
     parameters: {
       type: 'object', additionalProperties: false,
       required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
@@ -230,39 +226,14 @@ function registerStructuredTools(ctx, cliTool, visible) {
     timeoutMs: cliTool.timeoutMs,
     isConcurrencySafe: cliTool.isConcurrencySafe,
     async execute(args, exec) {
-      const snapshotResult = await cliTool.execute({ args: ['--json', 'unit-snapshot',
-        '--task-id', args.task_id, '--unit-id', args.unit_id] }, exec)
-      if (snapshotResult.exitCode !== 0) return snapshotResult
-      let snapshotPayload
-      try {
-        snapshotPayload = JSON.parse(snapshotResult.stdout)
-      } catch {
-        throw new Error('unit-snapshot 未返回有效JSON，未执行 unit-submit')
-      }
-      const snapshot = snapshotPayload?.snapshot
-      if (!snapshot || typeof snapshot.snapshot_sha256 !== 'string'
-          || !('next_proposal_revision' in snapshot)
-          || (snapshot.next_proposal_revision !== null
-              && typeof snapshot.next_proposal_revision !== 'number')) {
-        throw new Error('unit-snapshot 缺少提交绑定字段，未执行 unit-submit')
-      }
-      const proposal = {
-        ...args.proposal,
-        task_id: args.task_id,
-        unit_id: args.unit_id,
-        run_id: snapshot.run_id,
-        source_sha256: snapshot.source_sha256,
-        body_sha256: snapshot.body_sha256,
-        proposal_revision: snapshot.next_proposal_revision ?? 1,
-      }
       const tempDir = mkdtempSync(join(tmpdir(), 'jiaodui-submit-'))
       const proposalPath = join(tempDir, 'proposal.json')
       try {
-        writeFileSync(proposalPath, JSON.stringify(proposal), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+        writeFileSync(proposalPath, JSON.stringify(args.proposal), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
         return await cliTool.execute({ args: ['--json', 'unit-submit', '--task-id', args.task_id,
           '--unit-id', args.unit_id, '--proposal-json-file', proposalPath,
           '--expected-snapshot-sha256', args.expected_snapshot_sha256,
-          ...(args.preview ? ['--preview'] : [])] }, exec)
+          '--bind-current', ...(args.preview ? ['--preview'] : [])] }, exec)
       } finally {
         rmSync(tempDir, { recursive: true, force: true })
       }

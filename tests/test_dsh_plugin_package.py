@@ -334,6 +334,23 @@ def test_proposal_schema_bundle_matches_python_core_export(bundle: str):
 
 
 @pytest.mark.parametrize("bundle", BUNDLE_IDS)
+def test_bind_current_proposal_schema_bundle_matches_python_core_export(bundle: str):
+    result = subprocess.run(
+        [sys.executable, "-m", "jiaodui", "unit-schema", "--bind-current", "--json"],
+        cwd=ROOT, capture_output=True, text=True, check=True)
+    generated = json.loads(result.stdout)
+    bundled = json.loads((_package_root(bundle) / "tools" / "proposal-schema-bind-current.json")
+                         .read_text(encoding="utf-8"))
+    assert bundled == generated
+    full = json.loads((_package_root(bundle) / "tools" / "proposal-schema.json")
+                      .read_text(encoding="utf-8"))["schema"]
+    identities = {"task_id", "unit_id", "run_id", "source_sha256", "body_sha256", "proposal_revision"}
+    assert set(full["required"]) - set(bundled["schema"]["required"]) == identities
+    assert set(bundled["schema"]["required"]) <= set(full["required"])
+    assert full["properties"] == bundled["schema"]["properties"]
+
+
+@pytest.mark.parametrize("bundle", BUNDLE_IDS)
 def test_native_tool_module_is_dependency_free_and_wired(bundle: str):
     source = (_package_root(bundle) / "tools" / "index.js").read_text(encoding="utf-8")
     assert "export function apply" in source
@@ -349,7 +366,7 @@ def test_native_tool_module_is_dependency_free_and_wired(bundle: str):
 def test_native_tool_modules_do_not_fork_between_bundles():
     """两个学科包的 tools/ 必须逐字节一致：工具是学科无关的，分叉意味着隐患。"""
     diffs: list[str] = []
-    for relative in ("index.js", "calc-schemas.json", "proposal-schema.json"):
+    for relative in ("index.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json"):
         first = (BUNDLES["dsh-jiaodui"]["root"] / "tools" / relative).read_bytes()
         second = (BUNDLES["dsh-jiaodui-chemistry"]["root"] / "tools" / relative).read_bytes()
         if first != second:

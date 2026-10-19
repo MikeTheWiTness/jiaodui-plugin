@@ -25,6 +25,9 @@ def extract_body(source_text: str) -> str:
     CAS 契约、`body_sha256` 语义与所有调用方都不必动。
     """
     return source_text
+_IDENTITY_BINDING_KEYS = {
+    "task_id", "unit_id", "run_id", "source_sha256", "body_sha256", "proposal_revision",
+}
 _REQUIRED_KEYS = {
     "schema_version", "task_id", "unit_id", "run_id", "source_sha256", "body_sha256",
     "proposal_revision", "summary", "corrections", "evidence",
@@ -36,8 +39,8 @@ _CORRECTION_KEYS = {
 }
 
 
-def proposal_json_schema() -> dict[str, Any]:
-    """导出完整结构化建议schema，供DSH工具注册复用。"""
+def proposal_json_schema(*, bind_current: bool = False) -> dict[str, Any]:
+    """导出完整或由 core 绑定六个身份字段的结构化建议 schema。"""
     correction = {
         "type": "object", "additionalProperties": False,
         "required": sorted(_CORRECTION_KEYS),
@@ -144,8 +147,11 @@ def proposal_json_schema() -> dict[str, Any]:
         },
         "self_check": self_check,
     }
+    required = _REQUIRED_KEYS | {"self_check"}
+    if bind_current:
+        required = required - _IDENTITY_BINDING_KEYS
     return {"type": "object", "additionalProperties": False,
-            "required": sorted(_REQUIRED_KEYS | {"self_check"}), "properties": properties}
+            "required": sorted(required), "properties": properties}
 
 
 class SuggestionError(ValueError):
@@ -154,6 +160,34 @@ class SuggestionError(ValueError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+
+
+def bind_current_proposal(payload: dict, snapshot: dict) -> dict:
+    """从锁内取得的单元快照补齐身份字段，并拒绝与调用方认知冲突。"""
+    if not isinstance(payload, dict):
+        raise _error("proposal.schema", "建议必须是 JSON 对象")
+    revision = snapshot.get("next_proposal_revision")
+    if type(revision) is not int or revision < 1:
+        raise _error("proposal-binding-unavailable", "当前提案版本无法确定，不能自动绑定")
+    values = {
+        "task_id": snapshot["task_id"],
+        "unit_id": snapshot["unit_id"],
+        "run_id": snapshot["run_id"],
+        "source_sha256": snapshot["source_sha256"],
+        "body_sha256": snapshot["body_sha256"],
+        "proposal_revision": revision,
+    }
+    conflicts = [
+        key for key, value in values.items()
+        if key in payload and (
+            payload[key] != value
+            or (key == "proposal_revision" and type(payload[key]) is not int)
+        )
+    ]
+    if conflicts:
+        raise _error("proposal-binding-conflict",
+                     "提案已提供与当前快照不一致的绑定字段：" + "、".join(conflicts))
+    return {**payload, **values}
 
 
 @dataclass(frozen=True)
