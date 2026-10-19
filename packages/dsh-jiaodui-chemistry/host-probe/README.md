@@ -1,0 +1,26 @@
+# 会话工作区与输出宿主探针
+
+此探针必须在真实 DSH 会话执行；Node 行为测试不替代宿主验收。
+
+1. 加载更新后的插件（既有 JS 模块代际需要重启宿主），打开独立工作区 A，在「校对（高中化学）」preset 调用原生工具：`args: ["check-env", "--json"]`。保存工具的完整返回与 `runtime.work_root`，确认 stdout 非空、CLI 路径正确、work_root 等于 A。
+2. 同一宿主打开独立工作区 B，重复调用，确认 work_root 等于 B 且不同于 A。两次都不传 cwd 或 work-root，才能检验真实会话注入。
+3. 首次校对派发前按随包 skill 的 `references/vision-probe.md` 验证子 agent：只派发 `assets/vision-probe.png` 的绝对路径和观察要求，不传答案或 SVG。不依赖教材图片，也不在工作区创建随机探针目录。DSH `read_image` 使用 `file_path`；参数错误按当前 schema 修正后最多重试 2 次，若用户明确遇错即停则停止。无图材料也必须能走此探针。
+4. 以工作区外的同一源文件，在两会话分别调用 convert、split，再让单元子 agent 读取实际材料图片、落盘报告、verify、parse-report 登记，最后 build-report/build-docx。确认所有校对产物只在各自 `校对/<材料名>/` 下；原始源文件 SHA 不变。同会话同模型/工具配置复用成功的固定探针，不逐材料重测；透明教材图仍按需合成白底。
+5. 将其中的材料目录整体搬到另一个工作区，重新 status/build-docx，确认登记有效且图片不缺失。重跑、冲突、双向单元集和符号链接反例另由确定性测试覆盖。
+
+check-env 的 runtime.work_root 在子进程内解析 JIAODUI_WORK_ROOT，因此其正确返回同时验证显式 env 注入。记录包括宿主版本、会话工作区、工具退出码、完整 stdout/stderr、产物路径和执行日期。不记录凭证。
+
+## 子 preset 工具面补测（DSH 0.2.1+）
+
+- 重启宿主后打开「设置 → agent preset」：`校对（高中化学·单元子代理）` 不应显示异常；`校对（高中化学）` preset 的 `tool-subagent` 应指向它。
+- 派发一个单元，检查子代理实际工具目录：只应出现 `skill`、`read`、`read_image`、`jiaodui_unit_read/locate/snapshot/submit/event/recovery` 与 `jiaodui_calc_*`（含配平/计量）；不得出现 `write`、`edit`、`bash`、`glob`、`grep`、raw `jiaodui`、`jiaodui_unit_cancel`、`jiaodui_unit_review`、`jiaodui_task_prepare`、`jiaodui_delivery`。
+- 本版子 preset 不挂 `agent-instructions`：子代理上下文不应出现 AGENTS.md 的 `<system-reminder>`；若单元执行缺少必要规则，再评估是否加回。
+
+## 类型入口补测
+
+- 明确告诉宿主“这是高中化学讲义”：应直接 convert --mode lecture，不再为类型预览/询问；学科已固定为化学，不因文件名或结构改判学科。
+- 同一份 Word 只说“帮我校对”：应先 inspect-source 获取结构事实；大量重复嵌套承载主要正文时采用 lecture。
+- 明确说“按试卷流程处理”：用户指定优先，不能让文件名或嵌套结构擅自改成讲义；拆分预检异常应按现有升级流程处理。
+- 使用结构不明显、类型含混的材料：有限预览后仍不确定时询问，不能默认 exam。
+- 类型确认后检查材料记录中的 mode/origin，以及 split/slice 使用同一类型；单元阶段仍共用化学规范与交付要求。
+- 化学专项：让单元子 agent 对一条未配平的方程式调用 `jiaodui_calc_chemistry_balance`，确认工具出现在子 agent 的实际工具目录里、返回最简整数系数，并能在 `unit-submit` 提案里作为 `calculations` 证据登记。

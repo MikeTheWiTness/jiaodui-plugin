@@ -240,7 +240,13 @@ def cmd_unit_submit(args: argparse.Namespace) -> int:
     from .unit_delivery import commit_unit_submission, preview_unit_submission
 
     try:
-        proposal = json.loads(args.proposal_json)
+        if args.proposal_json_file is not None:
+            proposal_text = Path(args.proposal_json_file).read_text(encoding="utf-8")
+        else:
+            proposal_text = args.proposal_json
+        proposal = json.loads(proposal_text)
+    except OSError as exc:
+        raise NotFoundError(f"proposal-json文件不存在或不可读：{args.proposal_json_file}") from exc
     except json.JSONDecodeError as exc:
         raise BusinessError("proposal-json不是有效JSON", code="proposal-json-invalid") from exc
     if args.preview:
@@ -633,7 +639,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("unit-submit", help="从结构化建议生成并提交完整报告")
     sp.add_argument("--task-id", required=True)
     sp.add_argument("--unit-id", required=True)
-    sp.add_argument("--proposal-json", required=True)
+    proposal_input = sp.add_mutually_exclusive_group(required=True)
+    proposal_input.add_argument("--proposal-json", help="结构化建议 JSON（兼容小提案）")
+    proposal_input.add_argument("--proposal-json-file", help="UTF-8 编码的结构化建议 JSON 文件")
     sp.add_argument("--expected-snapshot-sha256", required=True)
     sp.add_argument("--preview", action="store_true", help="只预览，不写入报告或数据")
     sp.set_defaults(func=cmd_unit_submit)
@@ -771,7 +779,19 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _configure_stdio_utf8() -> None:
+    """CLI 机器接口固定 UTF-8，避免 Windows OEM code page 改写 JSON 和中文诊断。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio_utf8()
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

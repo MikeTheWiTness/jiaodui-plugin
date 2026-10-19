@@ -4,14 +4,14 @@
 
 ## 一、7 学科一览表
 
-按旧仓 `subjects/` 实际目录为准；**v1 只落地高中物理**，其余 6 科标注「旧学科落地计划待处理」（旧计划 M5 逐科加 references 行 + config 行，共性流程零改动）。
+按旧仓 `subjects/` 实际目录为准。**高中物理与高中化学已落地，但化学走独立插件包**（`packages/dsh-jiaodui-chemistry` 的 `jiaodui-chemistry` skill，组织方式见仓库 `docs/adr/0007-second-subject-entry-and-bundle-split.md`）：本矩阵保留化学行只作跨学科对照，**物理入口不加载、不套用化学规范**。其余 5 科标注「旧学科落地计划待处理」（旧计划 M5 逐科加 references 行 + config 行，共性流程零改动）。
 
 > 本矩阵中的旧 M5 标签沿用历史多学科排期；新计划 M5 指恢复预算与调度可靠性，进度见 `docs/PROCESS_REWORK.md`，两者不可混为一谈。
 
 | 学科（旧仓目录） | v1 状态 | 输入格式 | 工具集（calc 映射） | 拆分规则 | 特殊钩子 |
 | --- | --- | --- | --- | --- | --- |
 | 高中物理 | **已落地** | 源文件 `.docx / .doc / .md / .idml` → convert；单元 `第N题.md`（exam）/ `单元N.md`（lecture）+ `images/` | `calc evaluate / solve / formula / dimensional / vector_ops / circle_from_two_points`（另可用 simplify / equality）；数值与公式必须实算 | 配置 `split_mode=section`；`exam_question_pattern` 为 `^(\d+)．`；`wrapped_patterns`=班型 / 例练；`nav_patterns`=直击课堂 / 本讲导航 | 受力图 / 电路图 / v-t 图一致性；量纲分析必须声明每个符号单位；独立解题冻结不启用 |
-| 高中化学 | M5 待落地 | 同上 | `calc evaluate / solve / equality / simplify / chemistry_balance / stoichiometry`；配平与计量必须实算 | 目标：无独立题号规则；lecture 用班型 / 例练 `wrapped_patterns` | 化学用语检查清单；方程式配平矩阵；独立解题冻结不启用 |
+| 高中化学 | **已落地（独立插件包）** | 同上 | `calc evaluate / solve / equality / simplify / chemistry_balance / stoichiometry`；配平与计量必须实算 | `exam_question_pattern` 取 `^(\d+)．`（待真实语料确认）；lecture 用班型 / 例练 `wrapped_patterns` | 化学用语检查清单；方程式配平与电荷守恒；`quantities` 为空、不做量纲交叉校验；独立解题冻结不启用 |
 | 小学数学 | M5 待落地 | 同上 | `calc evaluate / solve / equality / simplify / geometry`；数值与几何必须实算 | 目标：只配 lecture，`wrapped_patterns` 为 `\d+.*` | 几何构造与测量（`geometry`） |
 | 高中语文 | M5 待落地 | 同上（含「前置参考」段，若有） | 无符号计算 | 目标：无独立题号规则；lecture 用班型 / 例练 `wrapped_patterns` | **文言文 / 古诗词 / 名篇默写前置检索**（classics，v1 后置）；无前置参考时须注明「无前置参考可供比对」；通假字 / 古今字 / 异体字不标错 |
 | 高中历史 | M5 待落地 | 同上 | 无符号计算 | 目标：题号规则 `^(\d+)[．.、]`；lecture 含 `section_pattern`（`## 模块 / 例N / 练N / ### 模型大招`）与 `例 / 练 / 变式 / 真题` | 章节 / 模块 + 模型大招切分；史料与年份核对 |
@@ -24,15 +24,15 @@
 
 仓库根的 `config/subjects/` 是**人工可读镜像**，便于浏览与评审，**不是运行时来源**：改配置请改包内文件，再 `cp jiaodui/data/subjects/*.json config/subjects/` 同步；两份一致性由 `tests/test_packaging.py` 与 `tests/test_skill_docs.py` 守着。
 
-**v1 已创建 `jiaodui/data/subjects/高中物理.json`**（镜像在 `config/subjects/高中物理.json`），其余 6 科 M5 逐步补齐；上表 M5 行的参数为**目标值**（源自旧仓 `subjects/*/config.json`），落地时改写进新 schema。
+**已创建 `jiaodui/data/subjects/高中物理.json` 与 `高中化学.json`**（镜像在 `config/subjects/`），其余 5 科 M5 逐步补齐；上表其余行的参数为**目标值**（源自旧仓 `subjects/*/config.json`），落地时改写进新 schema。化学的机器读配置口径写在化学包自己的 `references/subject-matrix.md`，本表不重复维护。
 - `subject`：学科名。
-- `tools`：工具集白名单，只允许合法工具族 `calc` / `classics`（高中物理为 `["calc"]`）。配置写了未知工具名会在读取时就报 `contract` 错，不再静默失效；`jiaodui calc --subject <学科>` 按它校验该学科能否使用 calc。
-- `quantities`：学科物理量表 `{物理量名: 单位表达式}`（高中物理 58 条），供 `calc dimension` 给 `{"quantity": …}` 声明做量纲交叉校验；名字未命中只告警不拒绝，按告警增长。量表不进 agent 上下文，用 `jiaodui quantities --subject <学科> [--search 词]` 惰性查。
-- `extensions`：支持扩展名（高中物理 `.docx / .md / .idml`）。旧版二进制 `.doc` **不受支持**：CLI 会明确拒绝并提示先另存为 `.docx`（pandoc 的 OOXML 解析器读不了它）。
+- `tools`：工具集白名单，只允许合法工具族 `calc` / `classics`（两科均为 `["calc"]`）。配置写了未知工具名会在读取时就报 `contract` 错，不再静默失效；`jiaodui calc --subject <学科>` 按它校验该学科能否使用 calc。
+- `quantities`：学科物理量表 `{物理量名: 单位表达式}`（高中物理 58 条，**高中化学为空对象**），供 `calc dimension` 给 `{"quantity": …}` 声明做量纲交叉校验；名字未命中只告警不拒绝，按告警增长。量表不进 agent 上下文，用 `jiaodui quantities --subject <学科> [--search 词]` 惰性查。
+- `extensions`：支持扩展名（`.docx / .md / .idml`）。旧版二进制 `.doc` **不受支持**：CLI 会明确拒绝并提示先另存为 `.docx`（pandoc 的 OOXML 解析器读不了它）。
 - `split_mode` / `section_pattern` / `section_extensions`：章节切分参数。
 - `wrapped_patterns` / `unwrapped_patterns`：讲义包裹标记（班型、例练）。
-- `exam_question_pattern`：试卷题号规则（高中物理 `^(\d+)．`）。
-- `nav_patterns`：需忽略的导航段标记（高中物理 `直击课堂 / 本讲导航`）。
+- `exam_question_pattern`：试卷题号规则（两科当前均为 `^(\d+)．`）。
+- `nav_patterns`：需忽略的导航段标记（`直击课堂 / 本讲导航`）。
 ### 拆分模式 `--mode`
   - `exam`：试卷，产出 `第N题.md`，按题号规则切题。
   - `lecture`：讲义，产出 `单元N.md`，按班型 / 例练包裹标记切单元。

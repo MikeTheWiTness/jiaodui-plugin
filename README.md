@@ -8,6 +8,8 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - M0—M6 收口计划：[docs/PLAN-rework-continuation.md](docs/PLAN-rework-continuation.md)
 - 结构化并入 main 的实施计划：[docs/UNIFY-PLAN.md](docs/UNIFY-PLAN.md)
 - M5 架构决策：[ADR-0001：多学科入口与逐科落地](docs/adr/0001-m5-subject-entry-and-rollout.md)
+- 第二学科入口：[ADR-0007：第二学科入口与 bundle 拆分](docs/adr/0007-second-subject-entry-and-bundle-split.md)
+- 化学落地验证记录：[docs/CHEMISTRY-VERIFICATION.md](docs/CHEMISTRY-VERIFICATION.md)
 - 交付闸门：[ADR-0004：闸门单一实现（含图片资源）](docs/adr/0004-gate-single-implementation.md)
 - 学科工具：[ADR-0005：量纲校验的声明形态与多解判定](docs/adr/0005-dimensional-declaration-and-ambiguity.md)
 - 仓库约定（AI 助手必读）：[AGENTS.md](AGENTS.md)
@@ -15,14 +17,14 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - M0 验收：[docs/M0.md](docs/M0.md)　·　M1 端到端验收：[docs/M1.md](docs/M1.md)
 - 基线复算：[docs/BASELINE.md](docs/BASELINE.md)
 - 入口与拆分迁移核对：[docs/ENTRY_MIGRATION.md](docs/ENTRY_MIGRATION.md)
-- 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)
-- DSH 插件包（M7 换壳的首次尝试）：[packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md)
+- 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)（高中物理）· [skills/jiaodui-chemistry/SKILL.md](skills/jiaodui-chemistry/SKILL.md)（高中化学）
+- DSH 插件包：物理 [packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md) · 化学 [packages/dsh-jiaodui-chemistry/README.md](packages/dsh-jiaodui-chemistry/README.md)
 
 ## 当前状态：第7章结构化报告主链已并入 main
 
 - **正常路径**：结构化主链——子 agent 只提交 schema v2 结构化提案，报告由程序从不可变源文生成，经 `verify-report` 闸门与父复核后交付；`build-report` / `build-docx` 只消费通过校验的当前版本。
 - **只读兼容**：旧 Markdown 报告链保留读取与修复入口（`verify-report` / `parse-report` 兼容读取，`repair-report` 只服务旧报告），但**不再作为正常交付路径**；旧布局写入须显式 `--legacy-layout`。
-- **宿主侧**：`dsh-jiaodui` 插件包提供 26 个原生工具与「校对」preset（父侧有 shell 与只读搜索，子侧封闭 20 项）。真机新会话验收（父/子 catalog、`read_image` 实读、零 shell 真实校对、停止语义）八条已通过。
+- **宿主侧**：插件包按学科分发——`dsh-jiaodui` 提供 26 个原生工具与「校对」preset（高中物理），`dsh-jiaodui-chemistry` 提供同一套工具与「校对（高中化学）」preset；两包共用 CLI，可同时安装、分别启用。物理侧真机新会话验收（父/子 catalog、`read_image` 实读、零 shell 真实校对、停止语义）八条已通过；化学侧真机验收清单见 [packages/dsh-jiaodui-chemistry/host-probe/README.md](packages/dsh-jiaodui-chemistry/host-probe/README.md)，待补证。
 - **已合并的接口语义**：每单元六类恢复预算（`call_correction`/`calc_representation`/`report_repair`/`targeted_review`/`technical_redispatch`/`image_schema_fix`），恢复记账以 `attempt_id` 幂等、错误码确定性映射类别、图片格式修复连带扣一次 `call_correction`；旧清单可读但未授权，重授权时按单元保守迁移。
 - **测试基线**：双口径 `pytest` 全绿（合并前分支 1126 passed / 5 skipped）。
 - **仍待办**：Phase 2 收尾（宿主 profile 切回仓库根包、处置实验 worktree、文档同步）。
@@ -92,7 +94,10 @@ jiaodui/           Python 包：确定性核心 + CLI 壳（唯一逻辑所在�
   docx_report.py   Word 批注版生成与锚点复核
 jiaodui/data/subjects/  机器读学科配置（运行时唯一来源）
 config/subjects/   同上的人工可读镜像（改配置请改包内那份）
-skills/jiaodui/    人读 skill 与 references
+skills/jiaodui/    高中物理入口 skill 与 references
+skills/jiaodui-chemistry/  高中化学入口 skill 与 references（独立插件包）
+packages/dsh-jiaodui/          高中物理 DSH bundle（preset：校对）
+packages/dsh-jiaodui-chemistry/ 高中化学 DSH bundle（preset：校对（高中化学））
 tests/             行为契约测试
 ```
 

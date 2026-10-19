@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,12 +39,46 @@ def test_top_help_lists_all_v1():
         assert cmd in r.stdout
 
 
+def test_cli_machine_output_is_utf8_even_when_environment_requests_ascii(tmp_path):
+    paper = tmp_path / "中文卷"
+    paper.mkdir()
+    (paper / "第1题").mkdir()
+    (paper / "第1题" / "第1题.md").write_text("正文。", encoding="utf-8")
+    env = {**os.environ, "PYTHONIOENCODING": "ascii:replace", "PYTHONUTF8": "0"}
+    result = subprocess.run(
+        [PY, "-m", "jiaodui", "status", str(paper), "--json"], cwd=ROOT,
+        env=env, capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    assert "中文卷" in result.stdout
+    assert "?" not in result.stdout
+    assert json.loads(result.stdout)["counts"]["total"] == 1
+
+
 def test_structured_error_unknown_file(tmp_path):
     r = run("convert", str(tmp_path / "不存在的文件.docx"), "--json")
     assert r.returncode != 0
     payload = json.loads(r.stderr.strip().splitlines()[-1])
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_found"
+
+
+def test_unit_submit_rejects_invalid_json_file_with_structured_error(tmp_path):
+    proposal = tmp_path / "提案.json"
+    proposal.write_text("{坏 JSON", encoding="utf-8")
+    result = run("unit-submit", "--task-id", "a" * 32, "--unit-id", "b" * 32,
+                 "--proposal-json-file", str(proposal),
+                 "--expected-snapshot-sha256", "c" * 64)
+    assert result.returncode == 6
+    error = json.loads(result.stderr.strip().splitlines()[-1])["error"]
+    assert error["code"] == "proposal-json-invalid"
+
+
+def test_unit_submit_requires_one_proposal_input():
+    result = run("unit-submit", "--task-id", "a" * 32, "--unit-id", "b" * 32,
+                 "--expected-snapshot-sha256", "c" * 64)
+    assert result.returncode == 2
+    error = json.loads(result.stderr.strip().splitlines()[-1])["error"]
+    assert error["code"] == "usage"
 
 
 def test_verify_report_exit_code(tmp_path):

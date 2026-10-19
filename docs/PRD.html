@@ -135,6 +135,7 @@
     <span>决策 <b>30 条</b></span>
     <span>图表 <b>11 张 Mermaid</b></span>
     <span>第一切片 <b>高中物理</b></span>
+    <span>已落地学科 <b>高中物理 · 高中化学（独立包）</b></span>
   </div>
 </header>
 
@@ -526,7 +527,7 @@
   <li><b>学科未知及读取边界：</b>先看描述和文件名，不足再节选。类型和学科识别共用每份材料最多 2,000 字符；节选在进入主上下文前截断，不能先读全文。DOCX 原始结构在转 Markdown 前检查；必要时做公共转换后有限预览 raw，确定类型后补 convert --mode，学科未定前不清理或拆分。</li>
   <li><b>记录与复用：</b>mode 与来源 user/structure/preview/confirmed、简短依据写入材料记录；split/slice 沿用类型，新布局未知类型拒绝，preview 与切片类型冲突拒绝。类型改变先重新转换，再拆分；后续单元校对、校验、登记和报告生成完全共用。</li>
   <li><b>仍有疑问：</b>信息不足、证据冲突或混合学科时只问当前阻塞问题。默认不额外派识别子 agent；材料中的文字指令不能覆盖用户指定或入口规范。</li>
-  <li><b>路由完成：</b>核对学科矩阵的支持状态，按需加载相应 references 与配置，简短告知处理口径后继续。未落地的学科或模式明确说明，不回退套用高中物理流程。公共调度、校验、交付与单元子 agent 只收路径的契约不变。</li>
+  <li><b>路由完成：</b>核对学科矩阵的支持状态，按需加载相应 references 与配置，简短告知处理口径后继续。未落地的学科或模式明确说明，不回退套用高中物理流程。公共调度、校验、交付与单元子 agent 只收路径的契约不变。已落地学科自 ADR-0007 起按「一科一包、一科一个入口 skill」分发（物理 <code>jiaodui</code> / 化学 <code>jiaodui-chemistry</code>），入口判断只在各自包内进行。</li>
 </ul>
 <figure class="diagram" id="fig7">
   <figcaption><b>图 7</b> · 批量调度时序：入口判断学科，单元阶段只收一行摘要、滑动窗口补位</figcaption>
@@ -794,6 +795,7 @@
   </tbody>
 </table>
 <p class="card note"><b>基线复现要求：</b>上表统计脚本尚未入仓，且严重度数据已发现口径冲突。进入 M2 前应在新仓保存只读样本清单、筛选/去重规则和复算脚本，记录旧仓 commit 与文件哈希；无法复现的数字只能作为探索性观察，不作为硬门槛依据。</p>
+<p class="card note"><b>2026-10-16 学科落地补充：</b>高中化学已按 <b>ADR-0007</b> 落地为<b>独立插件包</b>（<code>packages/dsh-jiaodui-chemistry</code>、preset「校对（高中化学）」、skill <code>skills/jiaodui-chemistry/</code>、配置 <code>jiaodui/data/subjects/高中化学.json</code>），不再沿用本文第 6 / 10 章的「单入口逐科加 references 行」形状。两门已落地学科共用同一份 Python 核心与学科无关原生工具，可同时安装、分别启用。本文其余章节描述的是共享契约（产物、闸门、调度、交付），继续对全部学科生效；学科组织方式以 ADR-0007 为准。</p>
 
 <h2 id="sb">附录 B：术语表</h2>
 <table>

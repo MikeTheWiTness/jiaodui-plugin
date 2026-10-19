@@ -1,14 +1,16 @@
 ---
 name: jiaodui
-description: K-12 试卷/讲义校对总入口。优先采用用户指定学科与材料类型；未指定时检查 Word 嵌套表格或有限节选，不确定则询问，再组织对应导入拆分及共用校对交付。v1 预设学科只落地高中物理，其余 M5 待落地。
+description: 高中物理试卷/讲义校对入口。优先采用用户指定材料类型；未指定时检查 Word 嵌套表格或有限节选，不确定则询问，再组织导入拆分、逐单元结构化校对与 Word 批注交付。学科固定为高中物理，只加载本 skill 的物理规范。
 ---
 
-# jiaodui 校对总入口
+# jiaodui 高中物理校对入口
 
 ## 1. 何时使用与目标
-- 输入为 K-12 试卷/讲义源文件（docx / doc / idml / md）或已拆分单元目录，需要逐题校对并交付 Word 批注版时使用。
+- 输入为高中物理试卷/讲义源文件（docx / doc / idml / md）或已拆分单元目录，需要逐单元校对并交付 Word 批注版时使用。
 - 分工：**判断交给 agent，确定性交给 jiaodui CLI**。CLI 只做转换 / 拆分 / 校验 / 计算 / 拼装，不调用任何模型。
-- v1 范围：只做**试卷 + 讲义**主链路；批注评审、自由校对、独立解题（冻结）、classics 古籍检索均后置。学科预设 v1 只落地**高中物理**，其余 6 科见 `references/subject-matrix.md`（M5 待落地）。
+- 本入口只服务**高中物理**：学科已确定，不再做学科识别与多学科分流；材料类型（讲义 / 试卷）仍按 §2.1 判定。
+- v1 范围：只做**试卷 + 讲义**主链路；批注评审、自由校对、独立解题（冻结）、classics 古籍检索均后置。
+- 高中化学是**独立插件包**的独立入口（skill `jiaodui-chemistry`），本入口不加载、不套用化学规范。
 - 不做：GUI、LaTeX/PDF、自动改源文。
 
 - 入口在派发第一个单元前确认执行模式：用户已明确自动校对/无人值守时直接采用 automatic；否则与其他未定入口项合并一次询问。顺序固定为 `convert → split → execution-policy`（split 开新轮次会使先前授权失效）。确认后用 `jiaodui execution-policy <material_dir> --mode automatic|interactive --origin user|confirmed --work-root <W> --json` 写入当前轮次。恢复时不重复确认；新轮次须重新授权。
