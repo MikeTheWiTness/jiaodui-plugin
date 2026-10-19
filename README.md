@@ -20,9 +20,9 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)（高中物理）· [skills/jiaodui-chemistry/SKILL.md](skills/jiaodui-chemistry/SKILL.md)（高中化学）
 - DSH 插件包：物理 [packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md) · 化学 [packages/dsh-jiaodui-chemistry/README.md](packages/dsh-jiaodui-chemistry/README.md)
 
-## 当前状态：P0候选基线已分层整理，待合入main
+## 当前状态：P0及必要前置已合入本地main
 
-本候选分支为 `integration/revise-p0-baseline`：先提交第二科、跨平台CLI/材料锁和宿主适配前置，再单独提交revise P0。分层及验证见[基线整理记录](<docs/REVISE-P0-BASELINE.md>)。A/B原型保留在独立实验分支，不包含于本基线；main中的第7章结构化主链仍为既有正常交付路径。
+已将 `integration/revise-p0-baseline` 快进合入本地main：必要前置 `c098568` 与revise P0 `8758b6b` 分层保留，未推送远端。分层及验证见[基线整理记录](<docs/REVISE-P0-BASELINE.md>)。A/B原型仍留在独立实验分支，未合入main；正式36次实验尚未执行。
 
 - **正常路径**：结构化主链——子 agent 只提交 schema v2 结构化提案，报告由程序从不可变源文生成，经 `verify-report` 闸门与父复核后交付；`build-report` / `build-docx` 只消费通过校验的当前版本。
 - **只读兼容**：旧 Markdown 报告链保留读取与修复入口（`verify-report` / `parse-report` 兼容读取，`repair-report` 只服务旧报告），但**不再作为正常交付路径**；旧布局写入须显式 `--legacy-layout`。

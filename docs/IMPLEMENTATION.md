@@ -1,6 +1,6 @@
 # 实施清单
 
-2026-10-19 [revise 校对工具升级计划](PLAN-revise-tool-upgrade.md) 的P0已获用户验收，现于 `integration/revise-p0-baseline` 整理必要前置与独立P0候选提交，来源和复验见[基线整理记录](<REVISE-P0-BASELINE.md>)，尚未合入main。原实施顺序为先完成共同前置 P0（锚点、证据分层、交互诊断、旧报告旁路保护、core 绑定与入口瘦身），通过出口后再进行真实宿主三臂实验 P0.5；实验决定无状态 v3（A）或持久工作日志（B），此前不编写 A/B 生产代码。报告仍编译为 schema v2，经过原有闸门与父复核；具体实施和验收证据见计划状态，不预设持久工作日志。
+2026-10-19 [revise 校对工具升级计划](PLAN-revise-tool-upgrade.md) 的P0已获用户验收；必要前置c098568与P0基线8758b6b已从 `integration/revise-p0-baseline` 快进合入本地main，未推送。来源和复验见[基线整理记录](<REVISE-P0-BASELINE.md>)。原实施顺序为先完成共同前置 P0（锚点、证据分层、交互诊断、旧报告旁路保护、core 绑定与入口瘦身），通过出口后再进行真实宿主三臂实验 P0.5；实验决定无状态 v3（A）或持久工作日志（B），此前不编写 A/B 生产代码。报告仍编译为 schema v2，经过原有闸门与父复核；具体实施和验收证据见计划状态，不预设持久工作日志。
 
 2026-10-10 第7章结构化报告主链并入 `main`：子 agent 提交 schema v2 结构化提案、报告由程序从源文生成、父代理复核版本绑定后登记成为**正常交付路径**；旧 Markdown 报告链降级为只读兼容。合并按 [UNIFY-PLAN](UNIFY-PLAN.md) §6 裁决 28 处冲突、修掉 19 处静默变更（main 回退时整份删除的 `source_index`/`unit_reader`/`calc/schema`/`calc-schemas.json` 与 v2 守门已取回），并在映射 main 测试时采纳六处 main 更优语义（`report.ok`、`unit-event` 轮次 CAS 与授权要求、指纹错误码、幂等重放不写盘、被拒 attempt 不写盘）。根仓双口径 **1158 passed / 0 failed**、冻结语料 4/4、P6 材料真机 `build-report`/`build-docx` 通过（标记 2 = 锚点 2 + 兜底 0）；桌面 profile 已切回仓库根包，实验 worktree 与集成分支已删除。见 [PROCESS_REWORK](PROCESS_REWORK.md) 的 Phase 2/3 记录。
 

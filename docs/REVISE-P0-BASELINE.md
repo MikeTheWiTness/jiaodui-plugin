@@ -56,4 +56,6 @@
 
 ## 合入边界
 
-本分支是可审查候选，尚未合并main或推送。P0.5原型仍留在exp/revise-ab；正式实验应在本候选经审查合入main后重新固定基线，不能直接把混合快照或实验提交合入生产。
+用户明确要求“合入main”后，在干净worktree切换到main并执行git merge --ff-only integration/revise-p0-baseline，main从c5af354快进到8758b6b，包含必要前置c098568及P0提交8758b6b。未推送；原工作区仍在feat/revise-tool-upgrade，其文件及暂存内容不变。前述“原main未变”是整理阶段核对结果，此次授权合入后本地main已按用户要求更新。
+
+随后仅同步合入状态文档，不改已验证的代码/插件/样本。正式实验可固定8758b6b为P0代码基线；P0.5原型仍留在exp/revise-ab，不把该实验提交或混合快照合入生产。

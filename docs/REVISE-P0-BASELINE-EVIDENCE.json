@@ -1,5 +1,12 @@
 {
-  "scope": "P0 candidate baseline only; no main merge or push",
+  "scope": "P0 baseline fast-forwarded to local main by explicit user request; not pushed",
+  "local_main_merge": {
+    "method": "git switch main; git merge --ff-only integration/revise-p0-baseline",
+    "from": "c5af3545fa357179c972bed46d965be50b472fbd",
+    "to_verified_P0_code_commit": "8758b6b3778f21085b4f28d72c2bde8b9549fbd7",
+    "experimental_branch_merged": false,
+    "pushed": false
+  },
   "base_commit": "c5af3545fa357179c972bed46d965be50b472fbd",
   "prerequisite_commit": "c098568dce77c1780ae8cc913975cd505619fd57",
   "source_snapshot": "2bafba7bdc9960229b58e8e376d4f98fefa2b19e",

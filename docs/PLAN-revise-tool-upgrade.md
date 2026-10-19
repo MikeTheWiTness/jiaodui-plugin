@@ -1,6 +1,6 @@
 # revise 校对工具升级计划
 
-日期：2026-10-19。状态：**P0 出口验收通过（用户确认）；已在 `integration/revise-p0-baseline` 分层整理前置与P0候选基线，main尚未合入；P0.5原型另在 `exp/revise-ab`，正式36次未执行，A/B未选定**。分层来源、原工作区保护与本次复验见[基线整理记录](<REVISE-P0-BASELINE.md>)。确认范围、样本验收版本与证据来源见[验收结论](<REVISE-P0-ACCEPTANCE-2026-10-19.md>)，自动验证及CLI/core实测见[P0实施与验收记录](<REVISE-P0-VERIFICATION.md>)。原生插件结论来源于用户确认，非本会话独立执行；本文件的 A/B 接口仍是待实验决策后的目标，不代表已经实现。
+日期：2026-10-19。状态：**P0 出口验收通过（用户确认）；必要前置c098568与P0基线8758b6b已快进合入本地main，未推送；P0.5原型另在 `exp/revise-ab`，正式36次未执行，A/B未选定**。分层来源、原工作区保护与本次复验见[基线整理记录](<REVISE-P0-BASELINE.md>)。确认范围、样本验收版本与证据来源见[验收结论](<REVISE-P0-ACCEPTANCE-2026-10-19.md>)，自动验证及CLI/core实测见[P0实施与验收记录](<REVISE-P0-VERIFICATION.md>)。原生插件结论来源于用户确认，非本会话独立执行；本文件的 A/B 接口仍是待实验决策后的目标，不代表已经实现。
 
 初稿见 [PLAN-revise-tool-upgrade.v0-draft.md](PLAN-revise-tool-upgrade.v0-draft.md)。本版整合了对初稿的审查、二次审查与第三轮逐条代码核对的结果（第 3 节决策 D1–D14；修正记录见第 13 节）。
 
