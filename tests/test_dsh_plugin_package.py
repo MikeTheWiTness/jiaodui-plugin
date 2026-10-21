@@ -376,10 +376,33 @@ def test_native_tool_module_is_dependency_free_and_wired(bundle: str):
     assert 'import("@deepseek-ai/' not in source
 
 
+@pytest.mark.parametrize("bundle", BUNDLE_IDS)
+def test_preset_filter_is_shipped_and_wired(bundle: str):
+    """子 preset 仍可被 tool-subagent 解析；过滤插件负责把它从 UI roster 隐藏。"""
+    root = _package_root(bundle)
+    source = (root / "tools" / "preset-filter.js").read_text(encoding="utf-8")
+    assert "export function apply" in source
+    assert "export const inject = ['agentPresets']" in source
+    assert "remoteExportList" in source
+    assert "@deepseek-ai/" not in source
+    manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    assert manifest["exports"]["./preset-filter"] == "./tools/preset-filter.js"
+    rows = _load_patch(bundle)[0]["insert"]
+    assert any(row.get("name") == f"{bundle}/preset-filter" for row in rows)
+    child_ids = [
+        row["config"]["id"] for row in rows
+        if row.get("name") == "@deepseek-ai/dsh-agent-preset"
+        and str(row.get("config", {}).get("id", "")).endswith("-unit")
+    ]
+    assert child_ids, "每个学科包至少应声明一个内部子 agent preset"
+    for identity in child_ids:
+        assert f"'{identity}'" in source, f"preset-filter 未隐藏子 preset：{identity}"
+
+
 def test_native_tool_modules_do_not_fork_between_bundles():
     """两个学科包的 tools/ 必须逐字节一致：工具是学科无关的，分叉意味着隐患。"""
     diffs: list[str] = []
-    for relative in ("index.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json", "proposal-schema-v3.json"):
+    for relative in ("index.js", "preset-filter.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json", "proposal-schema-v3.json"):
         first = (BUNDLES["dsh-jiaodui"]["root"] / "tools" / relative).read_bytes()
         second = (BUNDLES["dsh-jiaodui-chemistry"]["root"] / "tools" / relative).read_bytes()
         if first != second:

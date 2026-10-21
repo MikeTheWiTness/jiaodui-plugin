@@ -7,6 +7,7 @@
   "main": "tools/index.js",
   "exports": {
     ".": "./tools/index.js",
+    "./preset-filter": "./tools/preset-filter.js",
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./locale/*.json": "./locale/*.json",

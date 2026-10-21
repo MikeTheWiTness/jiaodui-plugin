@@ -477,3 +477,47 @@ console.log(JSON.stringify(attempts));
     for platform in ("darwin", "win32"):
         expected.extend((str(runtime_launchers[platform]), str(dev_launchers[platform]), "jiaodui"))
     assert json.loads(result.stdout.strip()) == expected
+
+
+def test_preset_filter_hides_internal_presets():
+    """子 preset 仍可解析，但不再出现在 UI 的 preset roster 里。"""
+    if not NODE or not Path(NODE).is_file():
+        if os.environ.get("CI"):
+            pytest.fail("CI 必须安装 Node 并执行插件行为测试")
+        pytest.skip("本地缺少 Node")
+    script = r'''
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const root = process.env.TEST_ROOT;
+const modules = await Promise.all(['dsh-jiaodui', 'dsh-jiaodui-chemistry'].map((pkg) =>
+  import(pathToFileURL(join(root, 'packages', pkg, 'tools', 'preset-filter.js')).href)));
+class Registry {
+  async remoteExportList() {
+    return { presets: [
+      { id: 'jiaodui', name: '校对' },
+      { id: 'jiaodui-unit', name: '子' },
+      { id: 'jiaodui-chemistry', name: '化学' },
+      { id: 'jiaodui-chemistry-unit', name: '子2' },
+      { id: 'other-unit', name: '用户自定义', isDefault: true },
+    ] };
+  }
+  async readDocument(id) { return { id }; }
+}
+const service = new Registry();
+const ctx = { get(name) { assert.equal(name, 'agentPresets'); return service; } };
+for (const mod of modules) mod.apply(ctx);
+const roster = await service.remoteExportList();
+assert.deepEqual(roster.presets.map((preset) => preset.id),
+  ['jiaodui', 'jiaodui-chemistry', 'other-unit']);
+assert.equal(roster.presets.at(-1).isDefault, true);
+assert.deepEqual(await service.readDocument('jiaodui-unit'), { id: 'jiaodui-unit' });
+const again = await service.remoteExportList();
+assert.deepEqual(again.presets.map((preset) => preset.id),
+  ['jiaodui', 'jiaodui-chemistry', 'other-unit']);
+'''
+    result = subprocess.run(
+        [NODE, "--input-type=module", "-e", script],
+        cwd=ROOT, env={**os.environ, "TEST_ROOT": str(ROOT)},
+        capture_output=True, text=True, encoding="utf-8", timeout=15)
+    assert result.returncode == 0, result.stderr
