@@ -12,6 +12,7 @@ SKILL.md 当单个文本块返回，所以入口必须留在阈值内；命令�
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
@@ -40,6 +41,8 @@ FOREIGN_SUBJECT_TERMS = {
 
 # 入口≤7850 Unicode码点；后续分支净增≤0，预留宿主8192阈值余量。
 SKILL_ENTRY_MAX_CHARS = 7850
+# v3 切换不增加入口体积；新增协议细节只进入操作手册。
+SKILL_ENTRY_V3_BASELINE = {"jiaodui": 7689, "jiaodui-chemistry": 7745}
 
 # 曾被文档漏记、必须出现在 skill 文档（入口或 references）里的实参
 MUST_BE_DOCUMENTED = (
@@ -102,12 +105,13 @@ def test_skill_documents_parameters_that_had_drifted(skill: str):
 
 @pytest.mark.parametrize("skill", sorted(SKILLS))
 def test_skill_entry_stays_within_pruner_char_budget(skill: str):
-    """入口正文必须 ≤ 7850 码点，为宿主修剪阈值预留余量。"""
+    """入口不超过 v3 切换前基线，且为宿主 8192 修剪阈值预留余量。"""
     for root in SKILLS[skill]:
         entry = (root / "SKILL.md").read_text(encoding="utf-8")
         length = len(entry)
-        assert length <= SKILL_ENTRY_MAX_CHARS, (
-            f"{root.relative_to(ROOT)}/SKILL.md 为 {length} 码点，超过入口预算 {SKILL_ENTRY_MAX_CHARS}；"
+        budget = min(SKILL_ENTRY_MAX_CHARS, SKILL_ENTRY_V3_BASELINE[skill])
+        assert length <= budget, (
+            f"{root.relative_to(ROOT)}/SKILL.md 为 {length} 码点，超过入口预算 {budget}；"
             "细节请移入 references/operation-manual.md"
         )
 
@@ -208,6 +212,52 @@ def test_new_layout_v1_manual_legacy_is_not_registered_as_complete(skill: str, r
     assert "legacy_manual" in manual and "历史布局继续兼容" in manual
     assert "legacy_manual" in contract and "下游拒绝消费" in contract
     assert "不登记本轮完成" in failures and "旧布局保持兼容" in failures
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_normal_submission_documents_v3_and_explicit_v2_compatibility(skill: str):
+    """正常示例直接提交原文修订，定位与手填版本仅属于显式 v2 兼容。"""
+    docs = _skill_docs(skill)
+    manual = docs["references/operation-manual.md"]
+    normal, compatibility = manual.split("## 显式 v2 兼容", 1)
+    examples = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", normal, re.S)]
+    proposal = next(item for item in examples if item.get("schema_version") == 3)
+    assert set(proposal) == {"schema_version", "corrections", "unit_evidence", "self_check"}
+    assert set(proposal["corrections"][0]) >= {
+        "id", "old_text", "new_text", "reason", "category", "severity", "evidence_ids",
+    }
+    assert set(proposal["unit_evidence"]) == {"assumptions", "symbols", "images", "calculations"}
+    assert "jiaodui_unit_locate" not in normal
+    assert "expected_snapshot_sha256" in normal
+    assert "context_before" in normal and "context_after" in normal and "occurrence" in normal
+    assert "unit-locate" in compatibility and "expected_original" in compatibility
+    assert "--bind-current" in compatibility and "schema_version=2" in compatibility
+    assert "v3" in docs["SKILL.md"]
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_documents_incremental_revision_and_finite_recovery(skill: str):
+    """返修用当前基础版本和修订 ID；证据继承、自查与重复诊断停止均有说明。"""
+    docs = _skill_docs(skill)
+    manual = docs["references/operation-manual.md"]
+    examples = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", manual, re.S)]
+    delta = next(item for item in examples if "base_proposal_revision" in item)
+    assert delta["schema_version"] == 3
+    assert set(delta["withdrawn"][0]) == {"id", "reason"}
+    assert "corrections" in delta and "self_check" in delta
+    assert "unit_evidence" not in delta  # 示例演示省略继承，不能误导为传空对象。
+    assert "--with-proposal" in manual and "with_proposal" in manual
+    assert "省略则继承" in manual and "整体替换" in manual
+    assert "每次重新提交" in manual and "self_check" in manual
+    assert "重复诊断仍无法解决" in manual and "停止该单元" in manual
+    assert "不为凑“无问题”丢弃发现" in manual
+    failures = docs["references/failure-modes.md"]
+    assert "base_proposal_revision" in failures and "重读当前 snapshot" in failures
+    assert "按它 +1 提交" not in failures
+    contract = docs["references/report-contract.md"]
+    assert "schema v3" in contract and "落盘仍为 v2" in contract
+    assert "submission_v3" in contract and "不是草稿或历史" in contract
+    assert "父代理 `unit-review`" in contract and "verify-report" in contract
 
 
 def _unknown_documented_commands(text: str) -> set[str]:

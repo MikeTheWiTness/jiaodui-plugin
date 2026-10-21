@@ -50,57 +50,32 @@ jiaodui status <paper_dir> --json
 
 ## 单元身份和提交
 
-- 首轮证据分开保存 assumptions（g、计时原点、方向、近似条件）、symbols、images（真实读取与图文归属）、calculations（本单元计算工具调用ID及结果）。无适用图片/公式时显式记not_applicable及原因；无问题也保留核验依据。
-- 提交前自查问题真实性、修改语义、关联覆盖、范围和严重度；每项引用真实证据ID。含修改时通过五项检查，无修改时使用no_issue_review。
+正常入口提交 schema v3 原文修订：先读单元、真实读图和按需实算，再交「原文、改为、原因、证据」。父代理只派路径和身份，单元子代理自行读取，模型不写报告正文。
 
-父代理读取拆分结果中的 `task_id`、`unit_ids` 后派发单元。单元子代理不收源文正文；先取单元snapshot，再按需分页读取源文和图片实际读取清单。
+1. `jiaodui_unit_snapshot` 获取 `snapshot_sha256`、源文/图片/数据/报告摘要和当前轮次信息。返修时传 `with_proposal: true`（CLI：`jiaodui unit-snapshot --task-id T --unit-id U --with-proposal --json`），返回的 `proposal` 为当前 `proposal_revision` 与精简 `corrections` 列表（id、old_text、new_text、reason、category、severity）；没有可继承的当前提案时（未提交、上一轮或未登记数据）为 `null`。
+2. `jiaodui_unit_read` 使用 task/unit ID 分页读取源文，图片路径取自同一份实际读取清单；单次最多2000行，后续页递增 `start_line`。清单的 `read_paths` 是按正文顺序去重的实际读取路径，读图时逐字复制，**不要自行拼接或增删目录层级**。通用 DSH `read` 读取参考文件时每次 `limit` 同样不超过 2000；需要更多行时按实际返回范围递增 `offset`，不要把被截页误当成全文。
+3. 用真实 `read_image` 逐图核对可读内容及图文归属；按学科规范调用 `jiaodui_calc_<operation>` 实算，计算时绑定本单元 `task_id` / `unit_id`，保留返回的 `call_id`。首轮 `unit_evidence` 分为 assumptions（假设和核验依据）、symbols、images、calculations；无问题也保留核验依据。
+4. `jiaodui_unit_submit` 的外层给 `task_id`、`unit_id`、`expected_snapshot_sha256` 和下述 `proposal`。身份、源文摘要、提案版本由 core 绑定，`summary` 按有效修订最高严重度推导，空集为“无问题”，模型不用填写。`preview: true`（CLI `unit-submit --preview`）可整包预检；正式提交会从不可变源文生成全文报告，编译为 v2 后走既有图片/calc 证据校验与 `verify-report`，通过后仍须父代理复核。
 
-1. `jiaodui_unit_snapshot` 获取 `snapshot_sha256`、源文/图片/数据/报告摘要、`run_id` 和 `next_proposal_revision`。
-2. `jiaodui_unit_read` 使用task/unit ID分页读取源文，图片路径取自同一份实际读取清单；单次最多2000行，后续页递增 `start_line`。清单的 `read_paths` 是按正文顺序去重的实际读取路径，读图时逐字复制，**不要自行拼接或增删目录层级**。通用 DSH `read` 读取参考文件时每次 `limit` 同样不超过 2000；需要更多行时按实际返回范围递增 `offset`，不要把被截页误当成全文。
-3. `jiaodui_unit_locate` 按短语取得候选 `location_id`、`match_index`、精确 Unicode 区间和安全范围。重复命中必须选定具体位置；源文版本变化后旧ID失效。
-4. `jiaodui_unit_submit` 提交schema v2建议对象和步骤1的snapshot hash。**原生插件透传 `--bind-current`，由 core 在锁内绑定 task/unit/run 身份、源文/body hash 和下一个 `proposal_revision`；CLI 可同样使用该选项，并且仍须提交 `expected_snapshot_sha256`。这 6 个字段可省略；显式给出而与当前值冲突会返回 `proposal-binding-conflict`，不会静默覆盖。下方为不使用绑定时的完整 schema。**工具从不可变源文生成全文报告，复核verify、图片和版本后再登记；过期版本拒绝写入。`preview: true` 只做预览。
-
-建议对象字段：
+### 完整提案
 
 ```json
 {
-  "schema_version": 2,
-  "task_id": "材料task_id",
-  "unit_id": "单元unit_id",
-  "run_id": "当前轮次ID",
-  "source_sha256": "当前源文SHA-256",
-  "body_sha256": "当前正文SHA-256",
-  "proposal_revision": 1,
-  "summary": "一般问题",
+  "schema_version": 3,
   "corrections": [{
     "id": "c1",
-    "location_id": "unit-locate返回的ID",
-    "expected_original": "木板",
-    "replacement": "木块",
-    "reason": "对象名称与上下文定义不一致。",
+    "old_text": "甲",
+    "new_text": "乙",
+    "reason": "此处指代应与题干中同一对象的名称一致。",
     "category": "term",
     "severity": "一般问题",
     "evidence_ids": ["e1"]
   }],
-  "evidence": {
-    "assumptions": [{"id": "e1", "text": "依据摘要", "source_locations": []}],
+  "unit_evidence": {
+    "assumptions": [{"id": "e1", "text": "已核对题干对象定义及前后指代。", "source_locations": []}],
     "symbols": [],
-    "images": [{
-      "id": "img1",
-      "reference_index": 1,
-      "original_path": "unit-locate/inspect-images 给出的原图绝对路径",
-      "actual_read_path": "同一份清单里的实际读取路径（透明图用白底副本）",
-      "position": {"line": 3, "column": 1},
-      "readable": true,
-      "semantic": "图上看到了什么（含关键坐标/方向/标注）",
-      "verdict": "与题干和解析是否一致"
-    }],
-    "calculations": [{
-      "id": "k1",
-      "call_id": "calc 返回的 call_id（必须带 --task-id/--unit-id 调用）",
-      "expression": "逐字抄调用时传入的参数，含空格",
-      "result": "逐字抄返回的 result.result（dimensional 返回对象，不是布尔）"
-    }]
+    "images": {"status": "not_applicable", "reason": "本单元源文没有图片引用。"},
+    "calculations": {"status": "not_applicable", "reason": "本次对象指代核验不涉及计算。"}
   },
   "self_check": {
     "status": "passed",
@@ -110,22 +85,61 @@ jiaodui status <paper_dir> --json
 }
 ```
 
-提交字段的四条硬规则（都由回放实测踩出来，报错现在会逐项点名）：
+- 每条修订必须有单元内唯一 `id`、`old_text`、`new_text`、`reason`、`category`、`severity`、`evidence_ids`。原文从单元逐字复制；`new_text` 为空表示删除，不能做零宽插入或纯图片替换。
+- `evidence_ids` 只引用单元级证据；还可给该修订附可选 `evidence` 数组，条目 `kind` 为 `assumption` / `calculation` / `image`，其余字段沿用对应证据项。局部证据由 core 关联本修订，不必把其 ID 重填进 `evidence_ids`；仅使用局部证据时后者可为 `[]`。所有修订与证据 ID 避免重名。
+- 原文重复时才补可选 `context_before`、`context_after` 或从 1 开始的 `occurrence` 消歧。找不到、不能唯一定位、切断公式/加粗或有效修订重叠时，按提交诊断修正，不猜位置、不改源文。优先逐字精确定位，归一化只沿用 core 已有的受限规则。
+- 无问题提交 `corrections: []`，保留 `unit_evidence`，`self_check.checks` 改为 `["no_issue_review"]`；不能通过删掉真实发现来凑空集。
 
-- **`expected_original` 逐字复制 `unit-locate` 返回的 `original` 整段**：`location_id` 已绑定源文摘要，命中的区间就是原文字段，不接受只截取子串。要改的只是区间内的片段时，先把 `unit-locate` 的 `phrase` 收敛到该整段，再整段写入 `replacement`；报错会同时给出「实际命中的原文」与「你写的值」。
-- **`calculations[].result` 抄 `result.result` 的原生 JSON 值**：数字就是数字（写 `8.0` 而不是 `"8.0"`），`dimensional`、以及 `formula` 多解时的 `{"ambiguous": true, "solutions": [...]}` 都整体照抄，不要手打摘要，也不要只挑某一个根当唯一答案。多参数调用没有唯一 `expression`——`equality` 用 `expression_a`/`expression_b`、`formula` 用 `formula`/`solve_for`、`vector_ops` 用 `vector_operation`（如 `dot`）：挑**其中一个**参数的原样值，不要用 `==` 或函数调用式拼接；要两条证据就分条记录两次核验。
-- **工具顶层必须给 `task_id` / `unit_id`**：用于定位当前单元；`--bind-current` 模式下 proposal 内的 6 个身份与版本字段由 core 填入，不要求模型重复填写。未使用绑定时 proposal 仍须完整身份。
-- **`self_check.checks` 只接受五个字面量** `real_issue` / `replacement_semantics` / `related_coverage` / `scope_and_uncertainty` / `severity`（无问题单元为 `["no_issue_review"]`），**不要加冒号说明后缀**；缺项、字段位置错误、`evidence.assumptions`/`symbols`/`images`/`calculations` 的形态问题，报错都会指明第几项缺哪个字段或给出实际形状。
+### 证据和自查
 
-`images` / `calculations` 只有两种形态：**证据数组**，或确实不适用时写 `{"status": "not_applicable", "reason": "<原因>"}`——写成其它对象会被拒绝并回报实际形状。`calculations` 的 `expression` / `result` 必须与记录逐字一致：空白差异、只抄对象的一部分、或引用上一轮/另一份源文的 `call_id` 都会绑定失败，且报错会指明是哪一条不满足，并列出该调用所有可逐字填写的参数取值。`unit_id` 对不上时 `not_found` 的 `details` 会给出该材料的完整 `known_units` 映射与 `suggestion`，照着逐字重取即可，不要重试同一串 ID。
+- `unit_evidence` 必须含 `assumptions`、`symbols`、`images`、`calculations` 四键。assumptions 至少有一条真实假设/核验依据；symbols 无内容写 `[]`。images / calculations 只有“证据数组”或确实不适用的 `{"status":"not_applicable","reason":"<原因>"}` 两种形态。
+- 有图时单元级 images 必须覆盖全部正文引用：每项给 `id`、`reference_index`、`readable: true`、`semantic`（关键坐标/方向/标注等实际所见）、`verdict`（图文是否一致）。路径和位置由 core 从当前清单回填；真实读图不能省略。局部 `kind: "image"` 只补该修订的观察，不能替代单元级图片覆盖。
+- calculations 每项给 `id`、`call_id`、`expression`、`result`。**`result` 抄 `result.result` 的原生 JSON 值**：数字写 `8.0` 而非 `"8.0"`；`dimensional` 对象与 `formula` 多解对象整体照抄，不手打摘要或擅选唯一根。多参数调用的 `expression` 复制其中一个参数的原样值（含空白）：`equality` 用 `expression_a`/`expression_b`、`formula` 用 `formula`/`solve_for`、`vector_ops` 用 `vector_operation`；不要用 `==` 或函数调用式拼接。引用上一轮或另一份源文的调用会被拒绝。
+- `self_check.status` 为 `passed`、`unresolved` 为 `[]`。含有效修订时 `checks` 必须覆盖五个字面量 `real_issue` / `replacement_semantics` / `related_coverage` / `scope_and_uncertainty` / `severity`，不要加冒号说明后缀。检查的是本次提交后全部有效修订，不只新增项。
+- `unit_id` 不存在时按 `not_found.details.known_units` 与 `suggestion` 重取，不重试同一串 ID；证据形状和 calc 绑定错误按实际诊断逐项修正。
 
-无问题单元提交空 `corrections`、`summary: "无问题"` 和必要的证据对象。竖线与标记括号由 v2 转义无损承载（ADR 0006），不再因此拒绝提交；`_校对数据.json` 的 `marked_text` 保持报告字面（带转义），`corrections` 是反转义后的内容。旧 Markdown 报告仍可由 `verify-report` / `parse-report` 兼容读取；`repair-report` 仍只服务旧报告修复。
+### 增量返修
+
+先重取带 `with_proposal` 的当前 snapshot；`base_proposal_revision` 必须是当前同轮、同输入的已提交版本。下例撤回 c1 并新增 c2，未列出的旧修订继续保留：
+
+```json
+{
+  "schema_version": 3,
+  "base_proposal_revision": 1,
+  "withdrawn": [{"id": "c1", "reason": "收敛修改范围，保留完整对象名称。"}],
+  "corrections": [{
+    "id": "c2",
+    "old_text": "甲物体",
+    "new_text": "乙物体",
+    "reason": "此处应沿用题干中同一对象的完整名称。",
+    "category": "term",
+    "severity": "一般问题",
+    "evidence_ids": ["e1"]
+  }],
+  "self_check": {
+    "status": "passed",
+    "checks": ["real_issue", "replacement_semantics", "related_coverage", "scope_and_uncertainty", "severity"],
+    "unresolved": []
+  }
+}
+```
+
+- `withdrawn` 是 `[{id, reason}]`，每次撤回需解释原因；`corrections` 只放新增修订。改一条就是撤回旧 ID 并新增 ID，不重抄全部提案，不复用旧 ID。
+- `unit_evidence` 省略则继承，给出则整体替换；不要用 `{}` 表示继承。撤回修订的局部证据随之移除，沿用继承证据修剪；共享证据和单元图片覆盖保留。修剪后若缺必要单元依据，须补齐再提交。
+- **每次重新提交 `self_check`**；撤回后没有有效修订时用 `no_issue_review`。外层仍提交最新 `expected_snapshot_sha256`；基础版本或 snapshot 过期即重读当前 snapshot，不手工递增版本、不自行合并冲突。
+- 定位/结构诊断沿用宿主有限重试和现有恢复预算，不新增持久定位失败计数。只修有依据的原文、消歧或修订范围；**重复诊断仍无法解决即停止该单元**，按失败契约留痕并回报，不为凑“无问题”丢弃发现。
+
+## 显式 v2 兼容
+
+只有明确使用旧提案时调用 `jiaodui_unit_submit_v2`；CLI `unit-submit` 仍按 `schema_version=2` / 3 分派，schema 可用 `jiaodui unit-schema --schema-version 2`（正常入口用 `--schema-version 3`）查看。v2 的 correction 使用 `location_id`、`expected_original`、`replacement`，顶层为 `evidence` 与 `summary`；先用 `unit-locate` 取得位置，`expected_original` 必须逐字复制其 `original` 整段，不能截子串。
+
+v2 外层仍需 `task_id` / `unit_id` / `expected_snapshot_sha256`。插件透传 `--bind-current`，CLI 可显式使用：core 在锁内绑定 task/unit/run 身份、source/body hash 和下一个 `proposal_revision`；显式冲突拒绝。不绑定时须按完整 v2 schema 填齐身份版本。兼容提交继续经过证据、图片、verify 和父复核，不作为定位失败的旁路。落盘仍为 v2，竖线与标记括号由程序转义无损承载（ADR 0006）；旧 Markdown 报告继续由 verify/parse/repair 显式兼容。
 
 ## 恢复与事件
 
 执行模式记录后，以 `unit-recovery` 按 `unit_id`、**`--attempt-id`（幂等键）**、**失败错误码**与稳定 failure payload 消费有限预算：DSH 原生工具传 `failure: {message, details?}`，core 派生 SHA-256；CLI 对应 `--failure-json`。旧 CLI 仍可提供真实 `--fingerprint`，但禁止全零/全一占位值。`--attempt-id` 必须与该单元 `unit-event` 登记的 attempt_id 一致；每个新的恢复动作创建新 attempt 并先登记对应事件，同一 attempt 只可原样重放。可选 `--expected-run-id` 作 CAS 防护（与当前轮次不一致即 `run-changed`）。恢复类别由错误码确定性决定，不由模型自选——`usage`/`not_found`/`unsupported`/`*stale` → `call_correction`；`calc_failed`/`calc-evidence-invalid`/`proposal.calc-*` → `calc_representation`；`verify_failed`/`contract`/`out-of-contract`/`syntax.*`/`integrity.*`/`original.*`/`locate.*`/`report.*` → `report_repair`；`images.*`/`images-invalid` → `image_schema_fix`；`env`/`host-timeout`/`host-crash`/`parent-technical-timeout` → `technical_redispatch`。未分类的错误码会被拒绝并给出相近的已知码；用户取消与权限拒绝**不可恢复、不消耗预算**；只有父代理判断类的 `targeted_review` 可以不带错误码。**错误驱动的恢复请省略 `category`**——类别由错误码确定性派生；若填了但与映射不一致会整次被拒，`details.expected_category` 直接给出应填值（第 12 讲实测父代理批量填错类别，4 次调用全部作废后重发）。指纹非法返回 `invalid-attempt-fingerprint`。**`image_schema_fix` 会连带扣一次 `call_correction`**（图片格式修复本身要占一次调用）；任一被扣类别余额不足即整次拒绝，返回 `allowed=false` 并给出 `blocked_category`，**不做部分扣费**。成功时返回 `charged` 列出本次实际扣减的类别。换 agent 或更换指纹不能重置同轮计数。`unit-event` 只记录阶段、attempt、agent（**要求当前轮次已确认执行模式**，没有授权就不留下工作痕迹），可选 `--expected-run-id` 作 CAS 防护；**它不接受任何取消参数**。取消走独立工具 `jiaodui_unit_cancel`（`initiator` 与 `reason` 必须配对，`--revoke` 可撤销技术性取消），同样要求当前轮次已授权，且**只由父代理或宿主调用——子代理 preset 的 `toolset: unit` 不含该工具，单元子代理无法自证取消**。user取消不重派、**不可撤销**；parent技术取消不得记作user取消，撤销后即可继续补位。只读的 `jiaodui_unit_progress`（`jiaodui unit-progress --task-id T [--unit-id U] [--stale-after-seconds N]`）汇总每单元的 `phase` / `attempt_id` / `agent_id` / `last_event_at` / `age_seconds` / `event_count` / `in_flight` / `stale` / `cancelled`：终态为 `registered` / `parent_reviewed` / `deliverable`；被显式取消的单元不再算在途。父代理据此判超时与补位，不靠沉默时间猜崩溃；该命令只读，不改材料记录。补位与停止判据用只读的 `jiaodui_dispatch_plan`（`jiaodui dispatch-plan --task-id T [--window N]`，默认窗口 8）：返回 `dispatch`（下一批可派发单元，已排除在途单... (line truncated to 2000 chars)
 
-## 父代理复核（第7项实验分支）
+## 父代理复核
 
 技术提交后，先生成整卷报告通读全文和证据。`unreviewed`列出待审单元，但全文可读；complete仍false。以提交后的unit-snapshot hash调用 `jiaodui_unit_review`，decision为accepted或needs_revision；退回需issue，接受绑定当前输入、建议、报告与自查hash。任何版本变化后重新复核。Word只允许当前版本已accepted。
 

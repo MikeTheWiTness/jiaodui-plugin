@@ -27,7 +27,7 @@ ADR-0001 决策「一个入口，按需加载学科规范，共用调度与交�
 | 学科配置 | `jiaodui/data/subjects/高中物理.json` | `jiaodui/data/subjects/高中化学.json` | 机器读，运行时唯一来源 |
 | preset 名称 / order | 校对 / 10 | 校对（高中化学）/ 11 | 插件管理页与 preset 选择器里的区分点 |
 
-**共用而非复制**：Python CLI（含 `calc chemistry_balance` / `stoichiometry`）、`tools/index.js`、`tools/calc-schemas.json`、`tools/proposal-schema.json` 在学科之间完全一致。两个包的 `tools/` 逐字节一致，由 `tests/test_dsh_plugin_package.py::test_native_tool_modules_do_not_fork_between_bundles` 守着：工具是学科无关的，出现分叉就是隐患。
+**共用而非复制**：Python CLI（含 `calc chemistry_balance` / `stoichiometry`）、`tools/index.js`、`tools/calc-schemas.json`、`tools/proposal-schema.json`、`tools/proposal-schema-v3.json`、`tools/proposal-schema-bind-current.json` 在学科之间完全一致。两个包的 `tools/` 逐字节一致，由 `tests/test_dsh_plugin_package.py::test_native_tool_modules_do_not_fork_between_bundles` 守着：工具是学科无关的，出现分叉就是隐患。
 
 ### 2.2 学科入口不得夹带其他学科口径
 

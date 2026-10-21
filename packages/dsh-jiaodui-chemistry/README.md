@@ -6,7 +6,7 @@
 本包是 `dsh-jiaodui`（高中物理）的**独立配套包**，不是它的子集或分支：
 
 - **独立安装 / 启用 / 卸载**：两个 bundle 的行 id、preset id、skill 名、locale 标题都不同，可同时装进同一个 profile，互不覆盖。
-- **共用同一份确定性内核**：Python CLI（含 `calc chemistry_balance` / `stoichiometry`）与 `tools/` 里的学科无关原生工具模块。工具模块与 `calc-schemas.json` / `proposal-schema.json` 在 两包内逐字节一致，由 `tests/test_dsh_plugin_package.py` 守着，防止隐性分叉。
+- **共用同一份确定性内核**：Python CLI（含 `calc chemistry_balance` / `stoichiometry`）与 `tools/` 里的学科无关原生工具模块。工具模块与 `tools/` 下的 schema（`calc-schemas.json`、`proposal-schema.json`、`proposal-schema-v3.json`、`proposal-schema-bind-current.json`）在两包内逐字节一致，由 `tests/test_dsh_plugin_package.py` 守着，防止隐性分叉。
 - **学科差异只落在三处**：本包 `skills/jiaodui-chemistry/`（人读规范）、`jiaodui/data/subjects/高中化学.json`（机器读配置）、本包 patch 里的 preset persona。
 - **CLI 永远是退路**：插件坏了，bash 里照样能跑 `jiaodui`。
 
@@ -18,6 +18,8 @@
       tools/index.js         宿主适配：注册校对及强类型工具（与物理包字节一致）
       tools/calc-schemas.json 由计算核心元数据导出的 operation schema
       tools/proposal-schema.json 结构化建议 schema v2
+      tools/proposal-schema-v3.json 正常原文修订 schema v3（core 导出）
+      tools/proposal-schema-bind-current.json core 绑定的精简 v2 schema（unit_submit_v2 直接读）
       skills/jiaodui-chemistry/ 随包 skill（仓库 skills/jiaodui-chemistry 的副本，测试守一致性）
         assets/             固定读图探针（SVG 源、透明 PNG、预合成白底 PNG）
       locale/{zh,en}.json    插件管理页的标题与描述
@@ -33,6 +35,8 @@
   - `tool-subagent` 用 `agentPreset: jiaodui-chemistry-unit` 选择子 preset；DSH 0.2.1 起不再使用 `toolFilter`/`persona`，`backgroundMode` 也已移除。化学的 `jiaodui_calc_chemistry_balance` / `jiaodui_calc_stoichiometry` 在 `calc_*` 内一并放行；子代理仍拿不到 `jiaodui_unit_cancel`。
 - **原生工具 `jiaodui`**：旧命令 `args: string[]` 透传入口继续保留，作为兼容 CLI 退路。
 - **结构化工具**：按 task/unit ID 提供位置查询、版本快照、建议提交、恢复预算和阶段/取消事件；每个 calc operation 使用独立 JSON Schema。
+
+正常 `jiaodui_unit_submit` 使用 v3 原文修订，core 自动定位并编译 v2；`jiaodui_unit_snapshot` 的 `with_proposal` 用于按 ID 增量撤回/新增。`jiaodui_unit_submit_v2` 保留显式旧提案入口。两入口共用原有提交、证据、verify 与父复核闸门，插件只透传。
 
 ## 安装
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -57,3 +58,23 @@ def test_chemistry_subject_config_passes_schema_validation():
     config = load_subject_config(_PKG_SUBJECTS / "高中化学.json")
     assert config["subject"] == "高中化学"
     assert "calc" in config["tools"]
+
+
+def test_core_modules_are_tracked():
+    """wheel 从工作树构建；干净 clone 只含 git ls-files，未跟踪模块会漏进发布。"""
+    if not (REPO / ".git").exists():
+        pytest.skip("不在 git 工作树中，跳过跟踪性检查")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "-z", "--", "jiaodui"],
+            capture_output=True, check=True)
+    except FileNotFoundError:
+        pytest.skip("未安装 git，跳过跟踪性检查")
+    tracked = {item.decode("utf-8") for item in result.stdout.split(b"\0") if item}
+    present = {
+        path.relative_to(REPO).as_posix()
+        for path in (REPO / "jiaodui").rglob("*.py")
+        if "__pycache__" not in path.parts
+    }
+    missing = sorted(present - tracked)
+    assert not missing, f"jiaodui 存在未跟踪模块，发布 wheel 会缺：{missing}"

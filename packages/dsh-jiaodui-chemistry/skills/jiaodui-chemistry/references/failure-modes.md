@@ -2,7 +2,9 @@
 
 `verify-report` 的每个失败都带结构化 code 与位置。报告机械修复最多 3 次并记 `report_repair`；工具参数/schema 修正最多 2 次并记 `call_correction`；计算输入的表示/传输机械修正最多 2 次并记 `calc_representation`；定向复核最多 2 次并记 `targeted_review`；技术性重派最多 1 次并记 `technical_redispatch`。read_image schema 修正同一次 attempt 同时扣 `image_schema_fix` 与 `call_correction`，两类各计一次、不能合并成 4 次额度。六类预算都按单元、按 run 独立；入口提问不占这些预算。新 run 未显式执行 `execution-policy` 前，unit-event/recovery 必须拒绝写入。event/recovery 使用唯一 `attempt_id`；同一 recovery 重放必须是同载荷，新的恢复动作应创建新 attempt 并先登记对应 `unit-event`，不得复用已用于其他错误码/类别的 attempt。DSH recovery 工具传稳定 `failure` 对象（只含错误 `message`/`details`），由 core 派生 SHA-256；不要手算、填全零/全一占位指纹，也不要把 call_id/时间戳放进指纹输入。旧 CLI 调用仍可传真实 SHA-256 `fingerprint`。实质性判断争议在 interactive 模式询问用户。用户取消与权限拒绝只记录、不恢复、不重派。
 
-## 一、格式型失败（最常见）
+正常 v3 提交由程序生成报告；以下报告正文的补写/编辑仅服务旧 Markdown 兼容路径。正常路径通过修改结构化提案返修，不让子 agent 手写报告，也不因定位失败切回旧链。
+
+## 一、格式型失败（旧 Markdown 兼容）
 | 症状（code / 现象） | 自修动作 |
 | --- | --- |
 | 缺严重度行（`severity.missing`），或写成裸「无」「没问题」 | 在报告头部补总结行，取值只允许 `无问题 / 轻微问题 / 一般问题 / 严重错误`，且与正文标记情况一致 |
@@ -63,13 +65,13 @@
 | 读图报 `cannot read ... not found`（自行拼接目录层级） | 路径只能逐字复制 `jiaodui_unit_read` / `inspect-images` 清单里的 `read_paths`（或 `actual_read_path`），不得自行拼接、增删 `units/<材料名>/` 层级或改名。这是抄写错误，记 `call_correction`；不属 schema 错误，**不扣 `image_schema_fix`** |
 | 工具报 `not_found`：unit_id 不存在 | 读 `details.known_units`（本材料全部「单元名 → unit_id」）与 `details.suggestion` 逐字重取；不要用同一串重试。unit_id 长且易抄错，优先从 snapshot / unit-read 返回值复制 |
 | 工具报 `not_found`：`task_id` 显示为字面量 `undefined` | 这不是「材料不存在」，而是**顶层参数漏传 `task_id`/`unit_id`**（结构化工具把缺省值序列化成了该字符串）；报错会明确写出这一点。补齐顶层 `task_id` 与 `unit_id` 后重试，不要换材料或换命令 |
-| `location.original-mismatch`（位置原文与 `expected_original` 不一致） | `expected_original` 必须**逐字复制 `unit-locate` 返回的 `original` 整段**——`location_id` 已绑定源文摘要，命中的区间就是原文字段，只截取子串必然失败。报错会同时给出「实际命中的原文」与「你写的值」，照抄前者即可。要改区间内的片段时，先把 `unit-locate` 的 `phrase` 收敛到该整段、整段写 `replacement`。机械修正记 `call_correction` |
-| `proposal.schema`（建议字段缺失或包含未支持字段） | 报错会点名**缺哪个键、多哪个键**并列出允许的顶层字段，照着补齐或删除即可，不要整体重写。插件 schema 会预检嵌套 evidence 结构；`evidence_ids` 与真实证据项、`location_id` 与当前源文的关联由 core 复核。被拒后只修报错字段，再用当前 snapshot 提交 |
+| 显式 v2：`location.original-mismatch`（位置原文与 `expected_original` 不一致） | `expected_original` 必须**逐字复制 `unit-locate` 返回的 `original` 整段**——`location_id` 已绑定源文摘要，命中的区间就是原文字段，只截取子串必然失败。报错会同时给出「实际命中的原文」与「你写的值」，照抄前者即可。要改区间内的片段时，先把 `unit-locate` 的 `phrase` 收敛到该整段、整段写 `replacement`。机械修正记 `call_correction` |
+| `proposal.schema`（建议字段缺失或包含未支持字段） | 按报错的缺键/多键逐项修正。正常 v3 使用 `old_text` / `new_text`、`unit_evidence` 与 `self_check`；`evidence_ids` 指向真实单元证据，局部 `evidence` 是带 `kind` 的数组。定位与证据关联由 core 复核；不补 v2 的 `location_id` 或身份字段来绕过失败 |
 | `attempt-id-conflict` | 当前 `attempt_id` 已绑定另一指纹/类别；不要更改该 attempt 后重试。为这次新恢复创建新的 `attempt_id`，并先用同一 ID 记录对应 `unit-event`；同一失败的原样重放才复用旧 ID |
 | `invalid-attempt-fingerprint` / `invalid-attempt-failure` | DSH recovery 用 `failure: {message, details?}`，core 派生指纹；复制稳定错误内容，不填全零/全一或手算摘要。若走旧 CLI 参数，必须提供真实 64 位小写 SHA-256 |
 | `proposal.self-check-incomplete` / `proposal.self-check` | `checks` 只接受五个字面量 `real_issue` / `replacement_semantics` / `related_coverage` / `scope_and_uncertainty` / `severity`（无问题单元为 `["no_issue_review"]`），**不要写 `real_issue: 说明…` 这类带后缀的串**；报错会逐项列出缺哪些。`status` 必须是 `passed`、`unresolved` 必须为空数组 |
 | `proposal.evidence-assumptions` / `-symbols` / `-calculation(s)` / `-images` | 报错会指明**第几项、缺哪个字段或实际收到的形状**，按位置补齐该字段即可，不要重写整份 evidence。`symbols` 无内容时写 `[]`（不是省略或 `null`）；`images`/`calculations` 只有「证据数组」或 `{"status":"not_applicable","reason":"…"}` 两种形态 |
-| `proposal-revision-stale` | 报错会给出**当前已登记 revision** 与应填值；按它 +1 提交，不要试探性加减。被拒的建议不写盘，重放同一 revision 也仍会拒绝 |
+| 基础版本 / snapshot 过期（含 `proposal-revision-stale`） | 重读当前 snapshot，返修用 `with_proposal: true` 查看当前版本和修订 ID；`base_proposal_revision` 必须匹配当前同轮同输入提案，外层换成最新 `expected_snapshot_sha256`。不手工递增版本、不自行合并冲突；每次重提 `self_check`。显式 v2 按当前 schema 和绑定模式处理，被拒的提案不写盘 |
 | `execution-policy-required`（当前轮次尚未确认执行模式） | 授权**绑定轮次**：`convert`/`split`/`slice` 开新轮次（含 `--rerun`/`--replace-units`）后旧授权立即失效。这不是单元失败、不消耗恢复预算；由**父代理**重新运行 `jiaodui execution-policy <材料_dir> --mode … --origin … --work-root <W> --json` 后再重派该单元。`split` 开了新轮次时会在 `warnings` 里显式提示 |
 | 读图参数错误（missing required property / invalid arguments） | 核对当前工具 schema，DSH read_image 使用 `file_path` 而非 `path`；每次图像 schema 修正同时扣 `image_schema_fix` 和 `call_correction` 各 1 次，总共最多 2 次尝试，不可将两个额度相加。用户取消或权限拒绝立即停止 |
 | 固定读图探针失败 | 按 vision-probe.md 检查随包 assets/vision-probe.png 的绝对路径与实际图像返回；不依赖教材图片，不重复建立随机探针目录。有限修正后仍无法确认视觉能力 → 按 D14 停止校对 |
@@ -81,11 +83,19 @@
 | 技术性崩溃 / 超时 / 限流 | 由主 agent **自动重派 1 次**（仅一次）；重派仍失败 → 写 `_校对失败.md` 标失败 |
 | 自修 3 轮仍不过 | 写 `_校对失败.md`：失败原因 + 最后一次 verify 完整输出 + 最后一次产物摘要；保留报告供排查，不进下游 |
 
+### v3 定位和增量返修失败
+
+- `anchor.not-found`：重读源文，逐字复制 `old_text`；不凭印象改源文。
+- `anchor.ambiguous` / `anchor.occurrence-out-of-range`：按候选上下文补 `context_before` / `context_after` 或从 1 开始的 `occurrence`，不静默取首处。
+- `anchor.structure-cut` 或有效修订重叠：使修订覆盖完整公式/加粗结构，或收敛到互不重叠的范围；只改实际需要改的内容。
+- 撤回/替换只提交 `withdrawn: [{id, reason}]` 与新增 `corrections`；`unit_evidence` 省略继承、给出整体替换；修剪后缺依据须补齐，不能删掉图片覆盖。
+- 使用 `unit-submit --preview` 整包预检，沿用六类恢复预算；重复诊断仍无法解决或预算耗尽即停止该单元，保留发现及完整错误，不为凑“无问题”丢弃发现。
+
 ## 六、失败留痕格式（`_校对失败.md`）
 1. 首行：失败原因（简短一行，`status` 会取首行做展示）。
 2. 最后一次 `verify-report` 的**完整输出**。
 3. 最后一次产物摘要（标记数、严重度、错误数）。
-修复后重新校验通过即转「已完成」；该失败记录仅作历史，不再决定当前状态。
+修复后重新校验、父复核并登记通过才转「已完成」；该失败记录仅作历史，不再决定当前状态。
 
 **机检（仅告警，不是闸门）**：`status --json` 的 `failure_note_problems` 会指出结构问题，code 为
 `failure_note.empty`（没有首行原因）/ `failure_note.no-verify-output`（未见 verify 输出，也未写「未执行」）/
@@ -135,7 +145,7 @@ const results = settled.map((item) => {
 }
 ```
 
-- 报告使用 `write` 工具的 `file_path` 与 `content` 参数。覆盖已有报告前先读取该文件；局部修改前读取当前版本，以唯一、逐字一致的旧文本调用 `edit`。修订应限于报告，不改变单元源文。
+- 仅在显式旧 Markdown 人工兼容中，报告使用 `write` 工具的 `file_path` 与 `content` 参数。覆盖已有报告前先读取该文件；局部修改前读取当前版本，以唯一、逐字一致的旧文本调用 `edit`。修订应限于报告，不改变单元源文。
 - JSON 中 LaTeX 反斜杠写成双反斜杠，真实换行用 `\n`；美元符号、反引号和 `${…}` 都只是文本，不作为程序执行。不手动叠加 JS/TS 字符串转义，也不把最终文件的换行写成字面量反斜杠 n。以下是对具名 `write` 工具的参数示例，只示范文本传输，不是可交付的校对报告：
 
 ```json

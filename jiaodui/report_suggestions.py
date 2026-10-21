@@ -25,6 +25,8 @@ def extract_body(source_text: str) -> str:
     CAS 契约、`body_sha256` 语义与所有调用方都不必动。
     """
     return source_text
+
+
 _IDENTITY_BINDING_KEYS = {
     "task_id", "unit_id", "run_id", "source_sha256", "body_sha256", "proposal_revision",
 }
@@ -39,8 +41,13 @@ _CORRECTION_KEYS = {
 }
 
 
-def proposal_json_schema(*, bind_current: bool = False) -> dict[str, Any]:
-    """导出完整或由 core 绑定六个身份字段的结构化建议 schema。"""
+def proposal_json_schema(*, bind_current: bool = False, schema_version: int = 2) -> dict[str, Any]:
+    """导出兼容 v2 或原文修订 v3 的结构化建议 schema。"""
+    if schema_version == 3:
+        from .proposal_v3 import proposal_json_schema as v3_schema
+        return v3_schema()
+    if schema_version != 2:
+        raise ValueError("schema_version 只支持 2 或 3")
     correction = {
         "type": "object", "additionalProperties": False,
         "required": sorted(_CORRECTION_KEYS),

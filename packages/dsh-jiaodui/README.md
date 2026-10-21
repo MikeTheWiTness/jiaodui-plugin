@@ -17,6 +17,8 @@
       tools/index.js         宿主适配：注册校对及强类型工具
       tools/calc-schemas.json 由计算核心元数据导出的operation schema
       tools/proposal-schema.json 结构化建议schema v2
+      tools/proposal-schema-v3.json 正常原文修订 schema v3（core 导出）
+      tools/proposal-schema-bind-current.json core 绑定的精简 v2 schema（unit_submit_v2 直接读）
       skills/jiaodui/        随包 skill（仓库 skills/jiaodui 的副本，测试守一致性）
         assets/             固定读图探针（SVG 源、透明 PNG、预合成白底 PNG）
       locale/{zh,en}.json    插件管理页的标题与描述
@@ -32,6 +34,8 @@
   实际宿主已确认支持 `includeDefaultRoots:false`、`agentPreset` 子 preset 选择和 `maxDepth:1`；本 preset 已配置这些字段。子 preset 先不挂 `agent-instructions`：单元规则以 SKILL 与派发 prompt 为准，避免仓库开发约定占子代理上下文。静态结构检查不替代新会话父子实际 catalog 验收，也不将开发会话 CLI 回放当作安装验证。
 - **原生工具 `jiaodui`**：旧命令 `args: string[]` 透传入口继续保留，作为兼容CLI退路。
 - **结构化工具**：按task/unit ID提供位置查询、版本快照、建议提交、恢复预算和阶段/取消事件；14个计算operation使用独立JSON Schema。calc schema从Python核心 `OPERATIONS` 元数据生成，打包测试核对副本漂移。
+
+正常 `jiaodui_unit_submit` 使用 v3 原文修订，core 自动定位并编译 v2；`jiaodui_unit_snapshot` 的 `with_proposal` 用于按 ID 增量撤回/新增。`jiaodui_unit_submit_v2` 保留显式旧提案入口。两入口共用原有提交、证据、verify 与父复核闸门，插件只透传。
 
 ## 安装
 

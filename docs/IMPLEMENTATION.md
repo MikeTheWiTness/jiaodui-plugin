@@ -1,6 +1,8 @@
 # 实施清单
 
-2026-10-19 [revise 校对工具升级计划](PLAN-revise-tool-upgrade.md) 的P0已获用户验收；必要前置c098568与P0基线8758b6b已从 `integration/revise-p0-baseline` 快进合入本地main，未推送。来源和复验见[基线整理记录](<REVISE-P0-BASELINE.md>)。原实施顺序为先完成共同前置 P0（锚点、证据分层、交互诊断、旧报告旁路保护、core 绑定与入口瘦身），通过出口后再进行真实宿主三臂实验 P0.5；实验决定无状态 v3（A）或持久工作日志（B），此前不编写 A/B 生产代码。报告仍编译为 schema v2，经过原有闸门与父复核；具体实施和验收证据见计划状态，不预设持久工作日志。
+2026-10-20：无状态 v3 core、完整/增量提交、快照精简列表、CLI schema、双插件正常 v3 / 显式 v2 工具及两学科 skill 已接通。报告与 proposal 保持 v2，现有数据文件的可选 submission_v3 仅保存当前有效分层输入；不增加草稿/历史文件、不迁移历史。完整 CI **1473 passed，4 subtests passed**；同一份 12 题经 CLI/core 新入口完成真实校对和当前父复核，最终 4 处修订、Word 4 标记=4 锚点、缺失/图片缺失均 0。三单元实际使用 v3 增量返修。原生插件宿主调用未测，完整边界与结果见 [v3 验证记录](REVISE-V3-VERIFICATION-2026-10-20.md)。
+
+2026-10-19 revise 升级按用户要求收敛为单一路线：P0 已验收，直接实现无状态 v3 提案（方案 A），复用既有 v2 落盘、verify 和父复核；支持原文锚点与按 ID 撤回/新增。不再执行 P0.5 三臂实验或 B 持久工作日志，不改 DSH profile、不采集 token 选路。开发中只跑相关契约回归，交付前一次完整 CI 口径，加新入口的一次 12 题真实验收（最多 6 子 agent 并行）。已有旧 v2 的 12 题结果不冒充新入口验收。具体范围及取消项见 [简化升级计划](PLAN-revise-tool-upgrade.md)。
 
 2026-10-10 第7章结构化报告主链并入 `main`：子 agent 提交 schema v2 结构化提案、报告由程序从源文生成、父代理复核版本绑定后登记成为**正常交付路径**；旧 Markdown 报告链降级为只读兼容。合并按 [UNIFY-PLAN](UNIFY-PLAN.md) §6 裁决 28 处冲突、修掉 19 处静默变更（main 回退时整份删除的 `source_index`/`unit_reader`/`calc/schema`/`calc-schemas.json` 与 v2 守门已取回），并在映射 main 测试时采纳六处 main 更优语义（`report.ok`、`unit-event` 轮次 CAS 与授权要求、指纹错误码、幂等重放不写盘、被拒 attempt 不写盘）。根仓双口径 **1158 passed / 0 failed**、冻结语料 4/4、P6 材料真机 `build-report`/`build-docx` 通过（标记 2 = 锚点 2 + 兜底 0）；桌面 profile 已切回仓库根包，实验 worktree 与集成分支已删除。见 [PROCESS_REWORK](PROCESS_REWORK.md) 的 Phase 2/3 记录。
 

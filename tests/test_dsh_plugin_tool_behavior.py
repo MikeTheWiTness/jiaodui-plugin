@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which("node")
 
 
-def test_native_tool_behavior(tmp_path):
+@pytest.mark.parametrize("package", ["dsh-jiaodui", "dsh-jiaodui-chemistry"])
+def test_native_tool_behavior(tmp_path, package):
     if not NODE or not Path(NODE).is_file():
         if os.environ.get("CI"):
             pytest.fail("CI 必须安装 Node 并执行插件行为测试")
@@ -24,7 +25,9 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { apply, inject } from './packages/dsh-jiaodui/tools/index.js';
+import { pathToFileURL } from 'node:url';
+const packageRoot=process.argv[3];
+const { apply, inject } = await import(pathToFileURL(join(packageRoot,'tools','index.js')).href);
 let tool;
 const registered=new Map();
 const requests=[];
@@ -76,31 +79,38 @@ assert.deepEqual(locate.parameters.required,['task_id','unit_id','phrase']);
 const unitRead=registered.get('jiaodui_unit_read');
 assert.equal(unitRead.parameters.properties.max_lines.maximum,2000);
 const submit=registered.get('jiaodui_unit_submit');
-const bundledBindSchema=JSON.parse(readFileSync('./packages/dsh-jiaodui/tools/proposal-schema-bind-current.json','utf8')).schema;
-assert.deepEqual(submit.parameters.properties.proposal,bundledBindSchema);
+assert.equal(submit.parameters.properties.proposal.properties.schema_version.const,3);
+const bundledV3Schema=JSON.parse(readFileSync(join(packageRoot,'tools','proposal-schema-v3.json'),'utf8')).schema;
+assert.deepEqual(submit.parameters.properties.proposal,bundledV3Schema);
 assert.equal(submit.parameters.properties.proposal.type,'object');
-assert.equal(submit.parameters.properties.proposal.properties.schema_version.const,2);
-assert.equal(submit.parameters.properties.proposal.properties.evidence.additionalProperties,false);
-assert.deepEqual(submit.parameters.properties.proposal.properties.evidence.required,['assumptions','symbols','images','calculations']);
-assert.deepEqual(submit.parameters.properties.proposal.properties.corrections.items.required,
-  ['category','evidence_ids','expected_original','id','location_id','reason','replacement','severity']);
+const correctionProperties=submit.parameters.properties.proposal.properties.corrections.items.properties;
+for (const key of ['id','old_text','new_text','reason','category','severity','evidence_ids']) {
+  assert.ok(key in correctionProperties,`v3 缺少 ${key}`);
+}
+for (const key of ['location_id','expected_original','replacement']) assert.ok(!(key in correctionProperties));
 assert.equal(submit.parameters.properties.proposal.properties.corrections.items.additionalProperties,false);
+const submitV2=registered.get('jiaodui_unit_submit_v2');
+const bundledBindSchema=JSON.parse(readFileSync(join(packageRoot,'tools','proposal-schema-bind-current.json'),'utf8')).schema;
+assert.deepEqual(submitV2.parameters.properties.proposal,bundledBindSchema);
+assert.equal(submitV2.parameters.properties.proposal.properties.schema_version.const,2);
 for (const key of ['task_id','unit_id','run_id','source_sha256','body_sha256','proposal_revision']) {
   assert.ok(!submit.parameters.properties.proposal.required.includes(key),`${key}应由snapshot自动绑定`);
 }
 const calc=registered.get('jiaodui_calc_evaluate');
 assert.equal(calc.parameters.additionalProperties,false);
 assert.deepEqual(calc.parameters.required,['expression']);
-assert.deepEqual(registered.get('jiaodui_task_prepare').parameters.properties.subject.enum,['高中物理','高中化学']);
-for (const name of [...registered.keys()].filter(name=>name.startsWith('jiaodui_calc_'))) {
-  assert.deepEqual(registered.get(name).parameters.properties.subject.enum,['高中物理','高中化学']);
-}
 const realSpawn=ctx.subprocess.spawn;
 ctx.subprocess.spawn=spec=>{requests.push(spec);return {done:Promise.resolve({exitCode:0}),collected:{stdout:{readFrom(){return {text:'{}',lossy:false}}},stderr:{readFrom(){return {text:'',lossy:false}}}}}};
 await locate.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),phrase:'木板'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-locate','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--phrase','木板']);
 await unitRead.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),start_line:1,max_lines:2000},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-read','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--start-line','1','--max-lines','2000']);
+const snapshot=registered.get('jiaodui_unit_snapshot');
+assert.equal(snapshot.parameters.properties.with_proposal.type,'boolean');
+await snapshot.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32)},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-snapshot','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32)]);
+await snapshot.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),with_proposal:true},exec);
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','unit-snapshot','--task-id','a'.repeat(32),'--unit-id','b'.repeat(32),'--with-proposal']);
 await calc.execute({expression:'1+2'},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','calc','evaluate','--param','expression="1+2"']);
 let submittedProposal;
@@ -118,7 +128,7 @@ ctx.subprocess.spawn=spec=>{
 };
 const longEvidenceText='题'.repeat(200000);
 const beforeSubmitRequestCount=requests.length;
-await submit.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),expected_snapshot_sha256:'d'.repeat(64),proposal:{schema_version:2,summary:'无问题',corrections:[],evidence:{assumptions:[{id:'e1',text:longEvidenceText,source_locations:[]}],symbols:[],images:{status:'not_applicable',reason:'无图'},calculations:{status:'not_applicable',reason:'无计算'}},self_check:{status:'passed',checks:['no_issue_review'],unresolved:[]}}},exec);
+await submitV2.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),expected_snapshot_sha256:'d'.repeat(64),proposal:{schema_version:2,summary:'无问题',corrections:[],evidence:{assumptions:[{id:'e1',text:longEvidenceText,source_locations:[]}],symbols:[],images:{status:'not_applicable',reason:'无图'},calculations:{status:'not_applicable',reason:'无计算'}},self_check:{status:'passed',checks:['no_issue_review'],unresolved:[]}}},exec);
 assert.equal(requests.length,beforeSubmitRequestCount+1,'提交不应读取 unit-snapshot');
 assert.ok(requests.at(-1).argv.includes('--bind-current'));
 for (const key of ['task_id','unit_id','run_id','source_sha256','body_sha256','proposal_revision']) assert.ok(!(key in submittedProposal));
@@ -128,6 +138,25 @@ assert.ok(requests.at(-1).argv.includes('--proposal-json-file'));
 assert.ok(!requests.at(-1).argv.includes('--proposal-json'));
 assert.equal(existsSync(proposalTempPath),false,'提交结束后须清理临时提案文件');
 assert.equal(requests.at(-1).argv[requests.at(-1).argv.indexOf('--expected-snapshot-sha256')+1],'d'.repeat(64));
+const jsonStubForSubmit=ctx.subprocess.spawn;
+const v3Proposal={schema_version:3,corrections:[{id:'c1',old_text:'原文',new_text:'',reason:'删除重复',category:'文字',severity:'轻微问题',evidence_ids:['e1']}],unit_evidence:{assumptions:[{id:'e1',text:longEvidenceText,source_locations:[]}],symbols:[],images:{status:'not_applicable',reason:'无图'},calculations:{status:'not_applicable',reason:'无计算'}},self_check:{status:'passed',checks:['real_issue','related_coverage','replacement_semantics','scope_and_uncertainty','severity'],unresolved:[]}};
+const beforeV3RequestCount=requests.length;
+await submit.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),expected_snapshot_sha256:'d'.repeat(64),proposal:v3Proposal,preview:true},exec);
+assert.equal(requests.length,beforeV3RequestCount+1,'v3 提交不应预读 snapshot');
+assert.deepEqual(submittedProposal,v3Proposal,'v3 提案必须原样送给 core');
+assert.ok(!requests.at(-1).argv.includes('--bind-current'),'v3 由 core 自动绑定');
+assert.ok(requests.at(-1).argv.includes('--preview'));
+assert.ok(requests.at(-1).argv.join('').length<8192,'v3 提案内容不得进入 argv');
+assert.equal(existsSync(proposalTempPath),false);
+const revisionProposal={schema_version:3,base_proposal_revision:1,withdrawn:[{id:'c1',reason:'复核后撤回'}],corrections:[],self_check:{status:'passed',checks:['no_issue_review'],unresolved:[]}};
+await submit.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),expected_snapshot_sha256:'e'.repeat(64),proposal:revisionProposal},exec);
+assert.deepEqual(submittedProposal,revisionProposal,'增量返修由 core 处理，壳不得合并或补证据');
+assert.equal(requests.at(-1).argv[requests.at(-1).argv.indexOf('--expected-snapshot-sha256')+1],'e'.repeat(64));
+assert.ok(!requests.at(-1).argv.includes('--preview'));
+ctx.subprocess.spawn=spec=>{proposalTempPath=spec.argv[spec.argv.indexOf('--proposal-json-file')+1];assert.ok(existsSync(proposalTempPath));throw new Error('spawn failed')};
+await assert.rejects(()=>submit.execute({task_id:'a'.repeat(32),unit_id:'b'.repeat(32),expected_snapshot_sha256:'d'.repeat(64),proposal:v3Proposal},exec),/spawn failed/);
+assert.equal(existsSync(proposalTempPath),false,'启动失败也必须清理临时提案');
+ctx.subprocess.spawn=jsonStubForSubmit;
 // P4：父侧准备/交付工具必须结构化传参，且只拼真实存在的子命令与参数
 const prepare=registered.get('jiaodui_task_prepare');
 assert.equal(prepare.parameters.additionalProperties,false);
@@ -241,8 +270,78 @@ await assert.rejects(()=>tool.execute({args:['--help']},exec),/独立 Python 3.1
 assert.deepEqual(attempted,['/explicit/missing/jiaodui']);
 '''
     result = subprocess.run([NODE, "--input-type=module", "-e", script, str(tmp_path.resolve()),
-                             json.dumps(list(CATEGORIES))],
+                             json.dumps(list(CATEGORIES)), str(ROOT / "packages" / package)],
                             cwd=ROOT, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("package", ["dsh-jiaodui", "dsh-jiaodui-chemistry"])
+def test_subject_schema_accepts_chemistry_and_forwards_subject(tmp_path, package):
+    """注册后的 schema 与 argv 均须接受化学，不能仅调用 execute 绕过枚举检查。"""
+    if not NODE or not Path(NODE).is_file():
+        if os.environ.get("CI"):
+            pytest.fail("CI 必须安装 Node 并执行插件行为测试")
+        pytest.skip("本地缺少 Node")
+    script = r'''
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [packageRoot, cwd] = process.argv.slice(1);
+const { apply } = await import(pathToFileURL(join(packageRoot, 'tools', 'index.js')).href);
+const requests = [];
+const registered = new Map();
+const services = {
+  tools: { register(tool) { registered.set(tool.name, tool); } },
+  subprocess: {
+    async resolveExecutable() { return process.execPath; },
+    spawn(spec) {
+      requests.push(spec);
+      return { done: Promise.resolve({exitCode: 0}), collected: {
+        stdout: { readFrom() { return {text: '{}', lossy: false}; } },
+        stderr: { readFrom() { return {text: '', lossy: false}; } },
+      }};
+    },
+  },
+};
+const ctx = { ...services, get(name) { return services[name]; } };
+const exec = {agent: {session: {header: {cwd}}}};
+function checkSubject(tool) {
+  const subject = tool.parameters.properties.subject;
+  assert.deepEqual(subject.enum, ['高中物理', '高中化学'], tool.name + ' 必须接受两门已落地学科');
+  assert.ok(!('default' in subject), tool.name + ' 不得隐式指定学科');
+}
+apply(ctx, {command: 'node'});
+const prepare = registered.get('jiaodui_task_prepare');
+checkSubject(prepare);
+await prepare.execute({operation: 'split', path: '/tmp/chem_raw.md', subject: '高中化学', mode: 'lecture'}, exec);
+assert.deepEqual(requests.at(-1).argv.slice(1), ['--json', 'split', '/tmp/chem_raw.md', '--subject', '高中化学', '--mode', 'lecture']);
+await prepare.execute({operation: 'split', path: '/tmp/chem_raw.md', mode: 'lecture'}, exec);
+assert.deepEqual(requests.at(-1).argv.slice(1), ['--json', 'split', '/tmp/chem_raw.md', '--mode', 'lecture']);
+for (const toolset of ['full', 'unit']) {
+  registered.clear();
+  apply(ctx, {command: 'node', toolset});
+  for (const tool of registered.values()) {
+    if (tool.name.startsWith('jiaodui_calc_')) checkSubject(tool);
+  }
+  for (const [operation, params, expectedParams] of [
+    ['evaluate', {expression: '1+2'}, ['--param', 'expression="1+2"']],
+    ['chemistry_balance', {equation: 'H2 + O2 -> H2O'}, ['--param', 'equation="H2 + O2 -> H2O"']],
+    ['stoichiometry', {balanced_equation: '2H2 + O2 -> 2H2O', known_substance: 'H2', known_mass: 4, target_substance: 'H2O'},
+      ['--param', 'balanced_equation="2H2 + O2 -> 2H2O"', '--param', 'known_substance="H2"', '--param', 'known_mass=4', '--param', 'target_substance="H2O"']],
+  ]) {
+    const tool = registered.get('jiaodui_calc_' + operation);
+    assert.ok(tool, operation + ' 必须可用');
+    for (const key of Object.keys(params)) assert.ok(key in tool.parameters.properties, operation + ' 不接受 ' + key);
+    for (const key of tool.parameters.required) assert.ok(key in params, operation + ' 缺少 ' + key);
+    await tool.execute({subject: '高中化学', ...params}, exec);
+    assert.deepEqual(requests.at(-1).argv.slice(1), ['--json', 'calc', operation, '--subject', '高中化学', ...expectedParams]);
+  }
+}
+'''
+    result = subprocess.run(
+        [NODE, "--input-type=module", "-e", script,
+         str(ROOT / "packages" / package), str(tmp_path.resolve())],
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert result.returncode == 0, result.stderr
 
 
@@ -269,6 +368,7 @@ const expected = [
   'jiaodui_unit_read',
   'jiaodui_unit_snapshot',
   'jiaodui_unit_submit',
+  'jiaodui_unit_submit_v2',
   'jiaodui_unit_recovery',
   'jiaodui_unit_event',
   ...operations.map(operation => `jiaodui_calc_${operation}`),
@@ -297,7 +397,7 @@ def test_repo_venv_cli_discovery_is_platform_specific(tmp_path):
     package_root = repository_root / "packages" / "dsh-jiaodui"
     tools_dir = package_root / "tools"
     tools_dir.mkdir(parents=True)
-    for filename in ("index.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json"):
+    for filename in ("index.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json", "proposal-schema-v3.json"):
         shutil.copy2(ROOT / "packages" / "dsh-jiaodui" / "tools" / filename,
                      tools_dir / filename)
     shutil.copy2(ROOT / "packages" / "dsh-jiaodui" / "package.json",

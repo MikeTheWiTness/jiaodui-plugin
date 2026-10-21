@@ -90,6 +90,9 @@ const CALC_SCHEMAS = JSON.parse(
   readFileSync(fileURLToPath(new URL('./calc-schemas.json', import.meta.url)), 'utf8'),
 ).operations
 const SUBMIT_PROPOSAL_SCHEMA = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./proposal-schema-v3.json', import.meta.url)), 'utf8'),
+).schema
+const SUBMIT_PROPOSAL_V2_SCHEMA = JSON.parse(
   readFileSync(fileURLToPath(new URL('./proposal-schema-bind-current.json', import.meta.url)), 'utf8'),
 ).schema
 
@@ -102,6 +105,7 @@ const UNIT_TOOL_NAMES = new Set([
   'jiaodui_unit_read',
   'jiaodui_unit_snapshot',
   'jiaodui_unit_submit',
+  'jiaodui_unit_submit_v2',
   'jiaodui_unit_recovery',
   'jiaodui_unit_event',
 ])
@@ -113,6 +117,9 @@ function toolVisible(config) {
   if (toolset !== 'unit') throw new Error("jiaodui: toolset 只能是 'full' 或 'unit'")
   return name => UNIT_TOOL_NAMES.has(name) || name.startsWith('jiaodui_calc_')
 }
+
+/** 共用工具 schema 接受两门已落地学科；具体配置与工具权限仍由 core 校验。 */
+const SUPPORTED_SUBJECTS = ['高中物理', '高中化学']
 
 const TASK_PREPARE_OPERATIONS = ['check-env', 'inspect-source', 'convert', 'split',
   'precheck-split', 'status', 'execution-policy']
@@ -206,39 +213,52 @@ function registerStructuredTools(ctx, cliTool, visible) {
   register('jiaodui_unit_snapshot', '读取单元源文、轮次、报告和数据摘要组成的提交版本。', {
     type: 'object', additionalProperties: false,
     required: ['task_id', 'unit_id'],
-    properties: { task_id: { type: 'string' }, unit_id: { type: 'string' } },
-  }, args => ['unit-snapshot', '--task-id', args.task_id, '--unit-id', args.unit_id])
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' },
+      with_proposal: { type: 'boolean', default: false, description: '附带当前提案修订的精简列表，供返修引用 ID。' },
+    },
+  }, args => ['unit-snapshot', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    ...(args.with_proposal ? ['--with-proposal'] : [])])
 
-  if (visible('jiaodui_unit_submit')) ctx.tools.register({
-    name: 'jiaodui_unit_submit',
-    description: '校验结构化修改建议并生成、登记完整报告。core 在材料锁内绑定 task/unit/run 身份、源文摘要与 proposal_revision；expected_snapshot_sha256 仍执行 CAS 保护。',
-    parameters: {
-      type: 'object', additionalProperties: false,
-      required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
-      properties: {
-        task_id: { type: 'string' }, unit_id: { type: 'string' },
-        proposal: SUBMIT_PROPOSAL_SCHEMA,
-        expected_snapshot_sha256: { type: 'string' },
-        preview: { type: 'boolean', default: false },
+  const registerSubmit = (name, description, proposalSchema, flags) => {
+    if (!visible(name)) return
+    ctx.tools.register({
+      name,
+      description,
+      parameters: {
+        type: 'object', additionalProperties: false,
+        required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
+        properties: {
+          task_id: { type: 'string' }, unit_id: { type: 'string' },
+          proposal: proposalSchema,
+          expected_snapshot_sha256: { type: 'string' },
+          preview: { type: 'boolean', default: false },
+        },
       },
-    },
-    output: cliTool.output,
-    timeoutMs: cliTool.timeoutMs,
-    isConcurrencySafe: cliTool.isConcurrencySafe,
-    async execute(args, exec) {
-      const tempDir = mkdtempSync(join(tmpdir(), 'jiaodui-submit-'))
-      const proposalPath = join(tempDir, 'proposal.json')
-      try {
-        writeFileSync(proposalPath, JSON.stringify(args.proposal), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-        return await cliTool.execute({ args: ['--json', 'unit-submit', '--task-id', args.task_id,
-          '--unit-id', args.unit_id, '--proposal-json-file', proposalPath,
-          '--expected-snapshot-sha256', args.expected_snapshot_sha256,
-          '--bind-current', ...(args.preview ? ['--preview'] : [])] }, exec)
-      } finally {
-        rmSync(tempDir, { recursive: true, force: true })
-      }
-    },
-  })
+      output: cliTool.output,
+      timeoutMs: cliTool.timeoutMs,
+      isConcurrencySafe: cliTool.isConcurrencySafe,
+      async execute(args, exec) {
+        const tempDir = mkdtempSync(join(tmpdir(), 'jiaodui-submit-'))
+        const proposalPath = join(tempDir, 'proposal.json')
+        try {
+          writeFileSync(proposalPath, JSON.stringify(args.proposal), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+          return await cliTool.execute({ args: ['--json', 'unit-submit', '--task-id', args.task_id,
+            '--unit-id', args.unit_id, '--proposal-json-file', proposalPath,
+            '--expected-snapshot-sha256', args.expected_snapshot_sha256,
+            ...flags, ...(args.preview ? ['--preview'] : [])] }, exec)
+        } finally {
+          rmSync(tempDir, { recursive: true, force: true })
+        }
+      },
+    })
+  }
+  registerSubmit('jiaodui_unit_submit',
+    '提交 v3 原文修订（old_text/new_text/reason/evidence），由 core 定位、绑定身份并生成、登记完整报告；返修可引用 base_proposal_revision 并撤回旧 ID。expected_snapshot_sha256 执行 CAS 保护。',
+    SUBMIT_PROPOSAL_SCHEMA, [])
+  registerSubmit('jiaodui_unit_submit_v2',
+    '显式兼容 v2 结构化提案；core 在材料锁内绑定身份与源文摘要，expected_snapshot_sha256 执行 CAS 保护。正常提案请用 jiaodui_unit_submit。',
+    SUBMIT_PROPOSAL_V2_SCHEMA, ['--bind-current'])
 
   register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定，fingerprint由core从failure.message/details派生。每个新的恢复动作使用新的attempt_id，并先用相同ID记录unit-event。', {
     type: 'object', additionalProperties: false,
@@ -384,7 +404,7 @@ function registerStructuredTools(ctx, cliTool, visible) {
         description: '仅 inspect-source：有限正文节选字符数（默认不返回正文）。',
       },
       material_name: { type: 'string', description: '仅 convert：材料目录名。' },
-      subject: { type: 'string', enum: ['高中物理', '高中化学'], description: '仅 split：学科。' },
+      subject: { type: 'string', enum: SUPPORTED_SUBJECTS, description: '仅 split：学科。' },
       mode: { type: 'string', enum: ['lecture', 'exam'], description: '仅 convert/split：材料类型。' },
       mode_origin: {
         type: 'string', enum: ['user', 'structure', 'preview', 'confirmed'],
@@ -470,7 +490,7 @@ function registerStructuredTools(ctx, cliTool, visible) {
   for (const [operation, schema] of Object.entries(CALC_SCHEMAS)) {
     const parameters = structuredClone(schema.parameters)
     parameters.properties.subject = {
-      type: 'string', enum: ['高中物理', '高中化学'], description: '可选学科，用于校验学科工具白名单并注入学科量表。',
+      type: 'string', enum: SUPPORTED_SUBJECTS, description: '可选学科，用于校验学科工具白名单并注入物理量表。',
     }
     parameters.properties.task_id = { type: 'string', description: '记录calc证据时的材料task_id。' }
     parameters.properties.unit_id = { type: 'string', description: '记录calc证据时的单元unit_id。' }

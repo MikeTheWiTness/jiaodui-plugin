@@ -232,7 +232,8 @@ def cmd_unit_read(args: argparse.Namespace) -> int:
 def cmd_unit_snapshot(args: argparse.Namespace) -> int:
     from .unit_delivery import read_unit_snapshot
 
-    _json_out({"ok": True, "snapshot": read_unit_snapshot(args.task_id, args.unit_id)})
+    _json_out({"ok": True, "snapshot": read_unit_snapshot(args.task_id, args.unit_id,
+                                                         with_proposal=args.with_proposal)})
     return ExitCode.OK
 
 
@@ -314,7 +315,7 @@ def cmd_unit_cancel(args: argparse.Namespace) -> int:
 def cmd_unit_schema(args: argparse.Namespace) -> int:
     from .report_suggestions import proposal_json_schema
 
-    _json_out({"schema": proposal_json_schema(bind_current=args.bind_current)})
+    _json_out({"schema": proposal_json_schema(bind_current=args.bind_current, schema_version=args.schema_version)})
     return ExitCode.OK
 
 
@@ -636,6 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("unit-snapshot", help="读取提交前的单元版本快照")
     sp.add_argument("--task-id", required=True)
     sp.add_argument("--unit-id", required=True)
+    sp.add_argument("--with-proposal", action="store_true", help="附带当前修订的精简列表供返修引用")
     sp.set_defaults(func=cmd_unit_snapshot)
 
     sp = sub.add_parser("unit-submit", help="从结构化建议生成并提交完整报告")
@@ -702,7 +704,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--expected-run-id", help="CAS 防护：与当前轮次不一致即 run-changed")
     sp.set_defaults(func=cmd_unit_cancel)
 
-    sp = sub.add_parser("unit-schema", help="输出结构化建议schema v2")
+    sp = sub.add_parser("unit-schema", help="输出结构化建议 schema v2/v3")
+    sp.add_argument("--schema-version", type=int, choices=(2, 3), default=2)
     sp.add_argument("--bind-current", action="store_true", help="导出允许 core 绑定六项身份版本字段的 schema")
     sp.set_defaults(func=cmd_unit_schema)
 

@@ -351,6 +351,19 @@ def test_bind_current_proposal_schema_bundle_matches_python_core_export(bundle: 
 
 
 @pytest.mark.parametrize("bundle", BUNDLE_IDS)
+def test_v3_proposal_schema_bundle_matches_python_core_export(bundle: str):
+    """正常插件提案完整复用 core v3 schema，CLI 版本选择不得漂移。"""
+    from jiaodui.proposal_v3 import proposal_json_schema
+
+    result = subprocess.run(
+        [sys.executable, "-m", "jiaodui", "unit-schema", "--schema-version", "3", "--json"],
+        cwd=ROOT, capture_output=True, text=True, check=True)
+    bundled = json.loads((_package_root(bundle) / "tools" / "proposal-schema-v3.json")
+                         .read_text(encoding="utf-8"))
+    assert bundled == json.loads(result.stdout) == {"schema": proposal_json_schema()}
+
+
+@pytest.mark.parametrize("bundle", BUNDLE_IDS)
 def test_native_tool_module_is_dependency_free_and_wired(bundle: str):
     source = (_package_root(bundle) / "tools" / "index.js").read_text(encoding="utf-8")
     assert "export function apply" in source
@@ -366,12 +379,65 @@ def test_native_tool_module_is_dependency_free_and_wired(bundle: str):
 def test_native_tool_modules_do_not_fork_between_bundles():
     """两个学科包的 tools/ 必须逐字节一致：工具是学科无关的，分叉意味着隐患。"""
     diffs: list[str] = []
-    for relative in ("index.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json"):
+    for relative in ("index.js", "calc-schemas.json", "proposal-schema.json", "proposal-schema-bind-current.json", "proposal-schema-v3.json"):
         first = (BUNDLES["dsh-jiaodui"]["root"] / "tools" / relative).read_bytes()
         second = (BUNDLES["dsh-jiaodui-chemistry"]["root"] / "tools" / relative).read_bytes()
         if first != second:
             diffs.append(relative)
     assert not diffs, f"两个学科包的 tools/ 已经分叉：{diffs}；请统一改动并同步复制"
+
+
+def _git_tracked(pathspec: str) -> set[str]:
+    """返回 git 索引里的路径；不在工作树（如 sdist 解包）时跳过。"""
+    if not (ROOT / ".git").exists():
+        pytest.skip("不在 git 工作树中，跳过跟踪性检查")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "ls-files", "-z", "--", pathspec],
+            capture_output=True, check=True)
+    except FileNotFoundError:
+        pytest.skip("未安装 git，跳过跟踪性检查")
+    return {item.decode("utf-8") for item in result.stdout.split(b"\0") if item}
+
+
+@pytest.mark.parametrize("bundle", BUNDLE_IDS)
+def test_bundle_tools_files_are_tracked(bundle: str):
+    """发布脚本只拷 git ls-files；tools/ 里的未跟踪文件会让安装包缺文件。"""
+    tools = _package_root(bundle) / "tools"
+    tracked = _git_tracked(f"packages/{bundle}/tools")
+    present = {
+        f"packages/{bundle}/tools/{path.relative_to(tools).as_posix()}"
+        for path in tools.rglob("*")
+        if path.is_file() and not path.name.startswith(".")
+    }
+    missing = sorted(present - tracked)
+    assert not missing, f"{bundle}/tools 存在未跟踪文件，发布包会缺：{missing}"
+
+
+def _timeout_values(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "timeoutMs" and isinstance(value, int) and not isinstance(value, bool):
+                yield value
+            else:
+                yield from _timeout_values(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _timeout_values(item)
+
+
+@pytest.mark.parametrize("bundle", BUNDLE_IDS)
+def test_lock_wait_leaves_headroom_before_plugin_timeout(bundle: str):
+    """锁等待必须显著小于插件子进程超时，否则宿主先杀进程，lock-timeout 发不出去。"""
+    from jiaodui.material import MATERIAL_LOCK_TIMEOUT_SECONDS
+
+    budgets = list(_timeout_values(_load_patch(bundle)))
+    assert budgets, f"{bundle} 的 patch 未配置 timeoutMs"
+    wait_ms = MATERIAL_LOCK_TIMEOUT_SECONDS * 1000
+    headroom_ms = min(budgets) - wait_ms
+    assert headroom_ms >= 30_000, (
+        f"{bundle} 的最小 timeoutMs={min(budgets)} 与材料锁等待 {wait_ms:.0f}ms "
+        f"之间只有 {headroom_ms:.0f}ms；宿主会先中止进程，结构化 lock-timeout 无法返回")
 
 
 @pytest.mark.parametrize("bundle", BUNDLE_IDS)

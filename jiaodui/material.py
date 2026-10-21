@@ -14,6 +14,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 from .error_classification import RECOVERY_CATEGORIES, classify_error
 from .execution_policy import (attempt_decision, charge, fingerprint_failure,
@@ -26,9 +27,12 @@ from .workdir import ensure_inside, input_path, workspace_root
 
 MANIFEST = "_校对记录.json"
 LOCK_FILE = ".jiaodui.lock"
-MATERIAL_LOCK_TIMEOUT_SECONDS = 180.0
+# 必须显著小于插件默认 timeoutMs（180s）：锁等待若与宿主预算相同，宿主会先杀进程，
+# 结构化 lock-timeout 永远发不出去。test_dsh_plugin_package 守着至少 30s 余量。
+MATERIAL_LOCK_TIMEOUT_SECONDS = 120.0
 _LOCK_POLL_INTERVAL_SECONDS = 0.05
-_THREAD_LOCKS: dict[str, threading.Lock] = {}
+# 弱引用表：锁对象无人持有即可回收，避免长驻进程按材料目录无界累积。
+_THREAD_LOCKS: WeakValueDictionary[str, threading.Lock] = WeakValueDictionary()
 _THREAD_LOCKS_GUARD = threading.Lock()
 
 
@@ -465,7 +469,11 @@ def write(root: Path, data: dict) -> None:
 def _thread_lock_for(path: Path) -> threading.Lock:
     key = os.path.normcase(str(path))
     with _THREAD_LOCKS_GUARD:
-        return _THREAD_LOCKS.setdefault(key, threading.Lock())
+        lock = _THREAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _THREAD_LOCKS[key] = lock
+        return lock
 
 
 def _try_file_lock(fd: int) -> bool:
