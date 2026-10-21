@@ -74,6 +74,7 @@ ERROR_CATEGORY_EXACT: dict[str, str] = {
     # v3 提交状态错误：基础/绑定错误是调用方可修正的提交状态，沿用 proposal.* 的
     # call_correction；只有 anchor./revise. 的定位输入诊断是 interactive。
     "proposal-json-invalid": "call_correction",
+    "proposal-invalid": "call_correction",
     "proposal-base-invalid": "call_correction",
     "proposal-binding-conflict": "call_correction",
     "proposal-binding-unavailable": "call_correction",

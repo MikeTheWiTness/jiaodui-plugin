@@ -30,6 +30,7 @@ from jiaodui.workflow import convert_material
     ("identity-missing", "call_correction"),
     ("proposal.schema", "call_correction"),
     ("proposal.no-op", "call_correction"),
+    ("proposal-invalid", "call_correction"),
     ("proposal-base-invalid", "call_correction"),
     ("proposal-binding-conflict", "call_correction"),
     ("proposal-binding-unavailable", "call_correction"),
