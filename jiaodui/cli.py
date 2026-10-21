@@ -58,7 +58,8 @@ def cmd_inspect_images(args: argparse.Namespace) -> int:
 def cmd_check_env(args: argparse.Namespace) -> int:
     from .checkenv import check_env
 
-    report = check_env()
+    report = check_env(expect_schema_version=args.expect_schema_version,
+                       expect_bundle_version=args.expect_bundle_version)
     if args.json:
         _json_out(report.to_dict())
     else:
@@ -462,7 +463,10 @@ def cmd_calc(args: argparse.Namespace) -> int:
         call_id = record_calc_call(args.task_id, args.unit_id, internal, params, result)
     if not result.get("code") or not args.show_code:
         result = {k: v for k, v in result.items() if k != "code"}
-    payload = {"ok": bool(result.get("success")), "op": op, "result": result}
+    # 回显实际参与记账的参数：多参数调用（formula 的 formula+solve_for、
+    # equality 的 expression_a+expression_b）必须能逐字复制，不能凭记忆重写。
+    payload = {"ok": bool(result.get("success")), "op": op, "params": params,
+               "result": result}
     if call_id is not None:
         payload["call_id"] = call_id
     if args.json:
@@ -558,7 +562,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--work-root", help="当前工作区绝对路径（也可由宿主注入 JIAODUI_WORK_ROOT）")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sp = sub.add_parser("check-env", help="环境预检（无凭证项）")
+    sp = sub.add_parser("check-env", help="环境预检（无凭证项，含插件↔CLI契约探针）")
+    sp.add_argument("--expect-schema-version", type=int,
+                    help="插件期望的提案 schema 版本；与核心能力不一致即预检失败")
+    sp.add_argument("--expect-bundle-version",
+                    help="插件 bundle 版本；与核心版本不一致即预检失败")
     sp.set_defaults(func=cmd_check_env)
 
     sp = sub.add_parser("inspect-source", help="只读检查 Word 嵌套表格与有限正文节选")

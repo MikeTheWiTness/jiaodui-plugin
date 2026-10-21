@@ -1769,6 +1769,43 @@ class TestBuildDocxAudit:
         assert res.image_missing_count == 0
         assert res.ok is True
 
+
+def _fail_with_reason(reason):
+    def fake(body, path, **kwargs):
+        diagnostics = kwargs.get("diagnostics")
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
+            diagnostics["detail"] = "测试注入"
+        return False
+    return fake
+
+
+class TestCommentFormulaFailureAttribution:
+    """降级告警必须区分「依赖缺失」与「语法不支持」，并列出失败公式。"""
+
+    def test_dependency_missing_is_named_and_formula_listed(self, tmp_path):
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_FORMULA_COMMENT})
+        with mock.patch.object(docx_report, "latex_to_png", _fail_with_reason("dependency_missing")):
+            res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.comment_formula_dependency_missing_count >= 1
+        assert res.comment_formula_syntax_unsupported_count == 0
+        assert any("渲染依赖不可用" in w and "$E_{总}$" in w for w in res.warnings)
+        assert not any("语法不受 mathtext 支持" in w for w in res.warnings)
+
+    def test_syntax_unsupported_is_not_blamed_on_missing_dependency(self, tmp_path):
+        from jiaodui import docx_report
+
+        paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_FORMULA_COMMENT})
+        with mock.patch.object(docx_report, "latex_to_png", _fail_with_reason("syntax_unsupported")):
+            res = build_docx(str(paper), str(tmp_path / "out"), legacy_layout=True)
+        assert res.comment_formula_syntax_unsupported_count >= 1
+        assert res.comment_formula_dependency_missing_count == 0
+        assert any("语法不受 mathtext 支持" in w and "$E_{总}$" in w for w in res.warnings)
+        assert not any("渲染依赖不可用" in w for w in res.warnings)
+        assert res.ok is True
+
     def test_legacy_paper_reports_units_without_report(self, tmp_path):
         """历史布局没有清单，也要按磁盘单元目录核对：缺一份报告不能静默 ok=true。"""
         paper = _make_illustrated_paper(tmp_path, {"第1题": REPORT_WITH_MARKS})

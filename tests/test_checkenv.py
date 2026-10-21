@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jiaodui import checkenv
@@ -54,3 +56,58 @@ def test_check_env_optional_matplotlib_failure_does_not_fail_report(monkeypatch)
     mpl = [i for i in report.items if "matplotlib" in i.name]
     assert mpl and mpl[0].ok is False and mpl[0].required is False
     assert report.ok is True
+
+
+def _patch_local_env(monkeypatch):
+    monkeypatch.setattr(checkenv, "_module_state", lambda name: (True, "已安装"))
+    monkeypatch.setattr(checkenv, "_find_pandoc", lambda: "/fake/pandoc")
+    monkeypatch.setattr(checkenv, "_has_module", lambda name: False)
+
+
+def test_contract_probe_accepts_matching_plugin_expectation():
+    from jiaodui import __version__
+
+    item, contract = checkenv._contract_check(3, __version__)
+    assert item.ok is True
+    assert "期望提案 schema v3" in item.detail
+    assert contract["supported_schema_versions"] == [2, 3]
+    assert contract["problems"] == []
+    assert contract["expected_schema_version"] == 3
+
+
+def test_contract_probe_rejects_unsupported_schema_version():
+    item, contract = checkenv._contract_check(4, None)
+    assert item.ok is False
+    assert "只支持 v2、v3" in item.detail
+    assert contract["problems"]
+
+
+def test_contract_probe_rejects_bundle_version_mismatch():
+    item, contract = checkenv._contract_check(3, "9.9.9")
+    assert item.ok is False
+    assert "版本 9.9.9" in item.detail
+    assert contract["bundle_version"] == "9.9.9"
+
+
+def test_check_env_exposes_contract_item_and_verdict(monkeypatch):
+    from jiaodui import __version__
+
+    _patch_local_env(monkeypatch)
+    report = checkenv.check_env(expect_schema_version=3, expect_bundle_version=__version__)
+    contract = next(i for i in report.items if i.name.startswith("contract"))
+    assert contract.ok is True
+    assert report.contract["ok"] is True
+    assert report.ok is True
+    assert report.to_dict()["contract"]["expected_schema_version"] == 3
+
+
+def test_workspace_required_message_does_not_describe_read_only_commands_as_writes(monkeypatch):
+    from jiaodui.errors import BusinessError
+    from jiaodui.workdir import workspace_root
+
+    monkeypatch.delenv("JIAODUI_WORK_ROOT", raising=False)
+    with pytest.raises(BusinessError) as error:
+        workspace_root()
+    assert error.value.code == "workspace-required"
+    assert "写入" not in str(error.value)
+    assert "--work-root" in str(error.value)

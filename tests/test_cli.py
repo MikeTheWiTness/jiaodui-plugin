@@ -84,6 +84,18 @@ def test_unit_schema_bind_current_exports_only_six_fewer_required_fields():
     assert full["properties"] == bound["properties"]
 
 
+def test_unit_schema_exports_v3_with_core_assigned_identity():
+    """文档承诺的 --schema-version 3 必须真实可用，且不再要求模型填身份字段。"""
+    r = run("unit-schema", "--schema-version", "3", "--json")
+    assert r.returncode == 0, r.stderr
+    schema = json.loads(r.stdout)["schema"]
+    assert schema["properties"]["schema_version"]["const"] == 3
+    assert set(schema["required"]) == {"schema_version", "corrections", "self_check"}
+    corrections = schema["properties"]["corrections"]["items"]["properties"]
+    assert "old_text" in corrections and "new_text" in corrections
+    assert "location_id" not in corrections
+
+
 @pytest.mark.parametrize("preview", [False, True])
 def test_unit_submit_cli_passes_bind_current_to_core(monkeypatch, preview):
     from jiaodui import cli, unit_delivery

@@ -14,21 +14,25 @@
 - shell（bash / pwsh）只用于**观察与修复**：解 docx 看内部 XML、核对文件与摘要、跑一次性诊断脚本、定位失败根因。父 agent 有 shell，**子 agent 没有**——子 agent 只能通过 `unit-submit` 交结构化提案，这是「模型不写报告」的落点。
 - **不要在 shell 里用 `python -m jiaodui`**：editable 安装的元路径查找器排在 `PathFinder` 之后，cwd 决定导入哪条线的 core（实测：会话工作区是主仓时会读到主仓的 `jiaodui`，行为完全不同）。确需在 shell 调 CLI 时用已安装的控制台脚本 `jiaodui`；带 `--work-root` 的写入命令仍必须传对工作区。
 - shell 里的写入同样受约束：产物只落 `校对/<材料名>/`、不改源文件、失败留痕用契约文件名，不新建自由命名的 attempt / 副本。
+- **`jiaodui` 可能不在 PATH**（`which jiaodui` 为空）。bash 退路先读 `check-env` 输出里的 `runtime.cli_path`，用这个绝对路径调用；不要猜 `.venv-cli/bin/jiaodui`，也不要假定当前 shell 能直接解析 `jiaodui`。
 
 ## 入口和准备
 
-正常路径调用结构化工具 `jiaodui_task_prepare`（`operation` 取 `check-env` / `inspect-source` / `convert` / `split` / `precheck-split` / `status` / `execution-policy`），参数按名传入，不再手拼命令行。
+正常路径调用结构化工具 `jiaodui_task_prepare`（`operation` 取 `check-env` / `inspect-source` / `inspect-images` / `convert` / `split` / `precheck-split` / `status` / `execution-policy`），参数按名传入，不再手拼命令行。
 下面的 CLI 写法只在没有该工具（或需要上面没登记的参数）时作为退路：
 
 ```text
-jiaodui check-env
+jiaodui check-env [--expect-schema-version 2|3 --expect-bundle-version V]
 jiaodui inspect-source <file> [--preview-chars 0..2000] --json
+jiaodui inspect-images --unit <unit_dir> --json
 jiaodui convert <file> --mode exam|lecture [--material-name NAME] --work-root W --json
 jiaodui split <raw_md> --subject 高中化学 --mode exam|lecture [--strategy rule|manual|none] --work-root W --json
 jiaodui execution-policy <material_dir> --mode automatic|interactive --origin user|confirmed --work-root W --json
 jiaodui precheck-split <paper_dir>
 jiaodui status <paper_dir> --json
 ```
+
+`check-env` 的 `contract` 项比对插件声明的提案 schema 版本与核心实际能力；插件和 CLI 版本号相同但内容不同时也会在这里失败，**不要把它当成本地依赖检查**。`inspect-images` 按正文顺序列出图片引用与实际读取图，派发单元前先跑。
 
 `split` 可选 `--rerun` 开新轮；单元集合变更须显式 `--replace-units`，陈旧单元移入 `.superseded/<run_id>/`，只移动不删除。人工接纳现有集合用 `--adopt-units`。`convert` 另有 `--out-dir`、`--base-name`、`--mathjax`；`split` / `slice` 另有 `--base-name`、`--out-root`、`--no-clean`。材料类型来源可用 `--mode-origin` / `--mode-reason` 登记。所有选项以 `jiaodui <command> --help` 为准。
 
@@ -139,9 +143,21 @@ v2 外层仍需 `task_id` / `unit_id` / `expected_snapshot_sha256`。插件透�
 
 执行模式记录后，以 `unit-recovery` 按 `unit_id`、**`--attempt-id`（幂等键）**、**失败错误码**与稳定 failure payload 消费有限预算：DSH 原生工具传 `failure: {message, details?}`，core 派生 SHA-256；CLI 对应 `--failure-json`。旧 CLI 仍可提供真实 `--fingerprint`，但禁止全零/全一占位值。`--attempt-id` 必须与该单元 `unit-event` 登记的 attempt_id 一致；每个新的恢复动作创建新 attempt 并先登记对应事件，同一 attempt 只可原样重放。可选 `--expected-run-id` 作 CAS 防护（与当前轮次不一致即 `run-changed`）。恢复类别由错误码确定性决定，不由模型自选——`usage`/`not_found`/`unsupported`/`*stale` → `call_correction`；`calc_failed`/`calc-evidence-invalid`/`proposal.calc-*` → `calc_representation`；`verify_failed`/`contract`/`out-of-contract`/`syntax.*`/`integrity.*`/`original.*`/`locate.*`/`report.*` → `report_repair`；`images.*`/`images-invalid` → `image_schema_fix`；`env`/`host-timeout`/`host-crash`/`parent-technical-timeout` → `technical_redispatch`。未分类的错误码会被拒绝并给出相近的已知码；用户取消与权限拒绝**不可恢复、不消耗预算**；只有父代理判断类的 `targeted_review` 可以不带错误码。**错误驱动的恢复请省略 `category`**——类别由错误码确定性派生；若填了但与映射不一致会整次被拒，`details.expected_category` 直接给出应填值（第 12 讲实测父代理批量填错类别，4 次调用全部作废后重发）。指纹非法返回 `invalid-attempt-fingerprint`。**`image_schema_fix` 会连带扣一次 `call_correction`**（图片格式修复本身要占一次调用）；任一被扣类别余额不足即整次拒绝，返回 `allowed=false` 并给出 `blocked_category`，**不做部分扣费**。成功时返回 `charged` 列出本次实际扣减的类别。换 agent 或更换指纹不能重置同轮计数。`unit-event` 只记录阶段、attempt、agent（**要求当前轮次已确认执行模式**，没有授权就不留下工作痕迹），可选 `--expected-run-id` 作 CAS 防护；**它不接受任何取消参数**。取消走独立工具 `jiaodui_unit_cancel`（`initiator` 与 `reason` 必须配对，`--revoke` 可撤销技术性取消），同样要求当前轮次已授权，且**只由父代理或宿主调用——子代理 preset 的 `toolset: unit` 不含该工具，单元子代理无法自证取消**。user取消不重派、**不可撤销**；parent技术取消不得记作user取消，撤销后即可继续补位。只读的 `jiaodui_unit_progress`（`jiaodui unit-progress --task-id T [--unit-id U] [--stale-after-seconds N]`）汇总每单元的 `phase` / `attempt_id` / `agent_id` / `last_event_at` / `age_seconds` / `event_count` / `in_flight` / `stale` / `cancelled`：终态为 `registered` / `parent_reviewed` / `deliverable`；被显式取消的单元不再算在途。父代理据此判超时与补位，不靠沉默时间猜崩溃；该命令只读，不改材料记录。补位与停止判据用只读的 `jiaodui_dispatch_plan`（`jiaodui dispatch-plan --task-id T [--window N]`，默认窗口 8）：返回 `dispatch`（下一批可派发单元，已排除在途单... (line truncated to 2000 chars)
 
+派发后必须为每个在途单元记一次 `unit-event`（至少覆盖 `prepared` / `read`）；否则 `dispatch-plan` 的 `in_flight` 只能靠父代理内存推断，滑动窗口与补位判据会失真。
+
 ## 父代理复核
 
-技术提交后，先生成整卷报告通读全文和证据。`unreviewed`列出待审单元，但全文可读；complete仍false。以提交后的unit-snapshot hash调用 `jiaodui_unit_review`，decision为accepted或needs_revision；退回需issue，接受绑定当前输入、建议、报告与自查hash。任何版本变化后重新复核。Word只允许当前版本已accepted。
+技术提交后，先生成整卷报告通读全文和证据。`unreviewed` 列出待审单元，但全文可读；complete 仍 false。复核与交付是**两趟 build-report**，顺序不能改：
+
+1. `jiaodui_delivery`（operation=build-report）生成审阅全文；
+2. `jiaodui_unit_snapshot` 取**生成报告之后**的新 `snapshot_sha256`（此时 hash 才包含 report_sha256 / data_sha256）；
+3. 用该 hash 调 `jiaodui_unit_review`，decision 为 accepted 或 needs_revision；退回需 issue；
+4. **复核后再跑一次 build-report**，登记当前复核结果，`complete` 这时才会变 true；
+5. 最后 `jiaodui_delivery`（operation=build-docx）。
+
+若在 build-report 之前取 snapshot，复核必然 `snapshot-stale`；若复核后不重跑 build-report，`complete` 会一直是 false。任何版本变化后重新取 snapshot、重新复核。Word 只允许当前版本已 accepted。
+
+通读时若发现 **≥3 个单元在同一处问题或同一口径上漏标**，按系统性问题处理：用 `unit-recovery` 的 `targeted_review` 向全部单元下发定向复核，不要只修已发现的单元；最终仍以当前 snapshot 复核为准。
 
 ## 交付
 
@@ -152,14 +168,14 @@ jiaodui build-report <paper_dir> --work-root W --json
 jiaodui build-docx <paper_dir> --work-root W --json
 ```
 
-`build-report` 的 `ok` 表示诊断报告文件已生成；只有 `complete: true` 才表示所有单元均已通过或显式跳过。任何失败占位意味着整卷尚未正式完成。Word交付还必须检查结构化 `ok: true`，缺失、记账异常或图片未嵌入均不交付。不执行最终Word分页或截图验收。
+`build-report` 的 `ok` 表示诊断报告文件已生成；只有 `complete: true` 才表示所有单元均已通过或显式跳过。任何失败占位意味着整卷尚未正式完成。Word交付还必须检查结构化 `ok: true`，缺失、记账异常或图片未嵌入均不交付。批注内公式降级会分 `dependency_missing` 与 `syntax_unsupported` 两类告警并列出失败公式原文；matplotlib 可用时按语法不支持排查，不要改去装依赖。不执行最终Word分页或截图验收。
 
 - 全局选项：`--json`、`--quiet`、`--work-root`、`--version`。
 - 历史Markdown报告兼容读取：`jiaodui verify-report` / `jiaodui parse-report`；仅旧报告可用完整性辅助 `jiaodui repair-report --unit <unit_dir> [--apply]`，应用时原子替换并复验。
 
 ## 只读与计算
 
-`unit-locate`、`unit-snapshot`、`calc-schema` 为只读命令。计算优先调用 preset 中按operation区分的 `jiaodui_calc_<operation>` 工具；参数schema从 `jiaodui.calc.OPERATIONS` 元数据导出，未知字段拒绝。CLI 退路：
+`unit-locate`、`unit-snapshot`、`calc-schema` 为只读命令。计算优先调用 preset 中按operation区分的 `jiaodui_calc_<operation>` 工具；参数schema从 `jiaodui.calc.OPERATIONS` 元数据导出，未知字段拒绝。成功响应回显 `params`（实际记账参数）；`calculations[].expression` 直接从中复制某个字符串参数的原样值，不凭记忆重写。CLI 退路：
 
 ```text
 jiaodui calc <op> --param NAME=VALUE ... [--subject 高中化学]

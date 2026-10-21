@@ -120,6 +120,60 @@ def _remove_quietly(path) -> None:
         pass
 
 
+REASON_DEPENDENCY = "dependency_missing"
+REASON_SYNTAX = "syntax_unsupported"
+REASON_EMPTY = "empty"
+"""渲染失败原因：缺依赖 / mathtext 语法不支持 / 空公式。"""
+
+# pandoc 从 docx 转写出的命令不全是 mathtext 支持的写法。这里只做语义等价的
+# 归一化：关系符、竖线、文本命令、只影响排版包裹的命令；不改动公式内容本身。
+_RELATION_NORMALIZATIONS = (
+    (re.compile(r"\\gt(?![A-Za-z])"), ">"),
+    (re.compile(r"\\lt(?![A-Za-z])"), "<"),
+    (re.compile(r"\\ge(?![A-Za-z])"), r"\\geq"),
+    (re.compile(r"\\le(?![A-Za-z])"), r"\\leq"),
+    # 先保留 \left\| / \right\| 的定界符语义，再处理普通竖线；\Vert 必须加
+    # 括号，否则会把紧跟的变量字母吞进命令名（\VertU 不是合法命令）。
+    (re.compile(r"\\left\s*\\\|"), r"\\left\\Vert"),
+    (re.compile(r"\\right\s*\\\|"), r"\\right\\Vert"),
+    (re.compile(r"\\\|"), r"{\\Vert}"),
+)
+_TEXT_COMMAND_RE = re.compile(r"\\(?:text|mbox)\{([^{}]*)\}")
+_HSPACE_RE = re.compile(r"\\hspace\*?\{[^{}]*\}")
+_MATHRM_SPACE_RE = re.compile(r"\\mathrm\{\s*\\,\s*\}")
+_WRAPPER_RE = re.compile(
+    r"\\(?:mathrel|mathord|mathbin|mathopen|mathclose|mathpunct|mathinner|ensuremath)\s*\{([^{}]*)\}")
+_STYLE_RE = re.compile(r"\\(?:displaystyle|textstyle|scriptstyle|scriptscriptstyle)(?![A-Za-z])")
+_LIMITS_RE = re.compile(r"\\(?:limits|nolimits)(?![A-Za-z])")
+
+
+def normalize_latex(latex_body: str) -> str:
+    r"""把 pandoc 常见 LaTeX 写法归一成 matplotlib mathtext 能解析的形式。
+
+    覆盖实测失败的 \gt / \lt / \ge / \le / \|，以及 \text / \mbox、
+    \hspace、\mathrel 等包裹命令。归一化只做等价替换，不负责判断公式语义；
+    归一化后仍失败由调用方按语法不支持降级。
+    """
+    body = _MATHRM_SPACE_RE.sub(r"\\mathrm{}", latex_body)
+    body = _TEXT_COMMAND_RE.sub(r"\\mathrm{\1}", body)
+    body = _HSPACE_RE.sub(r"\ ", body)
+    body = _WRAPPER_RE.sub(r"\1", body)
+    body = _STYLE_RE.sub("", body)
+    body = _LIMITS_RE.sub("", body)
+    for pattern, replacement in _RELATION_NORMALIZATIONS:
+        body = pattern.sub(replacement, body)
+    return body
+
+
+def _record_failure(diagnostics: dict | None, reason: str, detail: str = "") -> None:
+    """把失败原因写回调用方提供的诊断字典；未提供时保持静默。"""
+    if diagnostics is None:
+        return
+    diagnostics["reason"] = reason
+    if detail:
+        diagnostics["detail"] = detail[:300]
+
+
 def _wrap_bare_cjk(latex_body: str) -> str:
     r"""把公式中裸中文字符包进 \mathrm{...}（rm 字体渲染）。
 
@@ -139,19 +193,27 @@ def _wrap_bare_cjk(latex_body: str) -> str:
     return body
 
 
-def latex_to_png(latex_body: str, out_path, fontsize: float = 14, dpi: int = 200) -> bool:
+def latex_to_png(latex_body: str, out_path, fontsize: float = 14, dpi: int = 200,
+                  *, diagnostics: dict | None = None) -> bool:
     """渲染 LaTeX 公式体（不含 $ 包裹）为透明 PNG，成功返回 True。
 
-    无系统 CJK 字体且公式含中文字符时返回 False；matplotlib 不可用或渲染抛异常时
-    返回 False 并清理可能残留的输出文件（调用方降级为文本）。
+    渲染前先做 pandoc → mathtext 归一化；无系统 CJK 字体且公式含中文字符时返回
+    False；matplotlib 不可用或渲染抛异常时返回 False 并清理可能残留的输出文件。
+    diagnostics 由调用方提供，失败时写入 reason（依赖缺失 / 语法不支持 / 空公式）
+    与 detail，供告警区分归因；成功时不写。
     """
-    if not latex_body:
+    if not latex_body or not latex_body.strip():
+        _record_failure(diagnostics, REASON_EMPTY, "公式为空")
         return False
     if not _ensure_matplotlib():
+        _record_failure(diagnostics, REASON_DEPENDENCY, "matplotlib 不可加载")
         _remove_quietly(out_path)
         return False
+    latex_body = normalize_latex(latex_body)
     has_cjk = bool(_CJK_RE.search(latex_body))
     if _CJK_FONT is None and has_cjk:
+        _record_failure(diagnostics, REASON_DEPENDENCY, "未找到可渲染中文的字体")
+        _remove_quietly(out_path)
         return False
     if has_cjk:
         latex_body = _wrap_bare_cjk(latex_body)
@@ -164,7 +226,8 @@ def latex_to_png(latex_body: str, out_path, fontsize: float = 14, dpi: int = 200
                         bbox_inches="tight", pad_inches=0.02)
             plt.close(fig)
         return True
-    except Exception:
+    except Exception as exc:
+        _record_failure(diagnostics, REASON_SYNTAX, f"{type(exc).__name__}: {exc}")
         try:
             plt.close("all")
         except Exception:

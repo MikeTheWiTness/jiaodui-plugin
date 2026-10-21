@@ -19,7 +19,7 @@ def workspace_root(required: bool = True) -> Path | None:
     if root is None:
         if not required:
             return None
-        raise BusinessError("写入需要当前会话工作区或 --work-root", code="workspace-required")
+        raise BusinessError("该命令需要当前会话工作区来定位材料；请传 --work-root 或由宿主注入 JIAODUI_WORK_ROOT", code="workspace-required")
     if not root.is_absolute():
         raise BusinessError("工作区根必须是绝对路径", code="workspace-required")
     return root.resolve()

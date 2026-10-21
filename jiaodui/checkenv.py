@@ -27,11 +27,16 @@ class CheckItem:
                 "required": self.required, "scope": self.scope}
 
 
+SUPPORTED_PROPOSAL_SCHEMA_VERSIONS = (2, 3)
+"""CLI 实际能校验的提案 schema 版本；插件在这里声明它的期望版本。"""
+
+
 @dataclass
 class EnvReport:
     items: list[CheckItem] = field(default_factory=list)
     host_checks_required: list[str] = field(default_factory=list)
     runtime: dict = field(default_factory=dict)
+    contract: dict = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -44,6 +49,7 @@ class EnvReport:
             "items": [i.to_dict() for i in self.items],
             "host_checks_required": self.host_checks_required,
             "runtime": self.runtime,
+            "contract": self.contract,
         }
 
 
@@ -89,7 +95,46 @@ def _module_state(name: str) -> tuple[bool, str]:
         return False, f"已安装但无法加载（{type(exc).__name__}）"
 
 
-def check_env() -> EnvReport:
+def _contract_check(expect_schema_version: int | None,
+                   expect_bundle_version: str | None) -> tuple[CheckItem, dict]:
+    """插件 ↔ CLI 契约探针：版本号相同不代表内容相同，必须显式核对 schema 能力。"""
+    from . import __version__
+
+    supported = list(SUPPORTED_PROPOSAL_SCHEMA_VERSIONS)
+    problems: list[str] = []
+    if (expect_schema_version is not None
+            and expect_schema_version not in SUPPORTED_PROPOSAL_SCHEMA_VERSIONS):
+        problems.append(
+            f"插件期望提案 schema v{expect_schema_version}，核心只支持 "
+            + "、".join(f"v{version}" for version in supported))
+    if expect_bundle_version is not None and expect_bundle_version != __version__:
+        problems.append(
+            f"插件 bundle 版本 {expect_bundle_version} 与核心 {__version__} 不一致")
+    ok = not problems
+    if expect_schema_version is None and expect_bundle_version is None:
+        detail = (f"核心 {__version__}；支持提案 schema "
+                  + "、".join(f"v{version}" for version in supported)
+                  + "；调用方未声明插件期望（CLI 直调）")
+    else:
+        detail = (f"插件 bundle {expect_bundle_version or '未声明'} / 核心 {__version__} / "
+                  f"期望提案 schema v{expect_schema_version or '未声明'} / 核心支持 "
+                  + "、".join(f"v{version}" for version in supported))
+    if problems:
+        detail += "；" + "；".join(problems)
+    item = CheckItem("contract（插件↔CLI 契约）", ok, detail)
+    contract = {
+        "ok": ok,
+        "core_version": __version__,
+        "bundle_version": expect_bundle_version,
+        "supported_schema_versions": supported,
+        "expected_schema_version": expect_schema_version,
+        "problems": problems,
+    }
+    return item, contract
+
+
+def check_env(*, expect_schema_version: int | None = None,
+              expect_bundle_version: str | None = None) -> EnvReport:
     report = EnvReport()
     from .workflow import resolve_config_dir
     from .workdir import workspace_root
@@ -129,6 +174,10 @@ def check_env() -> EnvReport:
     report.items.append(CheckItem("playwright（classics 古籍检索，后置能力）", playwright,
                                   "已安装" if playwright else "未安装（classics 后置，不影响 v1）",
                                   required=False))
+
+    contract_item, contract = _contract_check(expect_schema_version, expect_bundle_version)
+    report.items.append(contract_item)
+    report.contract = contract
 
     # 宿主能力不在 CLI 证明范围（D14）：只列出必须由主 agent 实测的项目
     report.host_checks_required = [

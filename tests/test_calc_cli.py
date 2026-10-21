@@ -40,6 +40,29 @@ def test_calc_show_code_opt_in():
     assert payload["result"]["code"]
 
 
+def test_calc_response_echoes_recorded_params():
+    """calc 响应回显实际记账参数，证据里的 expression 可逐字复制。"""
+    r = run("calc", "evaluate", "--param", "expression=1/3+1/6", "--json")
+    assert r.returncode == 0, r.stderr
+    payload = json.loads(r.stdout)
+    assert payload["params"] == {"expression": "1/3+1/6"}
+    assert payload["result"]["result"] == 0.5
+
+
+def test_calc_response_echoes_all_multi_parameter_values():
+    """多参数调用（如 equality）必须回显两个表达式，避免凭记忆拼接。"""
+    r = run("calc", "equality",
+            "--param", "expression_a=1/3+1/6",
+            "--param", "expression_b=1/2",
+            "--json")
+    assert r.returncode == 0, r.stderr
+    payload = json.loads(r.stdout)
+    assert payload["params"] == {
+        "expression_a": "1/3+1/6",
+        "expression_b": "1/2",
+    }
+
+
 def test_calc_subject_declaring_calc_is_allowed():
     r = run("calc", "evaluate", "--param", "expression=1+1", "--subject", "高中物理", "--json")
     assert r.returncode == 0, r.stderr
