@@ -15,6 +15,7 @@
       package.json           dsh.bundle.patch = ./cordis.patch.yml；同时是可挂载的插件入口
       cordis.patch.yml       自带组合包：插入 preset-jiaodui（含 skill 挂载 + 原生工具行）
       tools/index.js         宿主适配：注册校对及强类型工具
+      tools/preset-filter.js 从 preset 选择器隐藏内部子 agent preset
       tools/calc-schemas.json 由计算核心元数据导出的operation schema
       tools/proposal-schema.json 结构化建议schema v2
       tools/proposal-schema-v3.json 正常原文修订 schema v3（core 导出）
@@ -36,6 +37,8 @@
 - **结构化工具**：按task/unit ID提供位置查询、版本快照、建议提交、恢复预算和阶段/取消事件；14个计算operation使用独立JSON Schema。calc schema从Python核心 `OPERATIONS` 元数据生成，打包测试核对副本漂移。
 
 正常 `jiaodui_unit_submit` 使用 v3 原文修订，core 自动定位并编译 v2；`jiaodui_unit_snapshot` 的 `with_proposal` 用于按 ID 增量撤回/新增。`jiaodui_unit_submit_v2` 保留显式旧提案入口。两入口共用原有提交、证据、verify 与父复核闸门，插件只透传。
+
+子 agent preset 仍注册在 `agentPresets` 里供 `tool-subagent` 引用；DSH 0.2.x 的选择器没有 hidden 字段，随包 `preset-filter` 只过滤 UI roster，设置页和新建会话不再显示 `jiaodui-unit` / `jiaodui-chemistry-unit`。
 
 ## 安装
 

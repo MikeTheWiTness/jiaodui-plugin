@@ -246,3 +246,7 @@
             name: '@deepseek-ai/dsh-agent-tool-presentation'
             config:
               mode: native
+    # 隐藏内部子 agent preset：DSH 0.2.x 的选择器没有 hidden 字段。
+    # 只过滤 UI roster，不影响 tool-subagent 的 readDocument / validate。
+    - id: jiaodui-preset-filter
+      name: dsh-jiaodui/preset-filter
