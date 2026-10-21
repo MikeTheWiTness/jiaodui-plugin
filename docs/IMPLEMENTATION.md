@@ -1,5 +1,9 @@
 # 实施清单
 
+2026-10-20：无状态 v3 core、完整/增量提交、快照精简列表、CLI schema、双插件正常 v3 / 显式 v2 工具及两学科 skill 已接通。报告与 proposal 保持 v2，现有数据文件的可选 submission_v3 仅保存当前有效分层输入；不增加草稿/历史文件、不迁移历史。完整 CI **1473 passed，4 subtests passed**；同一份 12 题经 CLI/core 新入口完成真实校对和当前父复核，最终 4 处修订、Word 4 标记=4 锚点、缺失/图片缺失均 0。三单元实际使用 v3 增量返修。原生插件宿主调用未测，完整边界与结果见 [v3 验证记录](REVISE-V3-VERIFICATION-2026-10-20.md)。
+
+2026-10-19 revise 升级按用户要求收敛为单一路线：P0 已验收，直接实现无状态 v3 提案（方案 A），复用既有 v2 落盘、verify 和父复核；支持原文锚点与按 ID 撤回/新增。不再执行 P0.5 三臂实验或 B 持久工作日志，不改 DSH profile、不采集 token 选路。开发中只跑相关契约回归，交付前一次完整 CI 口径，加新入口的一次 12 题真实验收（最多 6 子 agent 并行）。已有旧 v2 的 12 题结果不冒充新入口验收。具体范围及取消项见 [简化升级计划](PLAN-revise-tool-upgrade.md)。
+
 2026-10-10 第7章结构化报告主链并入 `main`：子 agent 提交 schema v2 结构化提案、报告由程序从源文生成、父代理复核版本绑定后登记成为**正常交付路径**；旧 Markdown 报告链降级为只读兼容。合并按 [UNIFY-PLAN](UNIFY-PLAN.md) §6 裁决 28 处冲突、修掉 19 处静默变更（main 回退时整份删除的 `source_index`/`unit_reader`/`calc/schema`/`calc-schemas.json` 与 v2 守门已取回），并在映射 main 测试时采纳六处 main 更优语义（`report.ok`、`unit-event` 轮次 CAS 与授权要求、指纹错误码、幂等重放不写盘、被拒 attempt 不写盘）。根仓双口径 **1158 passed / 0 failed**、冻结语料 4/4、P6 材料真机 `build-report`/`build-docx` 通过（标记 2 = 锚点 2 + 兜底 0）；桌面 profile 已切回仓库根包，实验 worktree 与集成分支已删除。见 [PROCESS_REWORK](PROCESS_REWORK.md) 的 Phase 2/3 记录。
 
 2026-10 报告完整性程序化重建：新增 `jiaodui repair-report --unit <dir> [--apply]`（确定性核心 `jiaodui/report_repair.py`）。它只从单元源文重建 `### 标记原文`，把原报告的完整标记插回源文逐字唯一命中的位置；字段找不到、命中多处、乱序、重叠、编号/语法/原因/严重度无效或图片检查失败一律拒绝，`--apply` 前先验候选文本与图片、再原子替换并要求完整 verify-unit 复验，失败恢复原报告。修复不判断校对意见正确性、不改源文、不自动登记；`verify-report` 仍是唯一闸门。回归见 `tests/test_report_repair.py`、`tests/test_skill_docs.py`。

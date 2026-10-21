@@ -1,10 +1,13 @@
 # dsh-jiaodui
 
-把 jiaodui 的 K-12 校对流程接入 DSH profile 的**自包含组合包（bundle）**：
+把 jiaodui 的**高中物理**校对流程接入 DSH profile 的**自包含组合包（bundle）**：
 挂载随包的 jiaodui skill、注册一个 jiaodui 原生工具、并声明一个「校对」agent preset。
 
 本包只是 PRD 所说的「薄适配」：不含任何校对业务判断，判断仍由宿主 agent 完成，
 确定性仍由 jiaodui Python CLI 完成。**CLI 永远是退路**——插件坏了，bash 里照样能跑。
+
+高中化学是**另一个独立包** [`dsh-jiaodui-chemistry`](../dsh-jiaodui-chemistry/README.md)（preset「校对（高中化学）」），
+不并入本包：两者可同时安装、分别启用，共用同一份 CLI 与学科无关原生工具，取舍见 `docs/adr/0007-second-subject-entry-and-bundle-split.md`。
 
 ## 结构
 
@@ -14,6 +17,8 @@
       tools/index.js         宿主适配：注册校对及强类型工具
       tools/calc-schemas.json 由计算核心元数据导出的operation schema
       tools/proposal-schema.json 结构化建议schema v2
+      tools/proposal-schema-v3.json 正常原文修订 schema v3（core 导出）
+      tools/proposal-schema-bind-current.json core 绑定的精简 v2 schema（unit_submit_v2 直接读）
       skills/jiaodui/        随包 skill（仓库 skills/jiaodui 的副本，测试守一致性）
         assets/             固定读图探针（SVG 源、透明 PNG、预合成白底 PNG）
       locale/{zh,en}.json    插件管理页的标题与描述
@@ -22,29 +27,39 @@
 
 ## 它做了什么
 
-- **实验分支preset「校对」（id `jiaodui`）**：保留结构化单元读取/定位/提交、真实read_image、单层子agent和交付能力，关闭shell、web、goal、plan与fork。父侧暂保留聚合fs，子侧通过toolFilter只允许读取/计算/提交，不暴露write/edit、argv退路或父复核。
+- **实验分支 preset「校对」（id `jiaodui`）**：保留结构化单元读取/定位/提交、真实 read_image、单层子 agent 和交付能力，关闭 shell、web、goal、plan 与 fork。父侧保留聚合 fs；子侧由独立子 preset「校对（高中物理·单元子代理）」（id `jiaodui-unit`）封闭，`toolset: unit` 只允许读取/计算/提交，不暴露 write/edit、argv 退路、取消或父复核。
   - `skill-filesystem` 的 `customSkillDirs` 指向本包 `skills/`，用于发现随包 jiaodui skill。
-  - `./tools/index.js` 注册原生工具 `jiaodui`。
-  实际宿主源码已确认支持 `includeDefaultRoots:false`、子代理 `toolFilter.allow` 和 `maxDepth:1`；本实验preset已配置这些字段。静态结构检查不替代新会话父子实际catalog验收，也不将开发会话CLI回放当作安装验证。
+  - `./tools/index.js` 注册原生工具 `jiaodui`；`toolset: unit` 时只注册单元读取/定位/快照/提交/恢复/心跳与全部 `calc_*`。
+  - `tool-subagent` 用 `agentPreset: jiaodui-unit` 选择子 preset；DSH 0.2.1 起不再使用 `toolFilter`/`persona`，`backgroundMode` 也已移除。
+  实际宿主已确认支持 `includeDefaultRoots:false`、`agentPreset` 子 preset 选择和 `maxDepth:1`；本 preset 已配置这些字段。子 preset 先不挂 `agent-instructions`：单元规则以 SKILL 与派发 prompt 为准，避免仓库开发约定占子代理上下文。静态结构检查不替代新会话父子实际 catalog 验收，也不将开发会话 CLI 回放当作安装验证。
 - **原生工具 `jiaodui`**：旧命令 `args: string[]` 透传入口继续保留，作为兼容CLI退路。
 - **结构化工具**：按task/unit ID提供位置查询、版本快照、建议提交、恢复预算和阶段/取消事件；14个计算operation使用独立JSON Schema。calc schema从Python核心 `OPERATIONS` 元数据生成，打包测试核对副本漂移。
 
+正常 `jiaodui_unit_submit` 使用 v3 原文修订，core 自动定位并编译 v2；`jiaodui_unit_snapshot` 的 `with_proposal` 用于按 ID 增量撤回/新增。`jiaodui_unit_submit_v2` 保留显式旧提案入口。两入口共用原有提交、证据、verify 与父复核闸门，插件只透传。
+
 ## 安装
 
-本 bundle 不包含 Python CLI。新机先安装 Python 3.12、pipx 和 pandoc，构建并安装 wheel：
+DSH bundle 本身不包含 Python CLI。最终发布 tar.gz 会同时提供同版本 bundle、`jiaodui` wheel、运行依赖约束和 macOS/Windows 安装脚本；归档由 `scripts/release/build-release.sh` 生成并附 SHA-256 sidecar。目标机不需要源码仓库、Node、构建工具或开发 venv。
 
-```bash
-python3.12 -m pip install build
-python3.12 -m build --wheel
-pipx install --python python3.12 'dist/jiaodui-0.1.0-py3-none-any.whl[render]'
-jiaodui check-env --json
-```
+目标机需预先安装独立 CPython 3.12 和 Pandoc。不要使用 DSH 自带签名 Python 创建 CLI 环境；其签名运行时可能拒绝加载 pip 安装的原生扩展。Pandoc 是 DOCX 导入与 Word 导出的必需外部程序，安装脚本会验证可执行状态。
 
-Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要用 DSH 自带的签名 Python 创建 CLI 环境，也不要继承其系统包：签名运行时可能拒绝加载 pip 安装的原生扩展（Team ID 不一致）。`[render]` 安装 matplotlib，供 Word 批注中的公式渲染；不需要此能力时可省略。
+解压发布 tar.gz 后运行对应脚本：
 
-开发软链安装使用仓库内的独立 `.venv`：`python3.12 -m venv .venv`，再执行 `.venv/bin/python -m pip install -e '.[dev,render]'`。`.venv` 也可为指向已验证独立环境的软链，无须修改 profile 的工具配置。用 `.venv/bin/jiaodui check-env --json` 检查解释器路径和 matplotlib 可用性。
+- macOS：`bash install-macos.sh`
+- Windows PowerShell：`./install-windows.ps1`
 
-插件按显式 `command`、开发软链对应的仓库 venv、PATH 上的 `jiaodui` 查找；复制安装不依赖施工仓库。未找到时明确报安装错误，不自动安装或回退任意 Python。
+脚本先校验 `SHA256SUMS`，再将 CLI 与受约束依赖安装到按版本隔离的用户数据目录，执行 `pip check`、真实依赖导入和 `check-env`：
+
+- macOS：`$HOME/Library/Application Support/JiaoDuiAgentSkill/versions/<版本>/venv`
+- Windows：`%LOCALAPPDATA%\\JiaoDuiAgentSkill\\versions\\<版本>\\venv`
+
+安装完成后，通过 DSH 官方 `install_bundle` 安装发布目录里的 `dsh-jiaodui`。插件读取 bundle 自身版本并自动发现匹配的 CLI；一般不需要设置 `command`。显式设置时必须指向当前 bundle 对应的版本目录。
+
+CLI 的机器输出由 core 固定为 UTF-8，插件启动 Python 时也显式设置 UTF-8 mode 与 stdio 编码。结构化提案写入系统临时目录下的 UTF-8 JSON 文件并通过 `--proposal-json-file` 传入 CLI，调用结束即清理；不会把大 JSON 放进 Windows 命令行，也不会在材料目录留下额外文件。CLI 仍兼容小提案的 `--proposal-json` 参数。
+
+仓库软链开发环境仍单独使用仓库内独立 `.venv`。自动发现会按平台检查 `.venv/bin/jiaodui` 或 `.venv/Scripts/jiaodui.exe`，并要求仓库 core 同时存在；这条开发后备不属于最终包或需要迁移的内容。
+
+## 安装 bundle
 
 推荐用 DSH 自己安装，不要手改 profile 的 `package.json` 或 `cordis.patch.yml`
 （DSH 官方插件开发规范要求由 `install_bundle` 完成这些步骤）。
@@ -67,17 +82,17 @@ Python 须来自 pyenv / Homebrew / python.org 等独立安装。macOS 上不要
 
 ## 配置（profile patch 按行 id 覆盖）
 
+最终安装默认按 bundle 版本自动发现 CLI。仅需覆盖默认路径时，在 DSH 的插件配置中填写完整绝对路径；路径可含空格：
+
     - id: jiaodui-tools
       name: dsh-jiaodui
       config:
-        command: /绝对路径/.venv/bin/jiaodui   # 省略时自动探测；探测不到回退 PATH 上的 jiaodui
+        command: /用户目录/Library/Application Support/JiaoDuiAgentSkill/versions/0.1.0/venv/bin/jiaodui
         timeoutMs: 180000
         maxOutputBytes: 65536
         # cwd 不再作为默认值：每次调用使用当前会话工作区。
 
-`command` 的自动探测：工具模块按自身位置推导 `<仓库根>/.venv/bin/jiaodui`；
-若包被**复制**进 profile（而非 `file:` 链接回仓库），该路径不存在，就回退 `jiaodui`，
-此时须安装 wheel 并让 PATH 包含 pipx bin，或显式给 `command`。
+CLI 查找顺序为：显式 `command` → bundle 同版本的用户级运行时 → 仓库软链开发环境 → PATH。显式配置的路径不存在会报错，不回退到其他版本。
 
 每次调用从会话读取工作区 W，并同时设置 cwd 与 `JIAODUI_WORK_ROOT`；会话缺少工作区时拒绝执行。产物默认位于 `W/校对/<材料名>/`，不会随源文件位置或宿主进程 cwd 改变。标准输出和错误在进程结束后收集，超时仍保留已收集诊断；外部用户取消传播取消语义，不包装为普通技术失败，也不触发主 agent 重派。普通调用只传 `args`（及必要的 cwd 兼容字段），不要主动填写权限升级字段。
 
@@ -90,7 +105,7 @@ skill 优先采用用户指定类型；未指定时调用 `inspect-source` 读�
 ## 已知限制
 
 - preset 必须自带完整 plugins 列表，当前按校对流程显式维护。skill默认发现和子代理工具范围依赖宿主，仓内静态测试不能替代真实会话验收。
-- 只声明高中物理（skill 的学科矩阵里其余 6 科仍为 M5 待落地）。未落地学科不得回退套用物理流程。
+- 本包只声明高中物理；高中化学是独立包 `dsh-jiaodui-chemistry`，其余学科未落地。未落地学科不得回退套用物理流程。
 - 已通过打包契约、原生工具行为测试及仓库外 wheel 的确定性链路验证；
   DSH 实际会话中的子 agent 读图、落盘和整卷校对质量仍需宿主验收，自动测试不替代它。
 - 原生工具**不是** bash 沙箱的替代：它只调用受信任的本地 CLI，不应对它传任意 shell。

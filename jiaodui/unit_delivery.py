@@ -15,6 +15,7 @@ from .paths import data_path, find_source_md, report_path
 from .report_parse import parse_proofread_md, split_sections
 from .report_suggestions import (
     ReportCandidate,
+    bind_current_proposal,
     _validate_image_evidence,
     extract_body,
     render_suggestions,
@@ -84,12 +85,71 @@ def _snapshot(root: Path, unit: Path) -> dict:
     return value
 
 
-def read_unit_snapshot(task_id: str, unit_id: str) -> dict:
+def read_unit_snapshot(task_id: str, unit_id: str, *, with_proposal: bool = False) -> dict:
     root, unit = material.find_unit_by_id(task_id, unit_id)
-    snapshot = _snapshot(root, unit)
-    if snapshot["task_id"] != task_id or snapshot["unit_id"] != unit_id:
-        raise BusinessError("task/unit身份不匹配", code="identity-mismatch")
+    with material.locked(root):
+        snapshot = _snapshot(root, unit)
+        if snapshot["task_id"] != task_id or snapshot["unit_id"] != unit_id:
+            raise BusinessError("task/unit身份不匹配", code="identity-mismatch")
+        if with_proposal:
+            previous = _submitted_base(root, unit, snapshot) if data_path(unit).is_file() else None
+            snapshot["proposal"] = None if previous is None else {
+                "proposal_revision": previous["proposal_revision"],
+                "corrections": [{"id": item["id"], "old_text": item["expected_original"],
+                    "new_text": item["replacement"], "reason": item["reason"],
+                    "category": item["category"], "severity": item["severity"]}
+                    for item in previous["proposal"]["corrections"]],
+            }
     return snapshot
+
+
+def _submitted_base(root: Path, unit: Path, snapshot: dict) -> dict:
+    """增量只继承同轮同输入、当前已登记且通过闸门的提案。"""
+    try:
+        previous = json.loads(data_path(unit).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BusinessError("基础提案不存在或数据损坏，请提交完整 v3", code="proposal-base-invalid") from exc
+    from .report_suggestions import json_bytes
+    proposal = previous.get("proposal") if isinstance(previous, dict) else None
+    if (not isinstance(proposal, dict) or proposal.get("schema_version") != 2
+            or any(proposal.get(key) != snapshot[key] for key in
+                   ("task_id", "unit_id", "run_id", "source_sha256", "body_sha256"))
+            or previous.get("input_digest") != snapshot["input_digest"]
+            or previous.get("run_id") != snapshot["run_id"]
+            or previous.get("proposal_revision") != proposal.get("proposal_revision")
+            or hashlib.sha256(json_bytes(proposal)).hexdigest() != previous.get("proposal_sha256")
+            or not material.registered(root, material.load(root), unit)
+            or not verify_unit(unit).ok):
+        raise BusinessError("基础提案不是同轮同输入的有效当前提交，请重读 snapshot 并提交完整 v3", code="proposal-base-invalid")
+    return previous
+
+
+def _prepare_proposal(root: Path, unit: Path, snapshot: dict, proposal: dict,
+                      *, bind_current: bool) -> tuple[dict, dict | None]:
+    """锁内分派 v2/v3，所有结果继续走同一个提交事务。"""
+    from .anchor import AnchorError
+    from .evidence_layers import EvidenceError
+    try:
+        if isinstance(proposal, dict) and proposal.get("schema_version") == 3:
+            from .proposal_v3 import compile_proposal
+            _, source, text = _current(root, unit)
+            images = inspect_unit_images(unit, source_path=source, allow_legacy_transparent=False)
+            base = None
+            if "base_proposal_revision" in proposal:
+                base = _submitted_base(root, unit, snapshot)
+                layers = base.get("submission_v3")
+                if layers is not None:
+                    restored, _ = compile_proposal(text, layers,
+                        {**snapshot, "next_proposal_revision": base["proposal_revision"]}, image_manifest=images)
+                    if restored != base["proposal"]:
+                        raise BusinessError("当前分层提案与已提交 v2 不一致，请提交完整 v3", code="proposal-base-invalid")
+            return compile_proposal(text, proposal, snapshot, image_manifest=images,
+                base_proposal=base["proposal"] if base else None,
+                base_layers=base.get("submission_v3") if base else None)
+        return (bind_current_proposal(proposal, snapshot) if bind_current else proposal), None
+    except (AnchorError, EvidenceError, ValueError) as exc:
+        raise BusinessError(str(exc), code=getattr(exc, "code", "proposal-invalid"),
+                            details=getattr(exc, "details", None)) from exc
 
 
 def _candidate(root: Path, unit: Path, snapshot: dict, proposal: dict) -> tuple[ReportCandidate, dict]:
@@ -132,13 +192,15 @@ def _candidate(root: Path, unit: Path, snapshot: dict, proposal: dict) -> tuple[
 
 
 def preview_unit_submission(task_id: str, unit_id: str, proposal: dict,
-                            expected_snapshot_sha256: str) -> dict:
+                            expected_snapshot_sha256: str, *, bind_current: bool = False) -> dict:
     root, unit = material.find_unit_by_id(task_id, unit_id)
-    snapshot = _snapshot(root, unit)
-    if snapshot["snapshot_sha256"] != expected_snapshot_sha256:
-        raise BusinessError("预览使用的单元版本已改变", code="snapshot-stale",
-                            details={"current_snapshot_sha256": snapshot["snapshot_sha256"]})
-    candidate, checked = _candidate(root, unit, snapshot, proposal)
+    with material.locked(root):
+        snapshot = _snapshot(root, unit)
+        if snapshot["snapshot_sha256"] != expected_snapshot_sha256:
+            raise BusinessError("预览使用的单元版本已改变", code="snapshot-stale",
+                                details={"current_snapshot_sha256": snapshot["snapshot_sha256"]})
+        proposal, layers = _prepare_proposal(root, unit, snapshot, proposal, bind_current=bind_current)
+        candidate, checked = _candidate(root, unit, snapshot, proposal)
     return {"ok": True, "preview": True, "snapshot": snapshot,
             "report_sha256": hashlib.sha256(candidate.text.encode("utf-8")).hexdigest(),
             "proposal_sha256": candidate.proposal_sha256,
@@ -171,7 +233,7 @@ def _restore(path: Path, previous: bytes | None) -> None:
 
 
 def commit_unit_submission(task_id: str, unit_id: str, proposal: dict,
-                           expected_snapshot_sha256: str) -> dict:
+                           expected_snapshot_sha256: str, *, bind_current: bool = False) -> dict:
     """在材料锁内以CAS提交报告/数据，并将清单登记作为最后提交标志。"""
     root, unit = material.find_unit_by_id(task_id, unit_id)
     report = report_path(unit)
@@ -182,6 +244,7 @@ def commit_unit_submission(task_id: str, unit_id: str, proposal: dict,
         if snapshot["snapshot_sha256"] != expected_snapshot_sha256:
             raise BusinessError("提交使用的单元版本已改变，拒绝覆盖", code="snapshot-stale",
                                 details={"current_snapshot_sha256": snapshot["snapshot_sha256"]})
+        proposal, layers = _prepare_proposal(root, unit, snapshot, proposal, bind_current=bind_current)
         candidate, checked = _candidate(root, unit, snapshot, proposal)
         if data_file.is_file():
             try:
@@ -212,6 +275,8 @@ def commit_unit_submission(task_id: str, unit_id: str, proposal: dict,
             "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
             "run_id": snapshot["run_id"],
         })
+        if layers is not None:
+            parsed["submission_v3"] = layers
         data_bytes = (json.dumps(parsed, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         before = {
             report: report.read_bytes() if report.is_file() else None,

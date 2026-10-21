@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S5",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "p5",
+      "old_text": "图A箭头向左。",
+      "new_text": "图A箭头向右。",
+      "span": {
+        "line": 4,
+        "start_column": 1,
+        "end_column": 8
+      },
+      "reason": "图A黑箭头由左指向右；图B向上正确。"
+    }
+  ],
+  "reasoning": [
+    "必须实际读两张图，不能由文件名推断。"
+  ],
+  "image_observations": [
+    {
+      "path": "images/a.png",
+      "reference_index": 1,
+      "visible": "白底，字母A，黑色水平箭头尖端在右侧。"
+    },
+    {
+      "path": "images/b.png",
+      "reference_index": 2,
+      "visible": "白底，字母B，黑色竖直箭头尖端在上侧。"
+    }
+  ]
+}

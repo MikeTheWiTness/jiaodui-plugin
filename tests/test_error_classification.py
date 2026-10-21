@@ -67,6 +67,29 @@ def test_user_cancel_and_permission_denied_are_not_recoverable(code):
     assert result["category"] is None
 
 
+@pytest.mark.parametrize("code", ["anchor.not-found", "anchor.structure-cut", "revise.reason-empty", "revise.evidence-required"])
+def test_interactive_diagnostics_do_not_consume_recovery_budget(code):
+    result = classify_error(code)
+    assert result["recoverable"] is False
+    assert result["interactive"] is True
+    assert result["category"] is None
+    assert result["reason"] == "交互诊断：按 details 修正参数后直接重试，不消耗恢复预算"
+
+
+@pytest.mark.parametrize("code", ["anchor.ambiguous", "revise.too-long"])
+def test_recovery_rejects_interactive_codes_without_writing(tmp_path, monkeypatch, code):
+    root, unit, task_id, unit_id = _unit(tmp_path, monkeypatch)
+    manifest = root / "_校对记录.json"
+    before = manifest.read_bytes()
+    with pytest.raises(BusinessError) as error:
+        material.record_recovery_attempt(
+            task_id, unit_id, None, hashlib.sha256(b"interactive").hexdigest(),
+            attempt_id="interactive", error_code=code)
+    assert error.value.code == "recovery-interactive-code"
+    assert int(error.value.exit_code) == 6
+    assert manifest.read_bytes() == before
+
+
 def test_unclassified_error_code_is_rejected_with_suggestion():
     result = classify_error("totally-unknown-code")
     assert result["recoverable"] is False

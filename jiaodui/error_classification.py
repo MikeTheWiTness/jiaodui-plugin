@@ -101,7 +101,11 @@ ERROR_CATEGORY_EXACT: dict[str, str] = {
 必须显式给码，不要依赖默认值，否则会被归进报告预算。
 """
 
+INTERACTIVE = "interactive"
+
 ERROR_CATEGORY_PREFIX: tuple[tuple[str, str], ...] = (
+    ("anchor.", INTERACTIVE),
+    ("revise.", INTERACTIVE),
     ("proposal.calc", "calc_representation"),
     ("proposal.", "call_correction"),
     ("location.", "call_correction"),
@@ -124,6 +128,7 @@ def classify_error(code: str) -> dict:
 
     返回 `{"code", "recoverable", "forbidden", "category", "reason", "suggestion"}`：
     - `recoverable=False` 表示不得消耗预算；
+    - `interactive=True` 表示参数交互诊断，应按 details 直接修正，不进入恢复记账；
     - `forbidden=True` 专指用户取消/权限拒绝（策略禁止），与「未分类码」区分开，
       调用方据此给出不同的错误码；
     - `suggestion` 仅在未分类时给出，列出相近的已知码，避免只说「失败」。
@@ -141,6 +146,11 @@ def classify_error(code: str) -> dict:
             if normalized.startswith(prefix):
                 category = mapped
                 break
+    if category == INTERACTIVE:
+        return {"code": normalized, "recoverable": False, "forbidden": False,
+                "interactive": True, "category": None,
+                "reason": "交互诊断：按 details 修正参数后直接重试，不消耗恢复预算",
+                "suggestion": None}
     if category is None:
         head = normalized.split(".")[0].split("-")[0]
         near = sorted(

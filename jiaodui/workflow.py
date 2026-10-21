@@ -431,8 +431,74 @@ def slice_material(boundaries_file: str | Path | None, *, raw: str | Path | None
                           mode_origin=mode_origin, mode_reason=mode_reason)
 
 
+def _check_manual_legacy_overwrite(unit: Path, root: Path, data: dict) -> None:
+    """保护 v2 交付与无法判定的数据，避免旧链覆盖。"""
+    import json
+
+    from .paths import data_path
+
+    path = data_path(unit)
+    existing = None
+    if path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise BusinessError("现有校对数据损坏，拒绝人工兼容覆盖",
+                                code="legacy-overwrite-v2-forbidden") from exc
+        if not isinstance(existing, dict):
+            raise BusinessError("现有校对数据损坏，拒绝人工兼容覆盖",
+                                code="legacy-overwrite-v2-forbidden")
+        version = existing.get("schema_version")
+        # 历史 v1 可以没有版本字段；显式声明时只接受整数 1，不能把 true/1.0/null 当成 v1。
+        if (("schema_version" in existing and (type(version) is not int or version != 1))
+                or not isinstance(existing.get("corrections"), list)
+                or not isinstance(existing.get("summary"), str)):
+            raise BusinessError("现有校对数据 schema 无效或为 v2，拒绝人工兼容覆盖",
+                                code="legacy-overwrite-v2-forbidden")
+
+    current_run = data["current_run_id"]
+    has_current_record = any(
+        record.get("unit") == unit.name and record.get("run_id") == current_run
+        for record in data.get("unit_records", [])
+    )
+    # 登记未记录 schema，不能靠可覆盖的 phase、可丢失的数据或报告封套推测版本。
+    # 新人工兼容链从不登记；现存本轮登记一律按可能的 v2 交付保护（fail closed）。
+    if has_current_record:
+        raise BusinessError("当前轮已有交付登记，拒绝人工兼容覆盖",
+                            code="legacy-overwrite-v2-forbidden")
+
+
+def _save_legacy_manual_data(unit: Path, text: str) -> None:
+    """原子写入仅供人工兼容使用的 v1 解析数据。"""
+    import json
+    import os
+    import tempfile
+
+    from .paths import data_path
+    from .report_parse import parse_proofread_md
+    from .workdir import ensure_inside
+
+    parsed = parse_proofread_md(text)
+    if parsed is None:
+        raise BusinessError("报告无法解析", code="parse_failed")
+    parsed["legacy_manual"] = True
+    target = ensure_inside(data_path(unit))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(parsed, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def parse_unit(unit: str | Path, *, source: str | Path | None = None,
-               legacy: bool = False, legacy_layout: bool = False) -> dict:
+               legacy: bool = False, legacy_layout: bool = False,
+               manual_legacy: bool = False, _material_lock_held: bool = False) -> dict:
     from .report_parse import save_proofread_json
     from .verify import verify_unit
     from .paths import find_source_md, report_path
@@ -447,24 +513,37 @@ def parse_unit(unit: str | Path, *, source: str | Path | None = None,
         paper = material.check_units(root, data)
         if unit.parent != paper:
             raise BusinessError("单元不属于当前材料", code="unit-path-mismatch")
+        if manual_legacy and not _material_lock_held:
+            with material.locked(root):
+                return parse_unit(unit, source=source, legacy=legacy, legacy_layout=legacy_layout,
+                                  manual_legacy=True, _material_lock_held=True)
     report = report_path(unit)
     if not report.is_file():
         raise NotFoundError(f"找不到报告：{report}")
     text = report.read_bytes().decode("utf-8")
     if text.startswith("<!-- jiaodui-report-v2 -->"):
         raise BusinessError("v2报告须通过unit-submit生成登记，禁止旧parse覆盖建议及证据", code="parse-v2-requires-submit")
+    if root is not None:
+        if not manual_legacy:
+            raise BusinessError("新布局禁止解析 v1 报告；人工兼容需显式 --manual-legacy",
+                                code="parse-v1-new-layout-forbidden")
+        _check_manual_legacy_overwrite(unit, root, data)
     source_file = input_path(source) if source else find_source_md(unit)
     # 走完整闸门：parse-report 是交付登记入口，只查文本会让缺图单元照样登记。
     verdict = verify_unit(unit, source_path=source_file)
     if not verdict.ok and not legacy:
         raise BusinessError("报告未通过 verify-report，拒绝解析", code="contract",
                             details={"errors": [i.message for i in verdict.errors]})
-    if root is not None and (source is not None or not verdict.ok):
+    if root is not None and ((source is not None and not manual_legacy) or not verdict.ok):
         raise BusinessError("新材料登记必须校验本单元源文且通过闸门", code="contract")
-    ok = save_proofread_json(text, str(unit))
-    if not ok:
-        raise BusinessError("报告无法解析", code="parse_failed")
     if root is not None:
+        _save_legacy_manual_data(unit, text)
+    else:
+        ok = save_proofread_json(text, str(unit))
+        if not ok:
+            raise BusinessError("报告无法解析", code="parse_failed")
+    if root is not None and not manual_legacy:
         material.register(root, unit, text, data["current_run_id"])
     return {"ok": True, "data": str(data_path(unit)), "verified": verdict.ok,
-            "legacy": bool(legacy and not verdict.ok), "registered": root is not None}
+            "legacy": bool(legacy and not verdict.ok),
+            "registered": root is not None and not manual_legacy}

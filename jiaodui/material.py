@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import difflib
+import errno
 import hashlib
 import json
 import os
 import re
 import tempfile
+import threading
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -16,12 +19,19 @@ from .error_classification import RECOVERY_CATEGORIES, classify_error
 from .execution_policy import (attempt_decision, charge, fingerprint_failure,
                                is_current_policy, is_readable_policy, migrate_legacy_spent,
                                new_policy, validate_attempt)
-from .errors import BusinessError, JiaoduiError, NotFoundError
+from .errors import BusinessError, ExitCode, JiaoduiError, NotFoundError
 from .paths import data_path, find_source_md, is_skip_unit, report_path, safe_name
 from .units import is_unit_dir, scan_unit_dirs
 from .workdir import ensure_inside, input_path, workspace_root
 
 MANIFEST = "_校对记录.json"
+LOCK_FILE = ".jiaodui.lock"
+# 必须显著小于插件默认 timeoutMs（180s）：锁等待若与宿主预算相同，宿主会先杀进程，
+# 结构化 lock-timeout 永远发不出去。test_dsh_plugin_package 守着至少 30s 余量。
+MATERIAL_LOCK_TIMEOUT_SECONDS = 120.0
+_LOCK_POLL_INTERVAL_SECONDS = 0.05
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
 
 
 def sha256(path: str | Path) -> str:
@@ -454,18 +464,99 @@ def write(root: Path, data: dict) -> None:
             os.unlink(temporary)
 
 
+def _thread_lock_for(path: Path) -> threading.Lock:
+    key = os.path.normcase(str(path))
+    with _THREAD_LOCKS_GUARD:
+        return _THREAD_LOCKS.setdefault(key, threading.Lock())
+
+
+def _try_file_lock(fd: int) -> bool:
+    """非阻塞尝试锁住固定的首字节；冲突返回 False，其他错误向上传递。"""
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if (exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
+                    or getattr(exc, "winerror", None) in {33, 36}):
+                return False
+            raise
+        return True
+
+    import fcntl
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return False
+        raise
+    return True
+
+
+def _unlock_file(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _lock_timeout(root: Path) -> BusinessError:
+    timeout = MATERIAL_LOCK_TIMEOUT_SECONDS
+    return BusinessError(
+        f"等待材料锁超过 {timeout:g} 秒；请确认是否有其他 jiaodui 任务仍在处理此材料",
+        code="lock-timeout", exit_code=ExitCode.ENV,
+        details={"material_dir": str(root), "timeout_seconds": timeout})
+
+
 @contextmanager
 def locked(root: Path):
-    """锁定材料目录 inode，原子替换清单不会改变锁对象。"""
-    import fcntl
+    """用稳定文件锁串行化材料写入，支持 POSIX 与 Windows 进程。"""
     root = ensure_inside(root)
-    fd = os.open(root, os.O_RDONLY)
+    requested_lock_path = root / LOCK_FILE
+    if requested_lock_path.is_symlink():
+        raise BusinessError("材料锁文件不能是符号链接", code="lock-path-invalid",
+                            details={"path": str(requested_lock_path)})
+    lock_path = ensure_inside(requested_lock_path)
+    deadline = time.monotonic() + MATERIAL_LOCK_TIMEOUT_SECONDS
+    thread_lock = _thread_lock_for(lock_path)
+    if not thread_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+        raise _lock_timeout(root)
+
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
+        with lock_path.open("a+b") as stream:
+            if requested_lock_path.is_symlink() or requested_lock_path.resolve() != lock_path:
+                raise BusinessError("材料锁文件路径发生变化", code="lock-path-invalid",
+                                    details={"path": str(requested_lock_path)})
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b"\0")
+                stream.flush()
+                os.fsync(stream.fileno())
+            acquired = False
+            try:
+                while not acquired:
+                    acquired = _try_file_lock(stream.fileno())
+                    if acquired:
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise _lock_timeout(root)
+                    time.sleep(min(_LOCK_POLL_INTERVAL_SECONDS, remaining))
+                yield
+            finally:
+                if acquired:
+                    _unlock_file(stream.fileno())
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        thread_lock.release()
 
 
 def resources(root: Path, directory: Path) -> list[dict]:
@@ -571,6 +662,9 @@ def record_recovery_attempt(task_id: str, unit_id: str, category: str | None,
                 code="recovery-error-code-required")
     else:
         classified = classify_error(error_code)
+        if classified.get("interactive"):
+            raise BusinessError(classified["reason"], code="recovery-interactive-code",
+                                details={"error_code": classified["code"]})
         if not classified["recoverable"]:
             hint = classified.get("suggestion") or []
             raise BusinessError(
@@ -641,7 +735,7 @@ def record_unit_event(task_id: str, unit_id: str, *, phase: str, attempt_id: str
     单元子代理在正常 `prepared` 心跳里顺手填了 `user` + `user_cancel`，在 8 个单元上
     伪造出约 29 条「用户取消」；而 `dispatch-plan` 只要有取消记录就永久 `stop=true`，
     父代理只能靠 `--rerun` 逃出，又引发 `run-changed` 连锁。取消因此拆成独立工具，
-    并在 preset 的 `toolFilter` 里对子代理不可见。
+    并在子代理 preset 的 `toolset: unit` 里对子代理不可见。
     """
     phases = {"prepared", "read", "images", "calculated", "proposed", "self_checked",
               "verified", "registered", "parent_reviewed", "deliverable"}
@@ -868,6 +962,12 @@ def registered(root: Path, data: dict, unit: Path) -> bool:
     # 否则下游（build-report / build-docx）会消费一份与报告不再对应的结构化结果。
     data_file = data_path(unit)
     if not data_file.is_file():
+        return False
+    try:
+        unit_data = json.loads(data_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return False
+    if not isinstance(unit_data, dict) or unit_data.get("legacy_manual") is True:
         return False
     digest = sha256(report)
     data_digest = sha256(data_file)

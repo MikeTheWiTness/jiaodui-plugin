@@ -13,11 +13,17 @@ from jiaodui.errors import JiaoduiError
 
 def _deliver(unit: Path) -> None:
     from jiaodui.workflow import parse_unit
+    from jiaodui.verify import verify_unit
+    from v2_helpers import deliver_v2
 
     source = (unit / f"{unit.name}.md").read_text(encoding="utf-8")
     (unit / "_校对报告.md").write_text(
         f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n", encoding="utf-8")
-    parse_unit(unit)
+    if not verify_unit(unit).ok:
+        # 显式人工兼容仍必须经过图片闸门，不能借新布局默认拒绝掩盖缺图错误。
+        parse_unit(unit, manual_legacy=True)
+    else:
+        deliver_v2(unit)
 
 
 def _material_with_one_broken_image(tmp_path, monkeypatch):
@@ -43,8 +49,10 @@ def test_unverified_image_blocks_registration_and_whole_report(tmp_path, monkeyp
     bad, good = _material_with_one_broken_image(tmp_path, monkeypatch)
 
     assert not verify_unit(bad).ok
-    with pytest.raises(JiaoduiError):
+    with pytest.raises(JiaoduiError) as refused:
         _deliver(bad)
+    assert refused.value.code == "contract"
+    assert refused.value.details.get("errors"), "必须由完整 verify 闸门拒绝，而不是因未指定人工兼容参数被拒"
 
     _deliver(good)
     result = build_report(bad.parent)

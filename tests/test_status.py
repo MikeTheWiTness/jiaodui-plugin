@@ -21,6 +21,17 @@ def _make_unit(root, name="第1题", report=None, fail=None):
     return d
 
 
+def test_legacy_manual_is_current_pending_even_when_report_verifies(tmp_path):
+    d = _make_unit(tmp_path, report=VALID)
+    (d / "_校对数据.json").write_text(
+        '{"legacy_manual":true,"corrections":[],"summary":"无问题"}',
+        encoding="utf-8",
+    )
+    status = status_of_unit(d)
+    assert status.state == "本轮未完成"
+    assert status.reason == "人工兼容交付，不计入本轮完成"
+
+
 def test_not_started(tmp_path):
     d = _make_unit(tmp_path)
     assert status_of_unit(d).state == NOT_STARTED

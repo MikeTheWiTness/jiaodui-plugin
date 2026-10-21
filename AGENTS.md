@@ -35,10 +35,10 @@
 
 ## 契约（硬约束，改流程不改契约）
 
-- 产物默认位于当前工作区 `校对/<材料名>/`，允许 `source/`、`raw/`（`<材料名>_raw.md`、`<材料名>_images/media/`）、`units/<材料名>/`、`_校对记录.json`、`校对报告/`、`校对Word/`。单元内只允许：`第N题.md`、`单元N.md`、`images/`、`_校对报告.md`、`_校对数据.json`、`_校对失败.md`及既有跳过标记。禁止自由命名的 attempt / 副本文件；报告只保存当前交付，轮次与执行摘要进入记录。变更单元集用 `split` / `slice --replace-units`：陈旧单元整体移入单元根目录下的 `.superseded/<run_id>/`（只移动不删除；归档名不是契约单元名，扫描与集合核对都会忽略它），并在轮次 action 中记录前后路径。写入必须校验真实路径位于工作区内，见 ADR 0002。
+- 产物默认位于当前工作区 `校对/<材料名>/`，允许 `source/`、`raw/`（`<材料名>_raw.md`、`<材料名>_images/media/`）、`units/<材料名>/`、`_校对记录.json`、`.jiaodui.lock`（core 持久内部锁文件）、`校对报告/`、`校对Word/`。单元内只允许：`第N题.md`、`单元N.md`、`images/`、`_校对报告.md`、`_校对数据.json`、`_校对失败.md`及既有跳过标记。禁止自由命名的 attempt / 副本文件；报告只保存当前交付，轮次与执行摘要进入记录。变更单元集用 `split` / `slice --replace-units`：陈旧单元整体移入单元根目录下的 `.superseded/<run_id>/`（只移动不删除；归档名不是契约单元名，扫描与集合核对都会忽略它），并在轮次 action 中记录前后路径。写入必须校验真实路径位于工作区内，见 ADR 0002。
 - `verify-report` 是模型产出与下游之间的唯一闸门；新报告不通过即不算完成。历史报告可 `--legacy` 读取转换，但不得冒充新契约已完成。
 - `build-report` / `parse-report` / `build-docx` 必须复核当前状态，拒绝消费未通过的报告。
-- **新契约的正常路径是结构化提交**：单元子 agent 只提交 schema v2 结构化提案（`unit-submit`），全文报告由程序从不可变源文生成，父代理按 `unit-review` 复核当前 snapshot 后才登记；模型不写报告正文。旧 Markdown 报告链保留读取与修复入口（`verify-report` / `parse-report` / `repair-report`），但不再作为正常交付路径。
+- **新契约的正常路径是结构化提交**：单元子 agent 正常提交 schema v3 原文修订提案（`unit-submit`），由 core 自动定位并编译为 v2；显式 v2 提交继续兼容，全文报告由程序从不可变源文生成，父代理按 `unit-review` 复核当前 snapshot 后才登记；模型不写报告正文。旧 Markdown 报告链保留读取与修复入口（`verify-report` / `parse-report` / `repair-report`），但不再作为正常交付路径。
 - **恢复预算与阶段事件由 core 强制**：每单元每轮次六类预算（`call_correction` / `calc_representation` / `report_repair` / `targeted_review` / `technical_redispatch` / `image_schema_fix`）；记账以 `attempt_id` 幂等（重放不写盘、被拒不写盘），类别由错误码确定性映射，`image_schema_fix` 连带扣一次 `call_correction`；`unit-event` 与恢复都要求当前轮次已确认执行模式。用户取消与权限拒绝只记录、不消耗预算。
 - 状态只由磁盘产物推导（`status`），不依赖会话内存；新布局完成还须匹配当前轮次的交付登记、报告与单元输入摘要，旧失败记录不使有效的本轮完成状态回退。
 - 退出码稳定：0 成功、1 未预期、2 用法、3 环境、4 校验失败、5 未找到、6 契约、7 不支持。失败向 stderr 输出一行结构化 JSON。

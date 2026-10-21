@@ -6,11 +6,16 @@
  * 本模块刻意不 import 任何 @deepseek-ai/* 包，避免 profile 内解析不到随 DSH
  * 安装的包；只用 Node 内建模块。
  */
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 export const name = 'jiaodui-tools'
+
+const BUNDLE_VERSION = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
+).version
 
 /** 依赖宿主平面的工具注册表与子进程服务（两者都在 dsh-base 里随宿主挂载）。 */
 export const inject = ['tools', 'subprocess']
@@ -32,14 +37,34 @@ function realpathOrThrow(target, label) {
   }
 }
 
-/** 仓库内 venv 的 CLI；包被复制进 profile（而非 file: 链接回仓库）时回退到 PATH 上的 jiaodui。 */
+/** 定位最终用户运行时；安装脚本使用同一目录结构和 bundle 版本。 */
+function installedCommand() {
+  const versionPath = ['JiaoDuiAgentSkill', 'versions', BUNDLE_VERSION, 'venv']
+  if (process.platform === 'win32') {
+    const dataRoot = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
+    return join(dataRoot, ...versionPath, 'Scripts', 'jiaodui.exe')
+  }
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Application Support', ...versionPath, 'bin', 'jiaodui')
+  }
+  const dataRoot = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share')
+  return join(dataRoot, ...versionPath, 'bin', 'jiaodui')
+}
+
+/** 按显式配置 → 版本化最终运行时 → 仓库软链开发环境 → PATH 发现 CLI。 */
 function defaultCommand() {
   try {
-    const bundled = fileURLToPath(new URL('../../../.venv/bin/jiaodui', import.meta.url))
-    const repositoryCore = fileURLToPath(new URL('../../../jiaodui/cli.py', import.meta.url))
+    const installed = installedCommand()
+    if (existsSync(installed)) return installed
+
+    const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url))
+    const scriptsDir = process.platform === 'win32' ? 'Scripts' : 'bin'
+    const executableName = process.platform === 'win32' ? 'jiaodui.exe' : 'jiaodui'
+    const bundled = join(repositoryRoot, '.venv', scriptsDir, executableName)
+    const repositoryCore = join(repositoryRoot, 'jiaodui', 'cli.py')
     if (existsSync(repositoryCore) && existsSync(bundled)) return bundled
   } catch {
-    // import.meta.url 不可用时保持回退
+    // 环境路径不可用时保持 PATH 回退
   }
   return 'jiaodui'
 }
@@ -64,13 +89,37 @@ function render(args, value) {
 const CALC_SCHEMAS = JSON.parse(
   readFileSync(fileURLToPath(new URL('./calc-schemas.json', import.meta.url)), 'utf8'),
 ).operations
-const PROPOSAL_SCHEMA = JSON.parse(
-  readFileSync(fileURLToPath(new URL('./proposal-schema.json', import.meta.url)), 'utf8'),
+const SUBMIT_PROPOSAL_SCHEMA = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./proposal-schema-v3.json', import.meta.url)), 'utf8'),
 ).schema
-const SUBMIT_PROPOSAL_SCHEMA = structuredClone(PROPOSAL_SCHEMA)
-for (const key of ['task_id', 'unit_id', 'run_id', 'source_sha256', 'body_sha256', 'proposal_revision']) {
-  SUBMIT_PROPOSAL_SCHEMA.required = SUBMIT_PROPOSAL_SCHEMA.required.filter(field => field !== key)
+const SUBMIT_PROPOSAL_V2_SCHEMA = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./proposal-schema-bind-current.json', import.meta.url)), 'utf8'),
+).schema
+
+/**
+ * 子代理工具面：unit 只暴露单元读取/定位/快照/提交/恢复/心跳与全部 calc_*。
+ * 父侧默认 full；子 preset 通过 `toolset: unit` 使用它。
+ */
+const UNIT_TOOL_NAMES = new Set([
+  'jiaodui_unit_locate',
+  'jiaodui_unit_read',
+  'jiaodui_unit_snapshot',
+  'jiaodui_unit_submit',
+  'jiaodui_unit_submit_v2',
+  'jiaodui_unit_recovery',
+  'jiaodui_unit_event',
+])
+
+/** 按 toolset 生成可见性判定；未知取值直接报错，避免拼错后静默放宽。 */
+function toolVisible(config) {
+  const toolset = config.toolset ?? 'full'
+  if (toolset === 'full') return () => true
+  if (toolset !== 'unit') throw new Error("jiaodui: toolset 只能是 'full' 或 'unit'")
+  return name => UNIT_TOOL_NAMES.has(name) || name.startsWith('jiaodui_calc_')
 }
+
+/** 共用工具 schema 接受两门已落地学科；具体配置与工具权限仍由 core 校验。 */
+const SUPPORTED_SUBJECTS = ['高中物理', '高中化学']
 
 const TASK_PREPARE_OPERATIONS = ['check-env', 'inspect-source', 'convert', 'split',
   'precheck-split', 'status', 'execution-policy']
@@ -125,18 +174,21 @@ function taskPrepareArgs(args) {
   }
 }
 
-function registerStructuredTools(ctx, cliTool) {
-  const register = (name, description, parameters, buildArgs) => ctx.tools.register({
-    name,
-    description,
-    parameters,
-    output: cliTool.output,
-    timeoutMs: cliTool.timeoutMs,
-    isConcurrencySafe: cliTool.isConcurrencySafe,
-    async execute(args, exec) {
-      return cliTool.execute({ args: ['--json', ...buildArgs(args)] }, exec)
-    },
-  })
+function registerStructuredTools(ctx, cliTool, visible) {
+  const register = (name, description, parameters, buildArgs) => {
+    if (!visible(name)) return
+    return ctx.tools.register({
+      name,
+      description,
+      parameters,
+      output: cliTool.output,
+      timeoutMs: cliTool.timeoutMs,
+      isConcurrencySafe: cliTool.isConcurrencySafe,
+      async execute(args, exec) {
+        return cliTool.execute({ args: ['--json', ...buildArgs(args)] }, exec)
+      },
+    })
+  }
 
   register('jiaodui_unit_locate', '按task/unit身份查询源文短语位置和安全范围。', {
     type: 'object', additionalProperties: false,
@@ -161,57 +213,52 @@ function registerStructuredTools(ctx, cliTool) {
   register('jiaodui_unit_snapshot', '读取单元源文、轮次、报告和数据摘要组成的提交版本。', {
     type: 'object', additionalProperties: false,
     required: ['task_id', 'unit_id'],
-    properties: { task_id: { type: 'string' }, unit_id: { type: 'string' } },
-  }, args => ['unit-snapshot', '--task-id', args.task_id, '--unit-id', args.unit_id])
+    properties: {
+      task_id: { type: 'string' }, unit_id: { type: 'string' },
+      with_proposal: { type: 'boolean', default: false, description: '附带当前提案修订的精简列表，供返修引用 ID。' },
+    },
+  }, args => ['unit-snapshot', '--task-id', args.task_id, '--unit-id', args.unit_id,
+    ...(args.with_proposal ? ['--with-proposal'] : [])])
 
-  ctx.tools.register({
-    name: 'jiaodui_unit_submit',
-    description: '校验结构化修改建议并生成、登记完整报告。task/unit/run身份、源文hash与proposal_revision由插件按当前snapshot自动绑定；expected_snapshot_sha256仍执行CAS保护。',
-    parameters: {
-      type: 'object', additionalProperties: false,
-      required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
-      properties: {
-        task_id: { type: 'string' }, unit_id: { type: 'string' },
-        proposal: SUBMIT_PROPOSAL_SCHEMA,
-        expected_snapshot_sha256: { type: 'string' },
-        preview: { type: 'boolean', default: false },
+  const registerSubmit = (name, description, proposalSchema, flags) => {
+    if (!visible(name)) return
+    ctx.tools.register({
+      name,
+      description,
+      parameters: {
+        type: 'object', additionalProperties: false,
+        required: ['task_id', 'unit_id', 'proposal', 'expected_snapshot_sha256'],
+        properties: {
+          task_id: { type: 'string' }, unit_id: { type: 'string' },
+          proposal: proposalSchema,
+          expected_snapshot_sha256: { type: 'string' },
+          preview: { type: 'boolean', default: false },
+        },
       },
-    },
-    output: cliTool.output,
-    timeoutMs: cliTool.timeoutMs,
-    isConcurrencySafe: cliTool.isConcurrencySafe,
-    async execute(args, exec) {
-      const snapshotResult = await cliTool.execute({ args: ['--json', 'unit-snapshot',
-        '--task-id', args.task_id, '--unit-id', args.unit_id] }, exec)
-      if (snapshotResult.exitCode !== 0) return snapshotResult
-      let snapshotPayload
-      try {
-        snapshotPayload = JSON.parse(snapshotResult.stdout)
-      } catch {
-        throw new Error('unit-snapshot 未返回有效JSON，未执行 unit-submit')
-      }
-      const snapshot = snapshotPayload?.snapshot
-      if (!snapshot || typeof snapshot.snapshot_sha256 !== 'string'
-          || !('next_proposal_revision' in snapshot)
-          || (snapshot.next_proposal_revision !== null
-              && typeof snapshot.next_proposal_revision !== 'number')) {
-        throw new Error('unit-snapshot 缺少提交绑定字段，未执行 unit-submit')
-      }
-      const proposal = {
-        ...args.proposal,
-        task_id: args.task_id,
-        unit_id: args.unit_id,
-        run_id: snapshot.run_id,
-        source_sha256: snapshot.source_sha256,
-        body_sha256: snapshot.body_sha256,
-        proposal_revision: snapshot.next_proposal_revision ?? 1,
-      }
-      return cliTool.execute({ args: ['--json', 'unit-submit', '--task-id', args.task_id,
-        '--unit-id', args.unit_id, '--proposal-json', JSON.stringify(proposal),
-        '--expected-snapshot-sha256', args.expected_snapshot_sha256,
-        ...(args.preview ? ['--preview'] : [])] }, exec)
-    },
-  })
+      output: cliTool.output,
+      timeoutMs: cliTool.timeoutMs,
+      isConcurrencySafe: cliTool.isConcurrencySafe,
+      async execute(args, exec) {
+        const tempDir = mkdtempSync(join(tmpdir(), 'jiaodui-submit-'))
+        const proposalPath = join(tempDir, 'proposal.json')
+        try {
+          writeFileSync(proposalPath, JSON.stringify(args.proposal), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+          return await cliTool.execute({ args: ['--json', 'unit-submit', '--task-id', args.task_id,
+            '--unit-id', args.unit_id, '--proposal-json-file', proposalPath,
+            '--expected-snapshot-sha256', args.expected_snapshot_sha256,
+            ...flags, ...(args.preview ? ['--preview'] : [])] }, exec)
+        } finally {
+          rmSync(tempDir, { recursive: true, force: true })
+        }
+      },
+    })
+  }
+  registerSubmit('jiaodui_unit_submit',
+    '提交 v3 原文修订（old_text/new_text/reason/evidence），由 core 定位、绑定身份并生成、登记完整报告；返修可引用 base_proposal_revision 并撤回旧 ID。expected_snapshot_sha256 执行 CAS 保护。',
+    SUBMIT_PROPOSAL_SCHEMA, [])
+  registerSubmit('jiaodui_unit_submit_v2',
+    '显式兼容 v2 结构化提案；core 在材料锁内绑定身份与源文摘要，expected_snapshot_sha256 执行 CAS 保护。正常提案请用 jiaodui_unit_submit。',
+    SUBMIT_PROPOSAL_V2_SCHEMA, ['--bind-current'])
 
   register('jiaodui_unit_recovery', '按失败错误码消费一次有限恢复预算；类别由错误码确定性决定，fingerprint由core从failure.message/details派生。每个新的恢复动作使用新的attempt_id，并先用相同ID记录unit-event。', {
     type: 'object', additionalProperties: false,
@@ -295,7 +342,7 @@ function registerStructuredTools(ctx, cliTool) {
     ...(args.agent_id ? ['--agent-id', args.agent_id] : []),
     ...(args.expected_run_id ? ['--expected-run-id', args.expected_run_id] : [])])
 
-  // 取消单独成工具，而不是 unit-event 的可选字段：preset 的子代理 toolFilter 不含本工具，
+  // 取消单独成工具，而不是 unit-event 的可选字段：子代理 preset 的 toolset: unit 不含本工具，
   // 单元子代理因此无法自证取消（第 12 讲实测：子代理在正常心跳里填 user/user_cancel，
   // 伪造出 29 条用户取消，让 dispatch-plan 永久 stop=true）。
   register('jiaodui_unit_cancel', '记录或撤销一次显式取消；只应由父代理/宿主调用（子代理不可见）。', {
@@ -357,7 +404,7 @@ function registerStructuredTools(ctx, cliTool) {
         description: '仅 inspect-source：有限正文节选字符数（默认不返回正文）。',
       },
       material_name: { type: 'string', description: '仅 convert：材料目录名。' },
-      subject: { type: 'string', enum: ['高中物理'], description: '仅 split：学科。' },
+      subject: { type: 'string', enum: SUPPORTED_SUBJECTS, description: '仅 split：学科。' },
       mode: { type: 'string', enum: ['lecture', 'exam'], description: '仅 convert/split：材料类型。' },
       mode_origin: {
         type: 'string', enum: ['user', 'structure', 'preview', 'confirmed'],
@@ -392,7 +439,7 @@ function registerStructuredTools(ctx, cliTool) {
     },
   }, taskPrepareArgs)
 
-  ctx.tools.register({
+  if (visible('jiaodui_delivery')) ctx.tools.register({
     name: 'jiaodui_delivery',
     description: [
       '交付阶段：拼接整卷报告（build-report）或生成 Word 批注版（build-docx）。',
@@ -443,7 +490,7 @@ function registerStructuredTools(ctx, cliTool) {
   for (const [operation, schema] of Object.entries(CALC_SCHEMAS)) {
     const parameters = structuredClone(schema.parameters)
     parameters.properties.subject = {
-      type: 'string', enum: ['高中物理'], description: '可选学科，用于校验学科工具白名单并注入物理量表。',
+      type: 'string', enum: SUPPORTED_SUBJECTS, description: '可选学科，用于校验学科工具白名单并注入物理量表。',
     }
     parameters.properties.task_id = { type: 'string', description: '记录calc证据时的材料task_id。' }
     parameters.properties.unit_id = { type: 'string', description: '记录calc证据时的单元unit_id。' }
@@ -460,12 +507,14 @@ function registerStructuredTools(ctx, cliTool) {
 /**
  * 注册 jiaodui 工具。
  * @param ctx - 携带 tools / subprocess 服务的上下文。
- * @param config - command（CLI 路径或 PATH 名）、timeoutMs、maxOutputBytes。
+ * @param config - command（CLI 路径或 PATH 名）、timeoutMs、maxOutputBytes、
+ *   toolset（full 为父侧默认；unit 为单元子代理的封闭工具集）。
  */
 export function apply(ctx, config = {}) {
   const command = typeof config.command === 'string' && config.command.length > 0 ? config.command : undefined
   const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : 180000
   const maxOutputBytes = Number.isFinite(config.maxOutputBytes) && config.maxOutputBytes > 0 ? config.maxOutputBytes : 65536
+  const visible = toolVisible(config)
 
   const cliTool = {
     name: 'jiaodui',
@@ -530,7 +579,7 @@ export function apply(ctx, config = {}) {
           // 明确配置不回退，自动发现可继续尝试 PATH。
         }
       }
-      if (!executable) throw new Error('jiaodui: 未找到 CLI，请使用 Python 3.12 的 pipx install <jiaodui wheel>，并安装 pandoc；可用 python3 -m jiaodui 诊断安装')
+      if (!executable) throw new Error('jiaodui: 未找到 CLI；请用独立 Python 3.12 安装匹配版本 wheel，并在 DSH 插件 command 中配置 CLI 绝对路径（或让 GUI PATH 可发现 CLI）；Pandoc 也必须安装并可执行')
       if (exec?.signal?.aborted) {
         const cancelled = new Error('jiaodui: 宿主已中止调用；取消来源须由编排事件明确记录')
         cancelled.name = 'AbortError'
@@ -543,7 +592,7 @@ export function apply(ctx, config = {}) {
       const handle = ctx.subprocess.spawn({
         argv: [executable, ...argv],
         cwd,
-        env: { JIAODUI_WORK_ROOT: cwd },
+        env: { JIAODUI_WORK_ROOT: cwd, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
         stdio: {
           stdin: 'ignore',
           stdout: { maxBytes: maxOutputBytes },
@@ -585,6 +634,6 @@ export function apply(ctx, config = {}) {
       }
     },
   }
-  ctx.tools.register(cliTool)
-  registerStructuredTools(ctx, cliTool)
+  if (visible('jiaodui')) ctx.tools.register(cliTool)
+  registerStructuredTools(ctx, cliTool, visible)
 }

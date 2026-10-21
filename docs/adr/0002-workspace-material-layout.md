@@ -1,12 +1,13 @@
 # ADR 0002：工作区产物与材料身份
 
-- 状态：已采纳（v4：新增陈旧单元归档 `.superseded/<run_id>/`，见下）
+- 状态：已采纳（v5：新增跨平台材料锁文件；此前 v4 新增陈旧单元归档 `.superseded/<run_id>/`）
 - 工作区 W 由宿主会话注入 `JIAODUI_WORK_ROOT`，或显式 `--work-root` 指定。写入缺少 W 返回契约错误；只读命令独立可用。
-- 默认布局为 `W/校对/<材料名>/{source,raw,units,校对报告,校对Word}`；单元根为 `units/<材料名>/`。
+- 默认布局为 `W/校对/<材料名>/{source,raw,units,校对报告,校对Word}`；单元根为 `units/<材料名>/`。材料根允许保留 `_校对记录.json` 与 `.jiaodui.lock`；后者是持久内部锁载体，解锁后不得删除。
 - 写入命令：convert、split、slice（非 preview）、parse-report、build-report、build-docx，以及 repair-report --apply（只原子更新单元内 `_校对报告.md`，不新建产物）。实际写入处检查真实路径归属，拒绝符号链接逃逸；不提供越界开关。系统临时文件不属于校对产物。
 - `_校对记录.json` 带 schema_version，记录源文件 SHA、资源摘要、参数、单元输入摘要、轮次与交付登记。它不能授权写入；损坏不能回退历史布局。
 - 同名不同源文件 SHA 拒绝覆盖。相同输入及参数续跑；资源或处理参数变化、显式 rerun 开新轮次，不复用旧轮交付。
 - parse-report 是单元交付登记点：先 verify，再写单元数据，最后登记当前轮次、报告 SHA 与单元输入摘要。并发登记加锁且原子写入。
+- 材料锁使用工作区内稳定的 `.jiaodui.lock` 文件：POSIX 用 `flock`、Windows 用 `msvcrt` 锁定首字节，并以进程内互斥补足线程竞争；文件永久保留，进程退出由操作系统释放锁。等待上限为 120 秒，显著低于插件 180 秒子进程预算，超时能在宿主中止前返回结构化环境错误。锁路径须经过真实路径边界检查；不得删除锁文件来“清锁”。
 - status 由磁盘推导：新布局同时核对当前轮登记、报告 SHA、输入摘要和 verify；不信任 runs.status。无 W 时按材料目录校验内部相对路径，原始 source_path 只作溯源。
 - 单元集合双向核对；多余、缺失均返回 unit-set-mismatch，details 包含可扫描状态与恢复提示。split --adopt-units 显式接纳磁盘集合，记录前后差异，不删除产物。
 - 变更单元集用 `split` / `slice --replace-units`：不再属于新集合的单元整体移动到 `units/<材料名>/.superseded/<原 run_id>/`，只移动不删除，归档路径写进轮次 action。归档目录名不是契约单元名，单元扫描与集合核对都会忽略；`--replace-units` 与 `--adopt-units` 互斥。

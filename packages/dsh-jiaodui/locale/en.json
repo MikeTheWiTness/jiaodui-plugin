@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Proofreading (jiaodui)",
-    "description": "Mounts the jiaodui proofreading skill, registers the jiaodui native tool, and declares a jiaodui agent preset (high-school physics only for now)"
+    "title": "Proofreading (high-school physics)",
+    "description": "Mounts the jiaodui high-school physics proofreading skill, registers the jiaodui native tools, and declares a proofreading agent preset (high-school chemistry lives in the separate dsh-jiaodui-chemistry bundle)"
   }
 }

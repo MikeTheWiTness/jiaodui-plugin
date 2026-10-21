@@ -133,6 +133,42 @@ def test_cli_apply_rejects_report_outside_work_root(tmp_path):
     assert error["error"]["code"] == "outside-workspace"
 
 
+def test_apply_in_new_layout_requires_manual_legacy_and_marks_data(tmp_path, monkeypatch):
+    from jiaodui.workflow import convert_material, split_material
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source_file = tmp_path / "lesson.md"
+    source_file.write_text("1．设物体A。\n", encoding="utf-8")
+    converted = convert_material(source_file, material_name="repair-legacy", mode="exam")
+    split = split_material(converted.raw_md, subject="高中物理", mode="exam")
+    unit = Path(split.unit_dirs[0])
+    source = (unit / f"{unit.name}.md").read_text(encoding="utf-8")
+    report = unit / "_校对报告.md"
+    report_text = f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n"
+    report.write_text(report_text, encoding="utf-8")
+
+    from jiaodui.errors import BusinessError
+    with pytest.raises(BusinessError) as error:
+        repair_unit_report(unit, apply=True, work_root=workspace)
+    assert error.value.code == "parse-v1-new-layout-forbidden"
+    assert report.read_text(encoding="utf-8") == report_text
+
+    repaired = repair_unit_report(unit, apply=True, manual_legacy=True, work_root=workspace)
+    assert repaired.ok and repaired.verified
+    payload = json.loads((unit / "_校对数据.json").read_text(encoding="utf-8"))
+    assert payload["legacy_manual"] is True
+
+    protected = '{"schema_version":2,"corrections":[]}'
+    (unit / "_校对数据.json").write_text(protected, encoding="utf-8")
+    before = report.read_bytes()
+    with pytest.raises(BusinessError) as error:
+        repair_unit_report(unit, apply=True, manual_legacy=True, work_root=workspace)
+    assert error.value.code == "legacy-overwrite-v2-forbidden"
+    assert report.read_bytes() == before
+
+
 def test_plan_sample_repairs_formula_transcription_without_writing():
     unit = ROOT / "校对/第 6 讲校对测试-独立续测-03/units/第 6 讲校对测试-独立续测-03/单元3"
     if not unit.is_dir():

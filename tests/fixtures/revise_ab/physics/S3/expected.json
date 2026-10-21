@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S3",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "p3",
+      "old_text": "向右",
+      "new_text": "向左",
+      "span": {
+        "line": 4,
+        "start_column": 3,
+        "end_column": 5
+      },
+      "match_index": 3,
+      "reason": "右方为正，丙速度为负，应向左；甲乙方向正确。"
+    }
+  ],
+  "reasoning": [
+    "向右仅在第2、3、4行出现，共3次；1基match_index=3。"
+  ]
+}

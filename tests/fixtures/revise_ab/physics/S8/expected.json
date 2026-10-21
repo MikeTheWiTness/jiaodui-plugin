@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S8",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "p8a",
+      "old_text": "加速度为2 m/s²。",
+      "new_text": "加速度为3 m/s²。",
+      "span": {
+        "line": 2,
+        "start_column": 1,
+        "end_column": 12
+      },
+      "reason": "a=F/m=6/2=3 m/s²。"
+    },
+    {
+      "id": "p8b",
+      "old_text": "末速度为5 m/s。",
+      "new_text": "末速度为6 m/s。",
+      "span": {
+        "line": 3,
+        "start_column": 1,
+        "end_column": 11
+      },
+      "reason": "v=at=3×2=6 m/s。"
+    },
+    {
+      "id": "p8c",
+      "old_text": "位移为4 m。",
+      "new_text": "位移为6 m。",
+      "span": {
+        "line": 4,
+        "start_column": 1,
+        "end_column": 8
+      },
+      "reason": "s=1/2×a×t²=1/2×3×4=6 m。"
+    }
+  ],
+  "reasoning": [
+    "中断前后题设不变；最终3条各一次，重派不得丢失已发现问题。"
+  ],
+  "interventions": [
+    {
+      "trigger": "旧实例已经完成至少2条修订后",
+      "action": "宿主强杀并技术重派；B先abandon再新attempt open，不继承草稿。",
+      "expected": "最终p8a、p8b、p8c各一条；本候选未实际执行强杀。"
+    }
+  ]
+}

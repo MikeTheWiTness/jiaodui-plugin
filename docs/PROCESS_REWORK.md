@@ -9,7 +9,9 @@
 - 初始main为`abfea6c`，工作树干净。`.venv`指向仓内独立`.venv-cli`；Python 3.12.13，editable CLI，pandoc 3.9.0.2。
 - 改造前全量基线941 passed、4 subtests passed；后续只跑合成/临时目录的定向测试，不重跑既有业务样本。
 - 已确认桌面profile的`node_modules/dsh-jiaodui`是软链，指向仓库根`packages/dsh-jiaodui`。未改profile或手动替换安装包；实验源码必须移到独立worktree，根目录回到main，避免下次重载意外加载实验链。官方新安装/重启/新会话验收仍待完成。
-- 实际安装的ASAR以只读方式按归档索引提取供审计，未修改宿主或用提取副本作为部署源码。确认skill-filesystem支持`includeDefaultRoots:false`，默认来源是项目`.dsh/skills`、`.agents/skills`、用户dshHome/agentsHome及宿主bundled根。subagent支持`toolFilter`和`maxDepth`。配置可表达排除默认skill与子工具allowlist，实际新会话仍须验收。
+- 实际安装的ASAR以只读方式按归档索引提取供审计，未修改宿主或用提取副本作为部署源码。确认skill-filesystem支持`includeDefaultRoots:false`，默认来源是项目`.dsh/skills`、`.agents/skills`、用户dshHome/agentsHome及宿主bundled根。subagent支持`maxDepth`；0.2.0 的 `toolFilter` 已在 0.2.1 移除，见下方迁移注记。配置可表达排除默认skill与子工具allowlist，实际新会话仍须验收。
+
+> **2026-10-18 DSH 0.2.1 迁移**：`@deepseek-ai/dsh-tool-subagent` 在 0.2.1-rc.2 移除了 `toolFilter`/`persona`（`backgroundMode` 也已不存在）。子代理工具面改由独立子 preset `jiaodui-unit` / `jiaodui-chemistry-unit` + `agentPreset` 决定；原生工具 `toolset: unit` 只注册单元工具与 `calc_*`。本文件下方关于 `toolFilter` 的批次记录保留为当时历史。
 
 ## 实验实现
 

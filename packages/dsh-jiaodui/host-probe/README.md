@@ -10,6 +10,12 @@
 
 check-env 的 runtime.work_root 在子进程内解析 JIAODUI_WORK_ROOT，因此其正确返回同时验证显式 env 注入。记录包括宿主版本、会话工作区、工具退出码、完整 stdout/stderr、产物路径和执行日期。不记录凭证。
 
+## 子 preset 工具面补测（DSH 0.2.1+）
+
+- 重启宿主后打开「设置 → agent preset」：`校对（高中物理·单元子代理）` 不应显示异常；`校对` preset 的 `tool-subagent` 应指向它。
+- 派发一个单元，检查子代理实际工具目录：只应出现 `skill`、`read`、`read_image`、`jiaodui_unit_read/locate/snapshot/submit/event/recovery` 与 `jiaodui_calc_*`；不得出现 `write`、`edit`、`bash`、`glob`、`grep`、raw `jiaodui`、`jiaodui_unit_cancel`、`jiaodui_unit_review`、`jiaodui_task_prepare`、`jiaodui_delivery`。
+- 本版子 preset 不挂 `agent-instructions`：子代理上下文不应出现 AGENTS.md 的 `<system-reminder>`；若单元执行缺少必要规则，再评估是否加回。
+
 ## 类型入口补测
 
 - 明确告诉宿主“这是高中物理讲义”：应直接 convert --mode lecture，不再为类型或学科预览/询问。

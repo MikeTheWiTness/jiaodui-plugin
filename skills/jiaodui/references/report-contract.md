@@ -2,9 +2,11 @@
 
 权威来源：`jiaodui/verify.py`、`jiaodui/report_parse.py`、`jiaodui/markers.py`、`jiaodui/paths.py`、PRD §5。命令入口：`jiaodui verify-report --unit <dir> [--source S]`。
 
+正常新布局提交 **schema v3** 原文修订（字段与返修见 operation-manual），core 自动定位、绑定身份并编译，**落盘仍为 v2**，不做数据迁移。`summary` 按有效修订最高严重度推导，空集为“无问题”；报告正文由程序从不可变源文生成，以下格式是生成/兼容读取契约，模型不得自行抄写全文。显式 v2 提交保留兼容入口，均不得旁路 `verify-report` 与父代理 `unit-review`。
+
 ## 一、`_校对报告.md` 结构（两节必须存在）
 1. **头部严重度总结行**：必须是 `无问题` / `轻微问题` / `一般问题` / `严重错误` 之一。可写 `总结行：一般问题`；裸「无」不是合法值。总结行只在首个三级标题之前的头部区域识别。
-2. **`### 标记原文`**：逐字抄写单元源文正文，在需要修改处插入内联标记 `【编号|原文字段|修改后文字】`。
+2. **`### 标记原文`**：程序逐字保留单元源文正文，在需要修改处插入内联标记 `【编号|原文字段|修改后文字】`。
    - 编号为阿拉伯数字，建议从 1 起连续（闸门只查重号与原因对应，不查连续性）；原文字段逐字一致；禁止把标记插进 `$...$` 或 `**...**` 内部。
    - 公式等源文自身跨行时允许字段跨行（解析与 Word 生成共用同一语法）。
    - 不抄写 `编号：` / `内容：` 信封行；不用三反引号或波浪线围栏包裹（围栏会让公式无法转 Word 公式）。
@@ -37,7 +39,11 @@
 >
 > `repair-report` 是工具侧辅助：只从源文重建 `### 标记原文`，让未标记正文回到源文字面，再按本节同一套检查项复验；它不放宽任何检查、不替代 `verify-report`，字段无法唯一定位即按 `repair.*` 拒绝。
 
-## 三、`_校对数据.json`（parse-report 确定性产出）
+## 三、`_校对数据.json`（结构化提交与历史读取）
+
+正常 `unit-submit` 保存编译后的 v2 数据、证据及自查，顶层 `schema_version` 仍为 2；可选 `submission_v3` 保存当前有效的分层提案，供增量返修保留/撤回局部证据（含图片语义），不是草稿或历史；增量返修的 `base_proposal_revision` / `withdrawn` / `corrections` 由 core 合并，`unit_evidence` 省略则继承、给出则整体替换，`self_check` 每次重提。撤回的局部证据不再渲染，共享证据和图片覆盖保留；输入、提案或报告变化后旧父复核失效，须按新 snapshot 重新复核。
+
+以下为历史 `parse-report` 读取生成的简化数据示意，不是 v3 提交对象：
 ```json
 {
   "corrections": [
@@ -50,7 +56,7 @@
 ```
 - `corrections / summary / marked_text` 为必需；`tool_calls` 有可记录的工具调用时填写，无调用允许缺省。
 - summary 头部识别不到时记 `未声明`（不冒充「无问题」）；「无问题」却含修正标记时同样记 `未声明`。
-- `parse-report` 默认**拒绝解析未通过 verify-report 的报告**；仅历史产物兼容可显式加 `--legacy`。图片检查复用该闸门，拒绝可确定的缺图、无效引用和不支持的远程引用；闸门只能验证正文引用与资源绑定，不能证明模型理解了正确的图片语义归属，归属必须由真实宿主验收。新布局通过后同时在材料 `_校对记录.json` 登记本轮 run_id、报告 SHA 与单元输入摘要；必须登记成功才回报完成。历史写入另需 `--legacy-layout`，仍限于指定工作区，不登记为新交付。
+- 正常新布局只走结构化 `unit-submit` + 父代理 `unit-review`；core 生成报告、校验图片并登记本轮 run_id、报告 SHA 与单元输入摘要，复核接受且登记成功才算完成。新布局 v1 Markdown 仅可显式 `parse-report --manual-legacy` 人工兼容：校验通过后只写单元数据、标记 `legacy_manual`，不登记本轮完成，下游拒绝消费。无材料清单的历史布局保持 `parse-report` / `repair-report` 兼容行为；历史写入仍须 `--legacy-layout` 且限于指定工作区。
 
 ## 四、docx 计数口径（build-docx）
 - 输出逐项计数：错误标记数 `marker_count`、批注锚点数 `anchor_count`、公式可见兜底数 `formula_fallback_count`、缺失数 `missing_count`、记账异常 `over_count`、图片未嵌入 `image_missing_count`、批注公式降级 `comment_formula_fallback_count`、无问题单元标题批注数 `heading_comment_count`。

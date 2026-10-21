@@ -25,4 +25,4 @@
 
 拆分默认 rule；manual 按 `###### 单元开始 ######` / `###### 单元结束 ######` 成对标记取内容（标记外内容不纳入，故仅在用户明确要求时使用）；none 整篇一单元。智能拆分仍为宿主子 agent 定边界加 slice，不能在 Python 调模型。
 
-进入单元阶段后两类材料共用同学科规范、verify-report、parse-report 登记、build-report 和 build-docx。
+进入单元阶段后两类材料共用同学科规范与交付：正常新布局由 `unit-submit` + 父代理 `unit-review` 登记；v1 人工兼容须 `--manual-legacy` 且不登记，旧布局保持兼容。

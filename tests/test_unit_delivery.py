@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -63,6 +67,25 @@ def _prepared(tmp_path, monkeypatch):
     }
     snapshot = read_unit_snapshot(data["task_id"], unit_id)
     return workspace, root, unit, data, unit_id, text, proposal, snapshot
+
+
+def test_cli_unit_submit_accepts_utf8_proposal_file(tmp_path, monkeypatch):
+    workspace, root, _, data, unit_id, _, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    proposal_file = tmp_path / "结构化提案.json"
+    proposal["evidence"]["assumptions"][0]["text"] = "中文依据：木板应改为木块。"
+    proposal_file.write_text(json.dumps(proposal, ensure_ascii=False), encoding="utf-8")
+    env = {**os.environ, "JIAODUI_WORK_ROOT": str(workspace)}
+    result = subprocess.run(
+        [sys.executable, "-m", "jiaodui", "--json", "unit-submit",
+         "--task-id", data["task_id"], "--unit-id", unit_id,
+         "--proposal-json-file", str(proposal_file),
+         "--expected-snapshot-sha256", snapshot["snapshot_sha256"]],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["registered"] and payload["verified"]
+    assert material.load(root)["unit_records"][0]["unit"] == "单元1"
 
 
 def test_image_evidence_is_bound_to_inspected_references_before_write(tmp_path, monkeypatch):
@@ -225,6 +248,51 @@ def test_bad_proposal_never_mutates_existing_files(tmp_path, monkeypatch):
     with pytest.raises(BusinessError):
         commit_unit_submission(data["task_id"], unit_id, invalid, fresh["snapshot_sha256"])
     assert [(unit / name).read_bytes() for name in ("_校对报告.md", "_校对数据.json")] == before
+
+
+def test_bind_current_fills_all_identity_fields_from_locked_snapshot(tmp_path, monkeypatch):
+    _, _, unit, data, unit_id, _, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    bound = {key: value for key, value in proposal.items()
+             if key not in {"task_id", "unit_id", "run_id", "source_sha256", "body_sha256", "proposal_revision"}}
+
+    result = commit_unit_submission(data["task_id"], unit_id, bound,
+                                    snapshot["snapshot_sha256"], bind_current=True)
+
+    assert result["registered"] and result["verified"]
+    stored = json.loads((unit / "_校对数据.json").read_text(encoding="utf-8"))["proposal"]
+    assert {key: stored[key] for key in ("task_id", "unit_id", "run_id",
+                                          "source_sha256", "body_sha256",
+                                          "proposal_revision")} == {
+        "task_id": snapshot["task_id"], "unit_id": snapshot["unit_id"],
+        "run_id": snapshot["run_id"], "source_sha256": snapshot["source_sha256"],
+        "body_sha256": snapshot["body_sha256"], "proposal_revision": 1,
+    }
+
+
+@pytest.mark.parametrize("revision", [True, 1.0])
+def test_bind_current_rejects_non_integer_revision_as_conflict(tmp_path, monkeypatch, revision):
+    _, _, unit, data, unit_id, _, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    proposal["proposal_revision"] = revision
+
+    with pytest.raises(BusinessError) as error:
+        commit_unit_submission(data["task_id"], unit_id, proposal,
+                               snapshot["snapshot_sha256"], bind_current=True)
+
+    assert error.value.code == "proposal-binding-conflict"
+    assert not (unit / "_校对报告.md").exists()
+
+
+def test_bind_current_rejects_conflicting_identity_without_writing(tmp_path, monkeypatch):
+    _, _, unit, data, unit_id, _, proposal, snapshot = _prepared(tmp_path, monkeypatch)
+    proposal["run_id"] = "stale-run"
+
+    with pytest.raises(BusinessError) as error:
+        commit_unit_submission(data["task_id"], unit_id, proposal,
+                               snapshot["snapshot_sha256"], bind_current=True)
+
+    assert error.value.code == "proposal-binding-conflict"
+    assert not (unit / "_校对报告.md").exists()
+    assert not (unit / "_校对数据.json").exists()
 
 
 def _prepare_special(tmp_path, monkeypatch, source_text: str, phrase: str):

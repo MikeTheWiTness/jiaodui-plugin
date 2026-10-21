@@ -96,6 +96,17 @@ def status_of_unit(unit_dir: str | Path) -> UnitStatus:
         return UnitStatus(name, str(unit_dir), SKIPPED,
                           source=str(src) if src else None)
 
+    try:
+        import json
+
+        data = json.loads(paths.data_path(unit_dir).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        data = None
+    if isinstance(data, dict) and data.get("legacy_manual") is True:
+        return UnitStatus(name, str(unit_dir), CURRENT_PENDING, source=str(src) if src else None,
+                          report=str(report) if report.is_file() else None,
+                          reason="人工兼容交付，不计入本轮完成")
+
     if not report.is_file():
         # 有失败记录但报告未生成（技术崩溃/超时后恢复）：保留失败事实，不回到「未开始」
         if fail.is_file():

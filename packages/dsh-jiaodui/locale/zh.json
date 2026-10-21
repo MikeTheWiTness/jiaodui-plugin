@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "校对（jiaodui）",
-    "description": "挂载 jiaodui 校对 skill、注册 jiaodui 原生工具，并提供「校对」agent preset（当前只落地高中物理）"
+    "title": "校对（高中物理）",
+    "description": "挂载 jiaodui 高中物理校对 skill、注册 jiaodui 原生工具，并提供「校对」agent preset（高中化学见独立包 dsh-jiaodui-chemistry）"
   }
 }

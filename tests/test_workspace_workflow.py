@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from jiaodui.errors import JiaoduiError
+from v2_helpers import deliver_v2, proposal_v2
 
 
 def test_write_requires_workspace(tmp_path, monkeypatch):
@@ -47,11 +48,9 @@ def _prepare(tmp_path, monkeypatch, name="A"):
 
 
 def _deliver(unit):
-    from jiaodui.workflow import parse_unit
-    source = (unit / f"{unit.name}.md").read_text(encoding="utf-8")
-    (unit / "_校对报告.md").write_text(
-        f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n", encoding="utf-8")
-    parse_unit(unit)
+    from v2_helpers import deliver_v2
+
+    return deliver_v2(unit)
 
 
 def test_layout_resume_rerun_and_move(tmp_path, monkeypatch):
@@ -579,15 +578,29 @@ def test_concurrent_registration_keeps_all_units(tmp_path, monkeypatch):
     source.write_text("\n\n".join(f"{n}．题干。" for n in range(1, 9)), encoding="utf-8")
     converted = convert_material(source)
     split = split_material(converted.raw_md, subject="高中物理", mode="exam")
-    for d in map(Path, split.unit_dirs):
-        src = (d / f"{d.name}.md").read_text()
-        (d / "_校对报告.md").write_text(f"无问题\n### 标记原文\n{src}\n### 修改原因\n无\n")
-    jobs = [subprocess.Popen([sys.executable, "-m", "jiaodui", "parse-report", "--unit", d, "--json"],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for d in split.unit_dirs]
+    from jiaodui.review import record_parent_review
+    from jiaodui.unit_delivery import read_unit_snapshot
+
+    jobs = []
+    identities = []
+    for index, unit in enumerate(map(Path, split.unit_dirs)):
+        data, unit_id, proposal, snapshot = proposal_v2(unit)
+        proposal_file = tmp_path / f"proposal-{index}.json"
+        proposal_file.write_text(json.dumps(proposal, ensure_ascii=False), encoding="utf-8")
+        identities.append((data["task_id"], unit_id))
+        jobs.append(subprocess.Popen(
+            [sys.executable, "-m", "jiaodui", "unit-submit", "--task-id", data["task_id"],
+             "--unit-id", unit_id, "--proposal-json-file", str(proposal_file),
+             "--expected-snapshot-sha256", snapshot["snapshot_sha256"], "--json"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
     for job in jobs:
         stdout, stderr = job.communicate(timeout=20)
         assert job.returncode == 0, stderr
         assert json.loads(stdout)["registered"]
+    for task_id, unit_id in identities:
+        snapshot = read_unit_snapshot(task_id, unit_id)
+        record_parent_review(task_id, unit_id, expected_snapshot_sha256=snapshot["snapshot_sha256"],
+                             decision="accepted", reviewer_id="parent-concurrent-test")
     assert scan_status(Path(split.unit_dirs[0]).parent).counts()["已完成"] == 8
 
 
@@ -657,16 +670,13 @@ def test_docx_reads_free_form_source_like_status_does(tmp_path):
 def test_extra_unit_files_are_tolerated_and_inert(tmp_path, monkeypatch):
     """R-D03（决策：不管）：非契约文件不导致失败，也不参与校验与交付。"""
     from jiaodui.status import scan_status
-    from jiaodui.workflow import parse_unit
 
     _, _, _, result = _prepare(tmp_path, monkeypatch)
     unit = Path(result.unit_dirs[0])
-    source = (unit / "第1题.md").read_text()
-    (unit / "_校对报告.md").write_text(f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n")
     (unit / "第1题_尝试2.md").write_text("旧草稿", encoding="utf-8")
     (unit / "随手笔记.txt").write_text("笔记", encoding="utf-8")
 
-    assert parse_unit(unit)["registered"]
+    assert _deliver(unit)["registered"]
     assert scan_status(unit.parent).counts()["已完成"] == 1
 
 
@@ -695,7 +705,7 @@ def test_readonly_tolerates_symlinked_source_but_write_rejects(tmp_path, monkeyp
 
     # 写：同一单元按 realpath 拒绝，绝不顺着软链写出去
     with pytest.raises(JiaoduiError) as err:
-        parse_unit(unit)
+        parse_unit(unit, legacy_layout=True)
     assert err.value.code == "outside-workspace"
 
 
@@ -733,13 +743,10 @@ def test_build_docx_out_dir_must_stay_in_contract_dir(tmp_path, monkeypatch):
 def test_missing_data_file_breaks_current_run_completion(tmp_path, monkeypatch):
     """R-D06：_校对数据.json 是交付的一部分，删掉就不再算本轮完成。"""
     from jiaodui.status import scan_status
-    from jiaodui.workflow import parse_unit
 
     _, _, _, result = _prepare(tmp_path, monkeypatch)
     unit = Path(result.unit_dirs[0])
-    source = (unit / "第1题.md").read_text()
-    (unit / "_校对报告.md").write_text(f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n")
-    assert parse_unit(unit)["registered"]
+    assert _deliver(unit)["registered"]
     assert scan_status(unit.parent).counts()["已完成"] == 1
 
     (unit / "_校对数据.json").unlink()
@@ -752,13 +759,11 @@ def test_missing_data_file_breaks_current_run_completion(tmp_path, monkeypatch):
 def test_tampered_data_file_breaks_current_run_completion(tmp_path, monkeypatch):
     """改过 _校对数据.json 也不能算本轮完成（与登记摘要不一致）。"""
     from jiaodui.status import scan_status
-    from jiaodui.workflow import parse_unit
 
     _, _, _, result = _prepare(tmp_path, monkeypatch)
     unit = Path(result.unit_dirs[0])
-    source = (unit / "第1题.md").read_text()
-    (unit / "_校对报告.md").write_text(f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n")
-    parse_unit(unit)
+    _deliver(unit)
+    assert scan_status(unit.parent).counts()["已完成"] == 1
 
     data_file = unit / "_校对数据.json"
     data_file.write_text(data_file.read_text(encoding="utf-8") + "\n", encoding="utf-8")
@@ -770,45 +775,56 @@ def test_tampered_data_file_breaks_current_run_completion(tmp_path, monkeypatch)
 
 def test_registration_records_data_digest(tmp_path, monkeypatch):
     """登记必须把数据文件摘要写进 unit_records，否则上面两条无从判定。"""
-    from jiaodui.workflow import parse_unit
+    import hashlib
 
     workspace, _, _, result = _prepare(tmp_path, monkeypatch)
     unit = Path(result.unit_dirs[0])
-    source = (unit / "第1题.md").read_text()
-    (unit / "_校对报告.md").write_text(f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n")
-    parse_unit(unit)
+    _deliver(unit)
 
     manifest = workspace / "校对" / "材料" / "_校对记录.json"
     records = json.loads(manifest.read_text(encoding="utf-8"))["unit_records"]
     assert len(records) == 1
-    assert len(records[0]["data_sha256"]) == 64
+    assert records[0]["data_sha256"] == hashlib.sha256((unit / "_校对数据.json").read_bytes()).hexdigest()
 
 
-def test_registration_refuses_run_changed_during_parse(tmp_path, monkeypatch):
-    from jiaodui.workflow import parse_unit, split_material
-    from jiaodui import report_parse
+def test_registration_refuses_run_changed_after_v2_submission(tmp_path, monkeypatch):
+    """提交完成后轮次推进，迟到的登记不得写入新轮次。"""
+    from jiaodui import material
+    from jiaodui.workflow import split_material
+
     _, _, converted, result = _prepare(tmp_path, monkeypatch)
     unit = Path(result.unit_dirs[0])
-    source = (unit / "第1题.md").read_text()
-    (unit / "_校对报告.md").write_text(f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n")
-    save = report_parse.save_proofread_json
-    def new_run_before_register(*args, **kwargs):
-        saved = save(*args, **kwargs)
-        split_material(converted.raw_md, subject="高中物理", mode="exam", rerun=True)
-        return saved
-    monkeypatch.setattr(report_parse, "save_proofread_json", new_run_before_register)
+    delivered = deliver_v2(unit, accept=False)
+    root = material.find_material(unit)
+    report = (unit / "_校对报告.md").read_bytes().decode("utf-8")
+    split_material(converted.raw_md, subject="高中物理", mode="exam", rerun=True)
+    manifest = root / material.MANIFEST
+    before = manifest.read_bytes()
+
     with pytest.raises(JiaoduiError) as err:
-        parse_unit(unit)
+        material.register(root, unit, report, delivered["run_id"])
     assert err.value.code == "run-changed"
+    assert manifest.read_bytes() == before
 
 
 def test_crlf_report_registers_its_actual_bytes(tmp_path, monkeypatch):
-    from jiaodui.workflow import parse_unit
+    """v2 从 CRLF 源文生成正文，登记摘要必须对应原始字节而非 read_text 归一化结果。"""
+    import hashlib
+    from jiaodui import material
     from jiaodui.status import scan_status
+
     _, _, _, result = _prepare(tmp_path, monkeypatch)
     unit = Path(result.unit_dirs[0])
-    source = (unit / "第1题.md").read_text()
-    report = f"无问题\n### 标记原文\n{source}\n### 修改原因\n无\n".replace("\n", "\r\n")
-    (unit / "_校对报告.md").write_bytes(report.encode("utf-8"))
-    assert parse_unit(unit)["registered"]
+    source = unit / "第1题.md"
+    source.write_bytes(b"1. source\r\nsecond line.\r\n")
+    root = material.find_material(unit)
+    # 此处装配不同换行的不可变输入，尚无报告/登记；后续交付仍走完整 v2 闸门。
+    data = material.load(root)
+    data["unit_inputs"][unit.name] = material.unit_inputs(root, unit)
+    material.write(root, data)
+    assert _deliver(unit)["registered"]
+    report_bytes = (unit / "_校对报告.md").read_bytes()
+    assert b"\r\n" in report_bytes
+    record = material.load(root)["unit_records"][0]
+    assert record["report_sha256"] == hashlib.sha256(report_bytes).hexdigest()
     assert scan_status(unit.parent).counts()["已完成"] == 1

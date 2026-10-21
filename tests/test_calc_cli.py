@@ -66,6 +66,31 @@ def test_calc_subject_without_calc_tool_is_unsupported(tmp_path):
     assert error["details"]["allowed_tools"] == ["classics"]
 
 
+def test_chemistry_subject_allows_balance_and_stoichiometry():
+    """高中化学学科配置放行 calc，且化学专用 operation 可端到端跑通。"""
+    balanced = run("calc", "chemistry_balance", "--subject", "高中化学",
+                   "--param", "equation=Fe + O2 -> Fe2O3", "--json")
+    assert balanced.returncode == 0, balanced.stderr
+    result = json.loads(balanced.stdout)["result"]["result"]
+    assert result["balanced_equation"] == "4Fe + 3O2 -> 2Fe2O3"
+
+    stoich = run("calc", "stoichiometry", "--subject", "高中化学",
+                 "--param", "balanced_equation=2H2 + O2 -> 2H2O",
+                 "--param", "known_substance=H2", "--param", "known_mass=4.0",
+                 "--param", "target_substance=H2O", "--json")
+    assert stoich.returncode == 0, stoich.stderr
+    assert json.loads(stoich.stdout)["result"]["result"]["target_mass_g"] > 0
+
+
+def test_chemistry_quantities_is_empty_but_readable():
+    """化学 v1 不建量表：命令必须成功返回空表，而不是报错。"""
+    r = run("quantities", "--subject", "高中化学", "--json")
+    assert r.returncode == 0, r.stderr
+    payload = json.loads(r.stdout)
+    assert payload["count"] == 0
+    assert payload["quantities"] == {}
+
+
 def test_calc_unknown_subject_is_not_found():
     r = run("calc", "evaluate", "--param", "expression=1+1", "--subject", "不存在的学科", "--json")
     assert r.returncode == 5, r.stderr

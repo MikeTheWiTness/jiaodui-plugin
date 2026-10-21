@@ -1,14 +1,16 @@
 ---
 name: jiaodui
-description: K-12 试卷/讲义校对总入口。优先采用用户指定学科与材料类型；未指定时检查 Word 嵌套表格或有限节选，不确定则询问，再组织对应导入拆分及共用校对交付。v1 预设学科只落地高中物理，其余 M5 待落地。
+description: 高中物理试卷/讲义校对入口。优先采用用户指定材料类型；未指定时检查 Word 嵌套表格或有限节选，不确定则询问，再组织导入拆分、逐单元结构化校对与 Word 批注交付。学科固定为高中物理，只加载本 skill 的物理规范。
 ---
 
-# jiaodui 校对总入口
+# jiaodui 高中物理校对入口
 
 ## 1. 何时使用与目标
-- 输入为 K-12 试卷/讲义源文件（docx / doc / idml / md）或已拆分单元目录，需要逐题校对并交付 Word 批注版时使用。
+- 输入为高中物理试卷/讲义源文件（docx / doc / idml / md）或已拆分单元目录，需要逐单元校对并交付 Word 批注版时使用。
 - 分工：**判断交给 agent，确定性交给 jiaodui CLI**。CLI 只做转换 / 拆分 / 校验 / 计算 / 拼装，不调用任何模型。
-- v1 范围：只做**试卷 + 讲义**主链路；批注评审、自由校对、独立解题（冻结）、classics 古籍检索均后置。学科预设 v1 只落地**高中物理**，其余 6 科见 `references/subject-matrix.md`（M5 待落地）。
+- 本入口只服务**高中物理**：学科已确定，不再做学科识别与多学科分流；材料类型（讲义 / 试卷）仍按 §2.1 判定。
+- v1 范围：只做**试卷 + 讲义**主链路；批注评审、自由校对、独立解题（冻结）、classics 古籍检索均后置。
+- 高中化学是**独立插件包**的独立入口（skill `jiaodui-chemistry`），本入口不加载、不套用化学规范。
 - 不做：GUI、LaTeX/PDF、自动改源文。
 
 - 入口在派发第一个单元前确认执行模式：用户已明确自动校对/无人值守时直接采用 automatic；否则与其他未定入口项合并一次询问。顺序固定为 `convert → split → execution-policy`（split 开新轮次会使先前授权失效）。确认后用 `jiaodui execution-policy <material_dir> --mode automatic|interactive --origin user|confirmed --work-root <W> --json` 写入当前轮次。恢复时不重复确认；新轮次须重新授权。
@@ -46,7 +48,7 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
    - 讲义先清理再切，预览与执行须使用完全相同的 mode/subject/清理参数。新布局未知 mode 不再默认试卷；清单类型与显式类型冲突会拒绝。修改类型先重新 convert 再预览，不沿用旧类型的行号。
 4. 扫描：`jiaodui_task_prepare`（operation=status）（传拆分返回的单元根目录，不传材料根目录），派发未开始 / 未过校验 / 本轮未完成的单元。每个单元派发前先运行只读的 `jiaodui inspect-images --unit <dir> --json`；清单按正文引用顺序绑定引用序号、位置、原图和实际读取图，缺图/无效/不支持远程引用先停止该单元。
 5. 滑动窗口派发**单元子 agent**（一个单元 = 一个干净上下文）。输入包必须显式携带 `references/failure-modes.md` 路径，并列出本轮允许重试的类别、次数和停止范围。
-6. 子 agent 先snapshot，再unit_read/读图/calc/locate，最后unit_submit。插件按snapshot自动绑定身份、hash和revision；模型只提交summary、corrections、evidence，CLI直调用完整schema。
+6. 子 agent 按 [`references/operation-manual.md`](references/operation-manual.md) 的「单元身份和提交」完成读取、核验、自查与结构化提交。
 7. `jiaodui_delivery`（operation=build-report） 生成审阅全文；complete=false时检查failed与unreviewed。待复核单元技术合格全文仍可供父代理通读，技术失败只留占位。完成父复核后再汇总，complete=true才可正式交付。
 8. 主 agent **通读整卷报告全文**（整体把关）：个别单元漏检 → 定向复核；系统性问题 → 停手回报用户。
 9. `jiaodui_delivery`（operation=build-docx），复核 **错误标记数 = 批注锚点数 + 公式兜底数，且缺失数为 0**（无问题单元标题批注单列）。不满足按确定性 bug 处理，**不交付 docx**。
@@ -57,19 +59,17 @@ description: K-12 试卷/讲义校对总入口。优先采用用户指定学科�
 - 一层扁平：主 agent 直接派单元子 agent，**禁止嵌套**。
 - 滑动窗口补位：空位立即补派下一个单元，并发取宿主上限（默认 8）。首个单元错误达停止条件后，立即停止补位并取消在途任务（`jiaodui_dispatch_plan` / `jiaodui_unit_progress`）；区分此前已发出的与获知错误后新增的调用，确认在途任务已停止后才结束批次。异步派发必须先 await 再判断结果：使用 `await Promise.all(...)` 或在需要完整收集部分失败时使用 `await Promise.allSettled(...)`；逐项验证返回的 `kind` 与任务句柄（`jobId` / `subagentId` / `runId`）。未 await 的 Promise 序列化成 `{}` 不代表派发结果；拿到有效句柄前不得检查状态或结束批次。
 
-### 4.1 内容判断与建议复核（第7项实验分支）
-- 首轮证据分开保存 assumptions（g、计时原点、方向、近似条件）、symbols、images（真实读取与图文归属）、calculations（本单元计算工具调用ID及结果）。无适用图片/公式时显式记not_applicable及原因；无问题也保留核验依据。
+### 4.1 内容判断与建议复核
 - 证据不足时先补核验，不把解析扩写或符合题设的结论当成原文错误。
-- 提交前自查问题真实性、修改语义、关联覆盖、范围和严重度；每项引用真实证据ID。含修改时通过五项检查，无修改时使用no_issue_review。
 - 父代理先通读技术合格的整卷审阅报告，再调用 `jiaodui_unit_review` 接受/退回当前snapshot。缺复核时complete=false但可读全文；输入/建议/报告改变后接受失效，最新退回撤销旧接受。Word只接受当前版本复核。父子同模型，不宣称独立模型意见。
 
 ## 5. 子 agent 输入包（只给路径和身份，不给源文全文）
 - 提供工作区 W、单元目录路径、`task_id`、`unit_id`、当前snapshot摘要、图片清单和按需学科 references；同时列明错误码分类与预算。主 agent 不读取逐单元源文。
-- 子 agent 通过 `jiaodui_unit_read` 分页获取源文，通过真实图像工具读取返回的图片路径；结构化建议只提交定位、修改、原因和简短证据。子 agent 不写报告，不派生副本，不修改源文。
-- 子 agent 不嵌套派发；提交成功后回传单行摘要和工具结果。参数以实际暴露的工具schema为准。
+- 子 agent 只交 v3 原文修订，不写报告、不派生副本、不修改源文；步骤读操作手册。
+- 子 agent 不嵌套；成功后回传单行摘要与工具结果，参数以实际schema为准。
 
 ## 6. 硬约束
-- `verify-report` 不通过**不算完成**；不合格报告不得进入汇总或交付。修复只允许 `jiaodui repair-report --apply` 从源文重建正文，不放宽完整性契约；修复后仍须 verify-report 通过才可 parse-report，主流程不自动登记。- 完整性修复只写单元内 `_校对报告.md`：不改源文、不改写修改后/原因、不生成 attempt/副本；重复或无法唯一定位的字段交人工。
+- `verify-report` 不通过不算完成。新布局 v1 人工 `jiaodui repair-report` / `parse-report` 须 `--manual-legacy`，只写数据、不登记本轮；旧布局兼容。
 - 自修 ≤3 轮仍不过 → 写 `_校对失败.md`（失败原因 + 最后一次 verify 完整输出 + 产物摘要），**不阻塞批次**。参数错误、计算解析错误不得自行换参数或换命令继续；用户取消/中止不自动重派、不计入技术失败重试，立即停止并保留已收集输出。提前失败、读图失败、图片归属不明和批次取消都必须留痕，记录轮次、失败阶段、完整工具错误、相关引用序号/正文位置和产物摘要；未执行 verify 时明确写“未执行”。
 - 技术性崩溃 / 超时 / 限流 → 主 agent 自动重派 **1 次**（仅一次）；读图参数修正最多 2 次，报告自修最多 3 轮，用户更严格要求优先。
 - 不自动改源文；失败单元批次结束后交人裁定。

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,12 +39,101 @@ def test_top_help_lists_all_v1():
         assert cmd in r.stdout
 
 
+def test_cli_machine_output_is_utf8_even_when_environment_requests_ascii(tmp_path):
+    paper = tmp_path / "中文卷"
+    paper.mkdir()
+    (paper / "第1题").mkdir()
+    (paper / "第1题" / "第1题.md").write_text("正文。", encoding="utf-8")
+    env = {**os.environ, "PYTHONIOENCODING": "ascii:replace", "PYTHONUTF8": "0"}
+    result = subprocess.run(
+        [PY, "-m", "jiaodui", "status", str(paper), "--json"], cwd=ROOT,
+        env=env, capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    assert "中文卷" in result.stdout
+    assert "?" not in result.stdout
+    assert json.loads(result.stdout)["counts"]["total"] == 1
+
+
 def test_structured_error_unknown_file(tmp_path):
     r = run("convert", str(tmp_path / "不存在的文件.docx"), "--json")
     assert r.returncode != 0
     payload = json.loads(r.stderr.strip().splitlines()[-1])
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_found"
+
+
+def test_unit_submit_rejects_invalid_json_file_with_structured_error(tmp_path):
+    proposal = tmp_path / "提案.json"
+    proposal.write_text("{坏 JSON", encoding="utf-8")
+    result = run("unit-submit", "--task-id", "a" * 32, "--unit-id", "b" * 32,
+                 "--proposal-json-file", str(proposal),
+                 "--expected-snapshot-sha256", "c" * 64)
+    assert result.returncode == 6
+    error = json.loads(result.stderr.strip().splitlines()[-1])["error"]
+    assert error["code"] == "proposal-json-invalid"
+
+
+def test_unit_schema_bind_current_exports_only_six_fewer_required_fields():
+    full_result = run("unit-schema", "--json")
+    bind_result = run("unit-schema", "--bind-current", "--json")
+    assert bind_result.returncode == 0, bind_result.stderr
+    full = json.loads(full_result.stdout)["schema"]
+    bound = json.loads(bind_result.stdout)["schema"]
+    assert set(full["required"]) - set(bound["required"]) == {
+        "task_id", "unit_id", "run_id", "source_sha256", "body_sha256", "proposal_revision"}
+    assert full["properties"] == bound["properties"]
+
+
+@pytest.mark.parametrize("preview", [False, True])
+def test_unit_submit_cli_passes_bind_current_to_core(monkeypatch, preview):
+    from jiaodui import cli, unit_delivery
+
+    calls = []
+    def submit(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"ok": True}
+    target = "preview_unit_submission" if preview else "commit_unit_submission"
+    monkeypatch.setattr(unit_delivery, target, submit)
+    args = ["unit-submit", "--task-id", "a" * 32, "--unit-id", "b" * 32,
+            "--proposal-json", '{"schema_version":2}',
+            "--expected-snapshot-sha256", "c" * 64, "--bind-current"]
+    if preview:
+        args.append("--preview")
+    assert cli.main(args) == 0
+    assert calls[0][1] == {"bind_current": True}
+    assert calls[0][0][2] == {"schema_version": 2}
+
+
+def test_parse_report_cli_passes_manual_legacy_to_core(monkeypatch):
+    from jiaodui import cli, workflow
+
+    calls = []
+    def parse(*args, **kwargs):
+        calls.append(kwargs)
+        return {"data": "unused"}
+    monkeypatch.setattr(workflow, "parse_unit", parse)
+    assert cli.main(["parse-report", "--unit", "unused", "--manual-legacy", "--json"]) == 0
+    assert calls[0]["manual_legacy"] is True
+
+
+def test_repair_report_cli_passes_manual_legacy_to_core(monkeypatch):
+    from jiaodui import cli, report_repair
+
+    calls = []
+    def repair(*args, **kwargs):
+        calls.append(kwargs)
+        return report_repair.RepairResult(ok=True)
+    monkeypatch.setattr(report_repair, "repair_unit_report", repair)
+    assert cli.main(["repair-report", "--unit", "unused", "--apply", "--manual-legacy", "--json"]) == 0
+    assert calls[0]["manual_legacy"] is True
+
+
+def test_unit_submit_requires_one_proposal_input():
+    result = run("unit-submit", "--task-id", "a" * 32, "--unit-id", "b" * 32,
+                 "--expected-snapshot-sha256", "c" * 64)
+    assert result.returncode == 2
+    error = json.loads(result.stderr.strip().splitlines()[-1])["error"]
+    assert error["code"] == "usage"
 
 
 def test_verify_report_exit_code(tmp_path):

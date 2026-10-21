@@ -1,9 +1,8 @@
 """M5 调度闭环：并发登记原子性（PLAN-rework-continuation P5 第 4 项）。
 
-8 个单元同时登记时，材料清单里的条目不得丢失或互相覆盖。锁在
-`material.locked`（`fcntl.flock` 锁材料目录 inode，原子替换清单不会换锁对象），
-这里用线程与独立进程两条路径压它：线程验证同进程内的互斥，进程验证真实场景
-（8 个子 agent 各自一条 CLI 进程）。
+8 个单元同时登记时，材料清单里的条目不得丢失或互相覆盖。这里用线程与独立进程
+两条路径压 `material.locked`：线程验证同进程互斥，进程验证真实场景（8 个子 agent
+各自一条 CLI 进程）；另验证持锁进程意外退出后锁可恢复。
 """
 from __future__ import annotations
 
@@ -11,19 +10,93 @@ import hashlib
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-fcntl = pytest.importorskip("fcntl", reason="材料锁依赖 POSIX flock")
-
 from jiaodui import material  # noqa: E402
+from jiaodui.errors import BusinessError, ExitCode  # noqa: E402
 from jiaodui.unit_delivery import commit_unit_submission, read_unit_snapshot  # noqa: E402
 from jiaodui.workflow import convert_material, split_material  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 UNITS = 8
+
+
+def test_material_lock_file_persists_and_can_be_reacquired(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    root = workspace / "校对" / "锁测试"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    lock_file = root / ".jiaodui.lock"
+
+    with pytest.raises(RuntimeError):
+        with material.locked(root):
+            assert lock_file.is_file()
+            raise RuntimeError("验证异常退出清理")
+
+    assert lock_file.is_file(), "锁文件必须保留，避免不同进程锁住不同文件对象"
+    with material.locked(root):
+        assert lock_file.is_file()
+
+
+def test_material_lock_wait_has_a_bounded_timeout(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    root = workspace / "校对" / "锁超时测试"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    monkeypatch.setattr(material, "MATERIAL_LOCK_TIMEOUT_SECONDS", 0.05)
+
+    def acquire_again():
+        with material.locked(root):
+            return True
+
+    with material.locked(root):
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(acquire_again)
+            with pytest.raises(BusinessError) as caught:
+                future.result(timeout=1)
+
+    assert caught.value.code == "lock-timeout"
+    assert caught.value.exit_code == ExitCode.ENV
+
+
+def test_material_lock_is_released_when_process_is_terminated(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    root = workspace / "校对" / "锁进程测试"
+    root.mkdir(parents=True)
+    ready = tmp_path / "lock-ready"
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    monkeypatch.setattr(material, "MATERIAL_LOCK_TIMEOUT_SECONDS", 1.0, raising=False)
+    script = (
+        "from pathlib import Path\n"
+        "import sys, time\n"
+        "from jiaodui import material\n"
+        "material.MATERIAL_LOCK_TIMEOUT_SECONDS = 1.0\n"
+        "root, ready = map(Path, sys.argv[1:])\n"
+        "with material.locked(root):\n"
+        "    ready.write_text('ready', encoding='ascii')\n"
+        "    time.sleep(30)\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(root), str(ready)],
+        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8")
+    deadline = time.monotonic() + 10
+    try:
+        while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.is_file(), process.stderr.read() if process.poll() is not None else "子进程未取得锁"
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=10)
+
+    with material.locked(root):
+        assert (root / ".jiaodui.lock").is_file()
 
 
 def _eight_units(tmp_path, monkeypatch):

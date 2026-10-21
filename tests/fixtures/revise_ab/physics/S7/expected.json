@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "sample_id": "physics/S7",
+  "annotation_author": "agent",
+  "annotation_method": "独立逐行阅读源文、手工计数区间及学科推导；未调用待测实现生成预期",
+  "human_review": "pending",
+  "synthetic": true,
+  "range_convention": "line/start_column/end_column均为1基Unicode码点；end_column为开区间；match_index为1基全文出现序号",
+  "final_corrections": [
+    {
+      "id": "p7a",
+      "old_text": "末速度为5 m/s。",
+      "new_text": "末速度为6 m/s。",
+      "span": {
+        "line": 2,
+        "start_column": 1,
+        "end_column": 11
+      },
+      "reason": "v=at=2×3=6 m/s。"
+    },
+    {
+      "id": "p7b",
+      "old_text": "位移为8 m。",
+      "new_text": "位移为9 m。",
+      "span": {
+        "line": 3,
+        "start_column": 1,
+        "end_column": 8
+      },
+      "reason": "s=1/2×a×t²=1/2×2×9=9 m。"
+    }
+  ],
+  "reasoning": [
+    "首交故意只含p7a；父复核要求补p7b，p7a应保留。"
+  ],
+  "interventions": [
+    {
+      "trigger": "首交仅修末速度后",
+      "action": "父复核退回",
+      "issue": "位移也需按从静止匀加速核验，请保留已正确修订的末速度并补齐位移。",
+      "expected_added": [
+        "p7b"
+      ],
+      "expected_retained": [
+        "p7a"
+      ]
+    }
+  ]
+}

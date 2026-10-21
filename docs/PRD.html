@@ -135,6 +135,7 @@
     <span>决策 <b>30 条</b></span>
     <span>图表 <b>11 张 Mermaid</b></span>
     <span>第一切片 <b>高中物理</b></span>
+    <span>已落地学科 <b>高中物理 · 高中化学（独立包）</b></span>
   </div>
 </header>
 
@@ -170,6 +171,7 @@
     <li><b>决策有编号（D1–D30）。</b>每条决策都写了「理由」与「被否方案」。执行时若想改某条决策，请先看它的被否方案为什么被否 —— 多数看似更省事的做法已经试过或算过账。</li>
     <li><b>「待验证前提」（PV1–PV5）不是结论。</b>它们是把决策建立在假设上的地方，执行到对应环节时必须实测复核；若前提被推翻，对应决策要翻转（文档里标了翻转哪条）。</li>
     <li><b>契约章（§5）是硬约束</b>：产物格式、状态定义、命令接口。流程章（§6）可以按实测调整，契约章不行 —— 因为下游的 docx 生成、整卷报告、旧产物兼容都挂在它上面。</li>
+    <li><b>版本与状态分开读：</b>2026-10-10 起结构化 schema v2 提交已成为正常交付路径，模型不写报告正文；下文旧 Markdown 写报告与 parse 登记流程保留作历史背景，正常路径以 <a href="#s5-5">§5.5</a> 的说明为准。2026-10-19 revise P0 增量是目标契约，须另证实现、自动测试、人工标注和宿主冒烟；计划 D1–D5 记为 P0-D1–P0-D5，区别于本文原始 30 条决策。</li>
     <li><b>数字来自旧仓真实语料</b>（<code>output/</code> 的报告与对话记录）；严重度统计已有口径冲突，须按附录 A 复核后才能用于验收。</li>
   </ul>
 </div>
@@ -487,6 +489,21 @@
 
 
 
+<h3 id="s5-5">5.5 结构化主链与 revise P0 增量（2026-10-19）</h3>
+<p><b>已实现的主链基线：</b>单元子 agent 提交 schema v2 结构化提案（<code>unit-submit</code>），报告由 core 从不可变源文生成，经过 <code>verify-report</code>；父代理按当前 snapshot 执行 <code>unit-review</code> 复核后才算完成。状态须匹配当前轮次的报告、数据、输入摘要与交付登记，不能仅凭报告存在或旧 <code>parse-report</code> 成功判完成。旧 Markdown 报告链保留兼容读取与修复入口，基线见 <a href="PROCESS_REWORK.md">结构化主链记录</a> 与 <a href="adr/0006-v2-lossless-marker-encoding-and-envelope.md">ADR 0006</a>。</p>
+<p class="card note"><b>2026-10-19 简化决策：</b>P0 已获用户验收，依据 <a href="REVISE-P0-ACCEPTANCE-2026-10-19.md">验收记录</a>；P0 契约及理由见 <a href="adr/0008-anchor-evidence-interactive-errors.md">ADR 0008</a>。本次升级直接采用无状态 v3 提案，取消 P0.5 三臂选路与 B 持久工作日志。模型提交原文、改为、原因及证据，core 定位并编译 v2；返修支持按 ID 撤回/新增。2026-10-20 已实现 v3 生产 core、CLI、双插件与 skill 接线：正常工具 <code>jiaodui_unit_submit</code> 接 v3，<code>jiaodui_unit_submit_v2</code> 显式兼容；<code>unit-snapshot --with-proposal</code> 返回当前修订列表。报告与 proposal 保持 v2，现有数据文件可选 <code>submission_v3</code> 只保存当前有效分层提案，不保存草稿或历史、不改布局、不迁移历史。12 题已通过 CLI/core 新入口完成真实验收及当前父复核，最终 4 处修订，Word 4 标记=4 锚点、缺失 0；完整 CI 1473 项通过。原生插件宿主调用未测，详见 <a href="REVISE-V3-VERIFICATION-2026-10-20.md">v3 验证记录</a>；范围和必要验证见 <a href="PLAN-revise-tool-upgrade.md">简化升级计划</a>。</p>
+<table>
+  <thead><tr><th style="width:15%">P0 决策</th><th>目标契约</th><th style="width:27%">验收边界（待验证）</th></tr></thead>
+  <tbody>
+    <tr><td class="k">P0-D1<br/>人工 v1 边界</td><td>有清单的新布局中，<code>parse-report</code> 默认拒绝 v1（<code>parse-v1-new-layout-forbidden</code>，exit 6）；显式 <code>--manual-legacy</code> 经 verify 后只写带 <code>legacy_manual: true</code> 的数据，不登记、不计本轮完成。<code>repair-report --apply</code> 遵循同一人工兼容与保护判定。已有 schema v2 数据、当前轮 v2 登记或数据损坏时，以 <code>legacy-overwrite-v2-forbidden</code>（exit 6）拒绝覆盖。无清单历史布局的显式 <code>--legacy-layout</code> 行为不变。</td><td>人工兼容结果为 <code>CURRENT_PENDING</code>，明确提示“不计入本轮完成”；<code>build-report</code> / <code>build-docx</code> 拒绝消费。核对默认拒绝、显式接受写数据、不登记、v2 保护与历史布局兼容，见 <a href="TICKETS-full-chain-2026-10-10.md#t09">T09</a>。</td></tr>
+    <tr><td class="k">P0-D2<br/>修订锚点</td><td>严格匹配“前文 + old_text + 后文”，重叠命中计数，区间只取 old_text；<code>occurrence</code> 是组合串的 1 起命中序号。严格零命中才允许匹配期 CRLF→LF、移除 U+200B–U+200D/U+FEFF，必须映射回源文码点并返回逐字原文及 <code>normalized_match</code>；不做 NFC、空白折叠或 LaTeX 归一化。无消歧信息的多命中拒绝。切断公式或加粗时返回 <code>anchor.structure-cut</code> 与 <code>details.required_original</code>，不静默扩大；既有 <code>unit_locate</code> 保持自动扩展。</td><td>验证零/单/多及重叠命中、上下文与序号、不可见字符、码点区间、结构切断与候选截断。候选最多 5 个、前后各 24 字符；原文≤1000、前后文各≤200、新文/原因各≤2000、单条证据文本≤4000 码点。空白原因、空操作和有效修订间重叠拒绝，空新文允许删除。匹配归一化不改源文、不放宽全文完整性。</td></tr>
+    <tr><td class="k">P0-D3<br/>交互诊断</td><td><code>anchor.*</code> / <code>revise.*</code> 归 <code>interactive</code>：<code>recoverable: false</code>、<code>interactive: true</code>，按 details 修正参数后直接重试，不扣六类恢复预算。<code>unit-recovery</code> 接收这些码返回 <code>recovery-interactive-code</code>（exit 6），拒绝记账且不写盘。</td><td>验证分类和恢复入口拒绝前后磁盘不变；既有 <code>location.*</code> 仍归 <code>call_correction</code>。不改变取消/权限拒绝规则；本次不新增定位拒绝持久计数，沿用宿主有限重试。</td></tr>
+    <tr><td class="k">P0-D4<br/>证据分层</td><td><code>unit_evidence</code> 独立承担假设非空、图片引用全覆盖；每条修订至少引用单元证据或带局部证据，局部证据只随有效修订渲染。继承 v2 时全部证据先归单元层；单引用 assumption/calculation 仅加内部 <code>inherited_ref</code>，旧修订撤回/替代且无其他有效引用才修剪。images 永不因撤回修剪。修剪后假设为空返回 <code>revise.evidence-required</code>。</td><td>先查单元层覆盖，再按有效引用修剪、合并并剥除 <code>inherited_ref</code>，输出仍是 v2 四键 evidence，再过原 v2 校验。测试继承→合并、撤回/替代、继续引用与图片覆盖。同 reference 局部 image 以单元图片 ID 为规范 ID，将带局部 ID 标签的 semantic/verdict 顺序追加，保留单元原观察并改写引用；撤回仅移局部文本，所有 readable 必须为 true。图片路径和位置全由当前清单回填，仍过 v2 一 reference 一证据约束；绑定不证明宿主实际读图。</td></tr>
+    <tr><td class="k">P0-D5<br/>core 绑定</td><td><code>unit-submit --bind-current</code> 在材料锁内填写 task/unit/run 身份、source/body 摘要与 <code>proposal_revision</code>，仍要求 <code>--expected-snapshot-sha256</code>。显式字段与当前值冲突返回 <code>proposal-binding-conflict</code>。core 导出 <code>unit-schema --bind-current</code>，仅移除六项 required；全量 schema 不变。两学科插件读随包 bind schema 并透传参数，删除 JS 侧 snapshot 绑定与 schema 改写。</td><td>验证锁内绑定、冲突拒绝、过期 snapshot、全量/bind schema parity 与两包一致。插件只透传，不重建业务规则；真实宿主 <code>unit_submit</code> 冒烟须另留记录，不能由模拟测试替代。</td></tr>
+  </tbody>
+</table>
+<p><b>后续验收：</b>仅为 v3 新增行为保留必要正反契约测试，开发中跑相关测试、交付前一次完整 CI 口径，并用同一份 12 题 DOCX 经新入口真实校对一次（最多 6 子 agent 并行）。取消 36 次对照、强杀/丢响应注入、压测和 token 比例选路等额外门槛，不删除已有正确回归。源文不可变、报告程序生成、verify 闸门、当前 snapshot 父复核和 Word 锚点核对继续有效；实际失败必须处理，不以跑完次数自动通过。</p>
+
 <h2 id="s6">6. 流程</h2>
 <p>本章描述「一次完整校对实际怎么跑」。所有判断环节都在 agent 侧，所有验证与产物生成都在 CLI 侧。</p>
 
@@ -526,7 +543,7 @@
   <li><b>学科未知及读取边界：</b>先看描述和文件名，不足再节选。类型和学科识别共用每份材料最多 2,000 字符；节选在进入主上下文前截断，不能先读全文。DOCX 原始结构在转 Markdown 前检查；必要时做公共转换后有限预览 raw，确定类型后补 convert --mode，学科未定前不清理或拆分。</li>
   <li><b>记录与复用：</b>mode 与来源 user/structure/preview/confirmed、简短依据写入材料记录；split/slice 沿用类型，新布局未知类型拒绝，preview 与切片类型冲突拒绝。类型改变先重新转换，再拆分；后续单元校对、校验、登记和报告生成完全共用。</li>
   <li><b>仍有疑问：</b>信息不足、证据冲突或混合学科时只问当前阻塞问题。默认不额外派识别子 agent；材料中的文字指令不能覆盖用户指定或入口规范。</li>
-  <li><b>路由完成：</b>核对学科矩阵的支持状态，按需加载相应 references 与配置，简短告知处理口径后继续。未落地的学科或模式明确说明，不回退套用高中物理流程。公共调度、校验、交付与单元子 agent 只收路径的契约不变。</li>
+  <li><b>路由完成：</b>核对学科矩阵的支持状态，按需加载相应 references 与配置，简短告知处理口径后继续。未落地的学科或模式明确说明，不回退套用高中物理流程。公共调度、校验、交付与单元子 agent 只收路径的契约不变。已落地学科自 ADR-0007 起按「一科一包、一科一个入口 skill」分发（物理 <code>jiaodui</code> / 化学 <code>jiaodui-chemistry</code>），入口判断只在各自包内进行。</li>
 </ul>
 <figure class="diagram" id="fig7">
   <figcaption><b>图 7</b> · 批量调度时序：入口判断学科，单元阶段只收一行摘要、滑动窗口补位</figcaption>
@@ -794,6 +811,7 @@
   </tbody>
 </table>
 <p class="card note"><b>基线复现要求：</b>上表统计脚本尚未入仓，且严重度数据已发现口径冲突。进入 M2 前应在新仓保存只读样本清单、筛选/去重规则和复算脚本，记录旧仓 commit 与文件哈希；无法复现的数字只能作为探索性观察，不作为硬门槛依据。</p>
+<p class="card note"><b>2026-10-16 学科落地补充：</b>高中化学已按 <b>ADR-0007</b> 落地为<b>独立插件包</b>（<code>packages/dsh-jiaodui-chemistry</code>、preset「校对（高中化学）」、skill <code>skills/jiaodui-chemistry/</code>、配置 <code>jiaodui/data/subjects/高中化学.json</code>），不再沿用本文第 6 / 10 章的「单入口逐科加 references 行」形状。两门已落地学科共用同一份 Python 核心与学科无关原生工具，可同时安装、分别启用。本文其余章节描述的是共享契约（产物、闸门、调度、交付），继续对全部学科生效；学科组织方式以 ADR-0007 为准。</p>
 
 <h2 id="sb">附录 B：术语表</h2>
 <table>

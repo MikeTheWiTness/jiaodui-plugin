@@ -3,11 +3,15 @@
 K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，确定性交给 Python**。
 
 - 需求与契约：[docs/PRD.html](docs/PRD.html)
+- 架构与设计汇报：[离线 HTML](docs/ARCHITECTURE.html) · [可维护 Markdown](docs/ARCHITECTURE.md)
+- 本次项目审查（2026-10-13）：[docs/REVIEW-2026-10-13.md](docs/REVIEW-2026-10-13.md)
 - 校对流程改造记录（M0–M6边界与宿主验收）：[docs/PROCESS_REWORK.md](docs/PROCESS_REWORK.md)
 - 执行顺序与完成判据：[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 - M0—M6 收口计划：[docs/PLAN-rework-continuation.md](docs/PLAN-rework-continuation.md)
 - 结构化并入 main 的实施计划：[docs/UNIFY-PLAN.md](docs/UNIFY-PLAN.md)
 - M5 架构决策：[ADR-0001：多学科入口与逐科落地](docs/adr/0001-m5-subject-entry-and-rollout.md)
+- 第二学科入口：[ADR-0007：第二学科入口与 bundle 拆分](docs/adr/0007-second-subject-entry-and-bundle-split.md)
+- 化学落地验证记录：[docs/CHEMISTRY-VERIFICATION.md](docs/CHEMISTRY-VERIFICATION.md)
 - 交付闸门：[ADR-0004：闸门单一实现（含图片资源）](docs/adr/0004-gate-single-implementation.md)
 - 学科工具：[ADR-0005：量纲校验的声明形态与多解判定](docs/adr/0005-dimensional-declaration-and-ambiguity.md)
 - 仓库约定（AI 助手必读）：[AGENTS.md](AGENTS.md)
@@ -15,16 +19,16 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 - M0 验收：[docs/M0.md](docs/M0.md)　·　M1 端到端验收：[docs/M1.md](docs/M1.md)
 - 基线复算：[docs/BASELINE.md](docs/BASELINE.md)
 - 入口与拆分迁移核对：[docs/ENTRY_MIGRATION.md](docs/ENTRY_MIGRATION.md)
-- 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)
-- DSH 插件包（M7 换壳的首次尝试）：[packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md)
+- 可分发 skill：[skills/jiaodui/SKILL.md](skills/jiaodui/SKILL.md)（高中物理）· [skills/jiaodui-chemistry/SKILL.md](skills/jiaodui-chemistry/SKILL.md)（高中化学）
+- DSH 插件包：物理 [packages/dsh-jiaodui/README.md](packages/dsh-jiaodui/README.md) · 化学 [packages/dsh-jiaodui-chemistry/README.md](packages/dsh-jiaodui-chemistry/README.md)
 
 ## 当前状态：第7章结构化报告主链已并入 main
 
-- **正常路径**：结构化主链——子 agent 只提交 schema v2 结构化提案，报告由程序从不可变源文生成，经 `verify-report` 闸门与父复核后交付；`build-report` / `build-docx` 只消费通过校验的当前版本。
+- **正常路径**：结构化主链——子 agent 正常提交 schema v3 原文修订提案，core 自动定位、推导总结并编译为 v2，报告由程序从不可变源文生成，经 `verify-report` 闸门与父复核后交付；`build-report` / `build-docx` 只消费通过校验的当前版本。
 - **只读兼容**：旧 Markdown 报告链保留读取与修复入口（`verify-report` / `parse-report` 兼容读取，`repair-report` 只服务旧报告），但**不再作为正常交付路径**；旧布局写入须显式 `--legacy-layout`。
-- **宿主侧**：`dsh-jiaodui` 插件包提供 26 个原生工具与「校对」preset（父侧有 shell 与只读搜索，子侧封闭 20 项）。真机新会话验收（父/子 catalog、`read_image` 实读、零 shell 真实校对、停止语义）八条已通过。
+- **宿主侧**：插件包按学科分发——`dsh-jiaodui` 提供原生校对工具与「校对」preset（高中物理），`dsh-jiaodui-chemistry` 提供同一套工具与「校对（高中化学）」preset；两包共用 CLI，可同时安装、分别启用。物理侧真机新会话验收（父/子 catalog、`read_image` 实读、零 shell 真实校对、停止语义）八条已通过；化学侧真机验收清单见 [packages/dsh-jiaodui-chemistry/host-probe/README.md](packages/dsh-jiaodui-chemistry/host-probe/README.md)，待补证。
 - **已合并的接口语义**：每单元六类恢复预算（`call_correction`/`calc_representation`/`report_repair`/`targeted_review`/`technical_redispatch`/`image_schema_fix`），恢复记账以 `attempt_id` 幂等、错误码确定性映射类别、图片格式修复连带扣一次 `call_correction`；旧清单可读但未授权，重授权时按单元保守迁移。
-- **测试基线**：双口径 `pytest` 全绿（合并前分支 1126 passed / 5 skipped）。
+- **本次 v3 验证**：完整 CI 1473 passed / 4 subtests passed；同一份 12 题经 CLI/core 新入口与父复核完成，最终 4 处修订、Word 4 标记=4 锚点、无缺失。原生插件宿主调用未测，见 [v3 验证记录](docs/REVISE-V3-VERIFICATION-2026-10-20.md)。
 - **仍待办**：Phase 2 收尾（宿主 profile 切回仓库根包、处置实验 worktree、文档同步）。
 
 已实现的核心与入口命令：
@@ -42,11 +46,11 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 | `jiaodui parse-report --unit <dir>` | 旧Markdown报告兼容解析；默认拒绝未过校验的报告 |
 | `jiaodui unit-read --task-id ID --unit-id ID` | 按身份分页读取源文和实际图片读取清单（最多2000行） |
 | `jiaodui unit-locate --task-id ID --unit-id ID --phrase TEXT` | 查询重复短语候选、安全区间与版本绑定位置ID |
-| `jiaodui unit-snapshot --task-id ID --unit-id ID` | 获取run、输入、报告和数据组成的提交快照 |
-| `jiaodui unit-submit ...` | 从schema v2结构化建议生成全文报告并原子校验登记 |
+| `jiaodui unit-snapshot --task-id ID --unit-id ID [--with-proposal]` | 获取提交快照；返修可附当前修订 ID 精简列表 |
+| `jiaodui unit-submit ...` | 正常接 v3 原文修订、自动定位编译 v2，生成全文报告并原子校验登记；兼容显式 v2 |
 | `jiaodui unit-recovery / unit-event` | 按类别消费有限预算；recovery 可传 `--failure-json` 由 core 派生指纹，同时记录阶段事件 |
 | `jiaodui calc-schema [--operation OP]` | 从核心参数元数据导出operation-specific JSON Schema |
-| `jiaodui unit-schema` | 导出结构化建议schema v2 |
+| `jiaodui unit-schema --schema-version 3` | 导出正常 v3 提案 schema；省略版本仍导出兼容 v2 |
 | `jiaodui repair-report --unit <dir> [--apply]` | 旧Markdown报告完整性辅助，默认只预览 |
 | `jiaodui calc <op>` | sympy 符号计算沙箱（白名单 + 容差，默认不回显生成代码）；`--subject` 校验工具族并注入物理量表 |
 | `jiaodui quantities --subject <学科> [--search 词]` | 只读列出学科物理量表（不进 agent 上下文，按需查） |
@@ -60,6 +64,8 @@ K-12 多学科校对流程的 agent 驱动重构：**判断交给宿主 agent，
 ## 工作区产物
 
 新运行在当前工作区自动创建 `校对/<材料名>/`，分别用 `source/`、`raw/`、`units/<材料名>/`、`校对报告/`、`校对Word/` 保存源文件副本、中间产物和最终报告。执行模式、task/unit身份和恢复事件写入材料记录。写入命令（convert / split / slice 非 preview / execution-policy / unit-submit / unit-recovery / unit-event / build-report / build-docx / repair-report --apply）必须由宿主注入 `JIAODUI_WORK_ROOT`，或显式传 `--work-root /绝对工作区`；只读命令独立可用。源文件可位于工作区外，但产物不可越界。
+
+v3 提交包含 `corrections`、`unit_evidence`、`self_check`；修订只填写原文、改为、原因、类别、严重度与证据，不手填位置和绑定字段。返修用 `base_proposal_revision`、`withdrawn=[{id, reason}]` 和新增 `corrections`，每次重提自查。插件正常工具为 `jiaodui_unit_submit`，显式兼容工具为 `jiaodui_unit_submit_v2`。数据顶层与 `proposal` 保持 schema v2；现有数据文件的可选 `submission_v3` 保存当前有效分层输入，支持撤回局部图片观察，不新增布局、不迁移历史。历史 v2 图片按单元证据继承，不逆解析局部渲染文本。
 
 新材料用 `unit-snapshot` 与 `unit-submit` 绑定当前源文、轮次和交付版本，程序生成报告后统一 verify、解析并登记；旧Markdown报告仍可显式走 `verify-report` / `parse-report` 兼容路径。若拆分结果与当前单元集不同，用 `split` / `slice --replace-units`（陈旧单元归档到 `units/<材料名>/.superseded/<run_id>/`，只移动不删除）。同名源文件变化拒绝覆盖，可用 `--material-name` 指定新材料名。历史产物写入使用 `--legacy-layout`，仍需授权工作区。详见 [ADR 0002](docs/adr/0002-workspace-material-layout.md)。
 
@@ -92,7 +98,10 @@ jiaodui/           Python 包：确定性核心 + CLI 壳（唯一逻辑所在�
   docx_report.py   Word 批注版生成与锚点复核
 jiaodui/data/subjects/  机器读学科配置（运行时唯一来源）
 config/subjects/   同上的人工可读镜像（改配置请改包内那份）
-skills/jiaodui/    人读 skill 与 references
+skills/jiaodui/    高中物理入口 skill 与 references
+skills/jiaodui-chemistry/  高中化学入口 skill 与 references（独立插件包）
+packages/dsh-jiaodui/          高中物理 DSH bundle（preset：校对）
+packages/dsh-jiaodui-chemistry/ 高中化学 DSH bundle（preset：校对（高中化学））
 tests/             行为契约测试
 ```
 

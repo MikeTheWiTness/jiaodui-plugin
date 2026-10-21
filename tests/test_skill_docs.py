@@ -12,15 +12,37 @@ SKILL.md 当单个文本块返回，所以入口必须留在阈值内；命令�
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-SKILL_DIR = ROOT / "skills" / "jiaodui"
-PACKAGED_DIR = ROOT / "packages" / "dsh-jiaodui" / "skills" / "jiaodui"
+import pytest
 
-# 入口正文必须留在宿主工具结果修剪阈值内（Unicode 码点）
-SKILL_ENTRY_MAX_CHARS = 8192
+ROOT = Path(__file__).resolve().parents[1]
+
+# 已落地学科各有自己的入口 skill：仓库源目录 ↔ 随包副本目录。
+# 两份副本必须逐字节一致，通用流程（命名 / 闸门 / 预算 / 宿主纪律）在每份里都必须完整。
+SKILLS: dict[str, tuple[Path, Path]] = {
+    "jiaodui": (ROOT / "skills" / "jiaodui", ROOT / "packages" / "dsh-jiaodui" / "skills" / "jiaodui"),
+    "jiaodui-chemistry": (
+        ROOT / "skills" / "jiaodui-chemistry",
+        ROOT / "packages" / "dsh-jiaodui-chemistry" / "skills" / "jiaodui-chemistry",
+    ),
+}
+SKILL_DIR = SKILLS["jiaodui"][0]
+PACKAGED_DIR = SKILLS["jiaodui"][1]
+
+# 注意：每个入口只需要点名「本学科」；数学/语文等学科名可以出现在入口的未落地提示里，
+# 因此这里只禁用**另一门已落地学科**的专属口径词。
+FOREIGN_SUBJECT_TERMS = {
+    "jiaodui": ("化学方程式", "离子方程式", "电解质", "物质的量"),
+    "jiaodui-chemistry": ("受力图", "量纲分析", "牛顿", "电路图"),
+}
+
+# 入口≤7850 Unicode码点；后续分支净增≤0，预留宿主8192阈值余量。
+SKILL_ENTRY_MAX_CHARS = 7850
+# v3 切换不增加入口体积；新增协议细节只进入操作手册。
+SKILL_ENTRY_V3_BASELINE = {"jiaodui": 7689, "jiaodui-chemistry": 7745}
 
 # 曾被文档漏记、必须出现在 skill 文档（入口或 references）里的实参
 MUST_BE_DOCUMENTED = (
@@ -30,11 +52,16 @@ MUST_BE_DOCUMENTED = (
 )
 
 
-def _skill_docs() -> dict[str, str]:
-    """入口与全部 references 的文本（键为相对 SKILL_DIR 的路径）。"""
+def _skill_dir(skill: str) -> Path:
+    return SKILLS[skill][0]
+
+
+def _skill_docs(skill: str = "jiaodui") -> dict[str, str]:
+    """入口与全部 references 的文本（键为相对该 skill 根目录的路径）。"""
+    root = _skill_dir(skill)
     return {
-        str(path.relative_to(SKILL_DIR)): path.read_text(encoding="utf-8")
-        for path in sorted(SKILL_DIR.rglob("*.md"))
+        str(path.relative_to(root)): path.read_text(encoding="utf-8")
+        for path in sorted(root.rglob("*.md"))
     }
 
 
@@ -55,11 +82,12 @@ def _cli_options() -> set[str]:
     return options
 
 
-def test_skill_documented_flags_exist_in_cli():
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_documented_flags_exist_in_cli(skill: str):
     """skill 文档里出现的每个 --flag 都必须在 CLI 上真实注册（防臆造/改名漂移）。"""
     options = _cli_options()
     unknown: dict[str, list[str]] = {}
-    for name, text in _skill_docs().items():
+    for name, text in _skill_docs(skill).items():
         documented = set(re.findall(r"(?<![\w-])--[a-z][a-z0-9-]+", text))
         bad = sorted(documented - options)
         if bad:
@@ -67,68 +95,169 @@ def test_skill_documented_flags_exist_in_cli():
     assert not unknown, f"文档提到了 CLI 没有注册的参数：{unknown}"
 
 
-def test_skill_documents_parameters_that_had_drifted():
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_documents_parameters_that_had_drifted(skill: str):
     """速查表（入口或 operation-manual）必须覆盖这些实际存在的参数。"""
-    corpus = "\n".join(_skill_docs().values())
+    corpus = "\n".join(_skill_docs(skill).values())
     missing = [flag for flag in MUST_BE_DOCUMENTED if flag not in corpus]
     assert not missing, f"skill 文档漏记：{missing}"
 
 
-def test_skill_entry_stays_within_pruner_char_budget():
-    """入口正文必须 ≤ 8192 码点，否则宿主压缩时会裁掉流程主体。"""
-    entry = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    length = len(entry)
-    assert length <= SKILL_ENTRY_MAX_CHARS, (
-        f"SKILL.md 为 {length} 码点，超过宿主修剪阈值 {SKILL_ENTRY_MAX_CHARS}；"
-        "细节请移入 references/operation-manual.md"
-    )
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_entry_stays_within_pruner_char_budget(skill: str):
+    """入口不超过 v3 切换前基线，且为宿主 8192 修剪阈值预留余量。"""
+    for root in SKILLS[skill]:
+        entry = (root / "SKILL.md").read_text(encoding="utf-8")
+        length = len(entry)
+        budget = min(SKILL_ENTRY_MAX_CHARS, SKILL_ENTRY_V3_BASELINE[skill])
+        assert length <= budget, (
+            f"{root.relative_to(ROOT)}/SKILL.md 为 {length} 码点，超过入口预算 {budget}；"
+            "细节请移入 references/operation-manual.md"
+        )
 
 
-def test_skill_entry_referenced_files_exist():
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_entry_referenced_files_exist(skill: str):
     """入口里链接的 references/ 文件必须真实存在（链接不能指向空处）。"""
-    entry = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    root = _skill_dir(skill)
+    entry = (root / "SKILL.md").read_text(encoding="utf-8")
     missing = []
     for target in re.findall(r"\]\((?!https?:)([^)#\s]+)\)", entry):
-        if not (SKILL_DIR / target).is_file():
+        if not (root / target).is_file():
             missing.append(target)
-    assert not missing, f"SKILL.md 链接的文件不存在：{missing}"
+    assert not missing, f"{skill}/SKILL.md 链接的文件不存在：{missing}"
 
 
-def test_skill_documents_host_read_limit_and_review_scope_rules():
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    operations = (SKILL_DIR / "references" / "operation-manual.md").read_text(encoding="utf-8")
-    physics = (SKILL_DIR / "references" / "subjects" / "高中物理.md").read_text(encoding="utf-8")
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_entry_only_speaks_for_its_own_subject(skill: str):
+    """每个入口只讲自己那门学科：化学入口不得夹带物理口径，物理入口不得夹带化学口径。"""
+    entry = (_skill_dir(skill) / "SKILL.md").read_text(encoding="utf-8")
+    foreign = [term for term in FOREIGN_SUBJECT_TERMS[skill] if term in entry]
+    assert not foreign, f"{skill}/SKILL.md 混入了其他学科的口径：{foreign}"
 
-    assert "read limit" in skill and "2000" in skill and "offset" in skill
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_declares_its_own_name(skill: str):
+    """frontmatter 的 name 必须是本 skill 的目录名，否则宿主发现与调用会错位。"""
+    entry = (_skill_dir(skill) / "SKILL.md").read_text(encoding="utf-8")
+    assert entry.startswith("---")
+    assert f"\nname: {skill}\n" in entry
+    assert "\ndescription:" in entry
+
+
+# 学科核验纪律：只要写在该 skill 的任意一份文档里即可（物理写在入口、化学写在学科规范），
+# 但每门学科都必须完整保留这些语义，不能被学科改写时删掉。
+SUBJECT_DOC_MUST_KEEP = (
+    "结论断言 → calc `call_id`",
+    "不能替代系数或代数推导验证",
+    "解析扩写或符合题设的结论",
+)
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_documents_host_read_limit_and_review_scope_rules(skill: str):
+    root = _skill_dir(skill)
+    docs = _skill_docs(skill)
+    skill_text = docs["SKILL.md"]
+    operations = docs["references/operation-manual.md"]
+    corpus = "\n".join(docs.values())
+
+    assert "read limit" in skill_text and "2000" in skill_text and "offset" in skill_text
     assert "`limit` 同样不超过 2000" in operations
-    assert "结论断言 → calc `call_id`" in physics
-    assert "不能替代系数或代数推导验证" in physics
-    assert "解析扩写或符合题设的结论" in skill
+    missing = [item for item in SUBJECT_DOC_MUST_KEEP if item not in corpus]
+    assert not missing, f"{skill} 文档缺少核验纪律：{missing}"
 
 
-def test_skill_documents_recovery_attempt_and_fingerprint_rules():
-    failures = (SKILL_DIR / "references" / "failure-modes.md").read_text(encoding="utf-8")
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_documents_recovery_attempt_and_fingerprint_rules(skill: str):
+    failures = (_skill_dir(skill) / "references" / "failure-modes.md").read_text(encoding="utf-8")
     assert "新的恢复动作应创建新 attempt" in failures
     assert "全零/全一占位指纹" in failures
     assert "failure payload" in failures or "failure` 对象" in failures
 
 
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_documents_host_call_and_dispatch_handles(skill: str):
     """run_code 外层 schema 与异步派发句柄必须明确，防止文档再次诱发误调用。"""
-    text = (SKILL_DIR / "references" / "failure-modes.md").read_text(encoding="utf-8")
+    text = (_skill_dir(skill) / "references" / "failure-modes.md").read_text(encoding="utf-8")
     required = ("run_code.justification", "非空完整句子", "invalid justification",
                 "await Promise.allSettled(", "continuable.subagentId", "未 await 的 Promise")
     missing = [item for item in required if item not in text]
-    assert not missing, f"宿主调用契约缺少说明：{missing}"
+    assert not missing, f"{skill} 宿主调用契约缺少说明：{missing}"
 
 
-def test_repair_preview_is_documented_as_explicit_gate_auxiliary():
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_repair_preview_is_documented_as_explicit_gate_auxiliary(skill: str):
     """完整性修复必须是显式命令，且 verify-report 仍是唯一闸门。"""
-    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    failures = (SKILL_DIR / "references" / "failure-modes.md").read_text(encoding="utf-8")
-    assert "jiaodui repair-report" in skill
-    assert "verify-report" in skill
+    root = _skill_dir(skill)
+    skill_text = (root / "SKILL.md").read_text(encoding="utf-8")
+    failures = (root / "references" / "failure-modes.md").read_text(encoding="utf-8")
+    assert "jiaodui repair-report" in skill_text
+    assert "verify-report" in skill_text
     assert "repair-report" in failures
-    assert "唯一闸门" in skill or "唯一闸门" in failures
+    assert "唯一闸门" in skill_text or "唯一闸门" in failures
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+@pytest.mark.parametrize("root_index", [0, 1])
+def test_new_layout_v1_manual_legacy_is_not_registered_as_complete(skill: str, root_index: int):
+    """文档区分新布局结构化交付、v1人工兼容与旧布局历史行为。"""
+    root = SKILLS[skill][root_index]
+    entry = (root / "SKILL.md").read_text(encoding="utf-8")
+    manual = (root / "references" / "operation-manual.md").read_text(encoding="utf-8")
+    contract = (root / "references" / "report-contract.md").read_text(encoding="utf-8")
+    failures = (root / "references" / "failure-modes.md").read_text(encoding="utf-8")
+    assert "--manual-legacy" in entry and "不登记本轮" in entry
+    assert "unit-submit" in manual and "父代理 `unit-review`" in manual
+    assert "legacy_manual" in manual and "历史布局继续兼容" in manual
+    assert "legacy_manual" in contract and "下游拒绝消费" in contract
+    assert "不登记本轮完成" in failures and "旧布局保持兼容" in failures
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_normal_submission_documents_v3_and_explicit_v2_compatibility(skill: str):
+    """正常示例直接提交原文修订，定位与手填版本仅属于显式 v2 兼容。"""
+    docs = _skill_docs(skill)
+    manual = docs["references/operation-manual.md"]
+    normal, compatibility = manual.split("## 显式 v2 兼容", 1)
+    examples = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", normal, re.S)]
+    proposal = next(item for item in examples if item.get("schema_version") == 3)
+    assert set(proposal) == {"schema_version", "corrections", "unit_evidence", "self_check"}
+    assert set(proposal["corrections"][0]) >= {
+        "id", "old_text", "new_text", "reason", "category", "severity", "evidence_ids",
+    }
+    assert set(proposal["unit_evidence"]) == {"assumptions", "symbols", "images", "calculations"}
+    assert "jiaodui_unit_locate" not in normal
+    assert "expected_snapshot_sha256" in normal
+    assert "context_before" in normal and "context_after" in normal and "occurrence" in normal
+    assert "unit-locate" in compatibility and "expected_original" in compatibility
+    assert "--bind-current" in compatibility and "schema_version=2" in compatibility
+    assert "v3" in docs["SKILL.md"]
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_documents_incremental_revision_and_finite_recovery(skill: str):
+    """返修用当前基础版本和修订 ID；证据继承、自查与重复诊断停止均有说明。"""
+    docs = _skill_docs(skill)
+    manual = docs["references/operation-manual.md"]
+    examples = [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", manual, re.S)]
+    delta = next(item for item in examples if "base_proposal_revision" in item)
+    assert delta["schema_version"] == 3
+    assert set(delta["withdrawn"][0]) == {"id", "reason"}
+    assert "corrections" in delta and "self_check" in delta
+    assert "unit_evidence" not in delta  # 示例演示省略继承，不能误导为传空对象。
+    assert "--with-proposal" in manual and "with_proposal" in manual
+    assert "省略则继承" in manual and "整体替换" in manual
+    assert "每次重新提交" in manual and "self_check" in manual
+    assert "重复诊断仍无法解决" in manual and "停止该单元" in manual
+    assert "不为凑“无问题”丢弃发现" in manual
+    failures = docs["references/failure-modes.md"]
+    assert "base_proposal_revision" in failures and "重读当前 snapshot" in failures
+    assert "按它 +1 提交" not in failures
+    contract = docs["references/report-contract.md"]
+    assert "schema v3" in contract and "落盘仍为 v2" in contract
+    assert "submission_v3" in contract and "不是草稿或历史" in contract
+    assert "父代理 `unit-review`" in contract and "verify-report" in contract
 
 
 def _unknown_documented_commands(text: str) -> set[str]:
@@ -164,13 +293,15 @@ def test_command_check_accepts_real_commands_and_calc_aliases():
     assert _unknown_documented_commands(text) == set()
 
 
-def test_skill_concrete_commands_exist_in_cli():
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_skill_concrete_commands_exist_in_cli(skill: str):
     """入口及所有 references 的具体命令都应由当前 CLI 支持。"""
+    root = _skill_dir(skill)
     problems = {}
-    for path in sorted(SKILL_DIR.rglob("*.md")):
+    for path in sorted(root.rglob("*.md")):
         unknown = _unknown_documented_commands(path.read_text(encoding="utf-8"))
         if unknown:
-            problems[str(path.relative_to(SKILL_DIR))] = sorted(unknown)
+            problems[str(path.relative_to(root))] = sorted(unknown)
     assert not problems, problems
 
 
@@ -181,18 +312,31 @@ def test_command_check_rejects_unknown_top_level_command():
     ) == {"jiaodui invented-command"}
 
 
-def test_packaged_skill_is_byte_identical():
-    """skills/jiaodui 与 packages 内副本必须字节一致（.DS_Store 除外）。"""
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_packaged_skill_is_byte_identical(skill: str):
+    """skills/<skill> 与对应 packages 内副本必须字节一致（.DS_Store 除外）。"""
+    source, mirror_root = SKILLS[skill]
     diffs: list[str] = []
-    for path in sorted(SKILL_DIR.rglob("*")):
+    for path in sorted(source.rglob("*")):
         if not path.is_file() or path.name == ".DS_Store":
             continue
-        mirror = PACKAGED_DIR / path.relative_to(SKILL_DIR)
+        mirror = mirror_root / path.relative_to(source)
         if not mirror.is_file():
             diffs.append(f"缺副本：{mirror.relative_to(ROOT)}")
         elif mirror.read_bytes() != path.read_bytes():
             diffs.append(f"内容不一致：{path.relative_to(ROOT)}")
     assert not diffs, diffs
+
+
+@pytest.mark.parametrize("skill", sorted(SKILLS))
+def test_packaged_skill_has_no_extra_files(skill: str):
+    """随包副本不得多出仓库源里没有的文件（防止在包内私改）。"""
+    source, mirror_root = SKILLS[skill]
+    source_files = {p.relative_to(source) for p in source.rglob("*")
+                    if p.is_file() and p.name != ".DS_Store"}
+    mirror_files = {p.relative_to(mirror_root) for p in mirror_root.rglob("*")
+                    if p.is_file() and p.name != ".DS_Store"}
+    assert mirror_files == source_files, sorted(mirror_files ^ source_files)
 
 
 def test_subject_config_copies_are_identical():
