@@ -130,6 +130,21 @@ def _check_unique_ids(evidence: dict[str, Any], corrections: list[dict[str, Any]
     return evidence_ids
 
 
+def prune_inherited_evidence(evidence: dict[str, Any], inactive_ids: set[str],
+                             active_references: set[str]) -> None:
+    """修剪「所属修订已失效且无有效引用」的继承假设/计算。
+
+    原地修改并保留 inherited_ref，供提交路径与 merge_layers 共用。
+    """
+    for key in ("assumptions", "calculations"):
+        entries = evidence.get(key)
+        if isinstance(entries, list):
+            evidence[key] = [entry for entry in entries if not (
+                isinstance(entry, dict)
+                and entry.get("inherited_ref") in inactive_ids
+                and entry.get("id") not in active_references)]
+
+
 def merge_layers(unit_evidence: dict[str, Any], effective_corrections: list[dict[str, Any]], *,
                  image_manifest: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """修剪继承项、合并有效修订局部证据并编译 v2 evidence。
@@ -163,12 +178,7 @@ def merge_layers(unit_evidence: dict[str, Any], effective_corrections: list[dict
             raise _error("proposal.evidence-reference", "evidence_ids 必须为字符串数组")
     active_references = {identity for c in active for identity in c.get("evidence_ids", [])}
     inactive_ids = {c["id"] for c in corrections if not _active(c)}
-    for key in ("assumptions", "calculations"):
-        entries = evidence[key]
-        if isinstance(entries, list):
-            evidence[key] = [entry for entry in entries if not (
-                isinstance(entry, dict) and entry.get("inherited_ref") in inactive_ids
-                and entry.get("id") not in active_references)]
+    prune_inherited_evidence(evidence, inactive_ids, active_references)
     if not evidence["assumptions"]:
         raise _error("revise.evidence-required", "修剪后缺少单元级假设/核验依据，请补充单元依据")
 

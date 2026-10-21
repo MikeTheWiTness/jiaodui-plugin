@@ -43,6 +43,24 @@ def test_v3_preview_commit_and_compact_snapshot(tmp_path, monkeypatch):
     assert current["snapshot_sha256"] == read_unit_snapshot(data["task_id"], uid)["snapshot_sha256"]
 
 
+def test_with_proposal_returns_null_when_data_is_not_inheritable(tmp_path, monkeypatch):
+    """上一轮残留或损坏数据只表示没有可继承基准，不让整次快照读取失败。"""
+    _, _, unit, data, uid, _, v2, snap = _prepared(tmp_path, monkeypatch)
+    commit_unit_submission(data["task_id"], uid, _v3(v2), snap["snapshot_sha256"])
+
+    saved = json.loads(data_path(unit).read_text(encoding="utf-8"))
+    saved["run_id"] = "0" * 32
+    data_path(unit).write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+    stale = read_unit_snapshot(data["task_id"], uid, with_proposal=True)
+    assert stale["proposal"] is None
+    assert stale["snapshot_sha256"]
+
+    data_path(unit).write_bytes(b"not json")
+    broken = read_unit_snapshot(data["task_id"], uid, with_proposal=True)
+    assert broken["proposal"] is None
+    assert broken["snapshot_sha256"]
+
+
 @pytest.mark.parametrize("corrections, code", [
     ([{"old_text": "木板", "occurrence": None}], "anchor.ambiguous"),
     ([{"old_text": "不存在"}], "anchor.not-found"),

@@ -52,7 +52,7 @@ jiaodui status <paper_dir> --json
 
 正常入口提交 schema v3 原文修订：先读单元、真实读图和按需实算，再交「原文、改为、原因、证据」。父代理只派路径和身份，单元子代理自行读取，模型不写报告正文。
 
-1. `jiaodui_unit_snapshot` 获取 `snapshot_sha256`、源文/图片/数据/报告摘要和当前轮次信息。返修时传 `with_proposal: true`（CLI：`jiaodui unit-snapshot --task-id T --unit-id U --with-proposal --json`），返回的 `proposal` 为当前 `proposal_revision` 与精简 `corrections` 列表（id、old_text、new_text、reason、category、severity）；未提交时为 `null`。
+1. `jiaodui_unit_snapshot` 获取 `snapshot_sha256`、源文/图片/数据/报告摘要和当前轮次信息。返修时传 `with_proposal: true`（CLI：`jiaodui unit-snapshot --task-id T --unit-id U --with-proposal --json`），返回的 `proposal` 为当前 `proposal_revision` 与精简 `corrections` 列表（id、old_text、new_text、reason、category、severity）；没有可继承的当前提案时（未提交、上一轮或未登记数据）为 `null`。
 2. `jiaodui_unit_read` 使用 task/unit ID 分页读取源文，图片路径取自同一份实际读取清单；单次最多2000行，后续页递增 `start_line`。清单的 `read_paths` 是按正文顺序去重的实际读取路径，读图时逐字复制，**不要自行拼接或增删目录层级**。通用 DSH `read` 读取参考文件时每次 `limit` 同样不超过 2000；需要更多行时按实际返回范围递增 `offset`，不要把被截页误当成全文。
 3. 用真实 `read_image` 逐图核对可读内容及图文归属；按学科规范调用 `jiaodui_calc_<operation>` 实算，计算时绑定本单元 `task_id` / `unit_id`，保留返回的 `call_id`。首轮 `unit_evidence` 分为 assumptions（假设和核验依据）、symbols、images、calculations；无问题也保留核验依据。
 4. `jiaodui_unit_submit` 的外层给 `task_id`、`unit_id`、`expected_snapshot_sha256` 和下述 `proposal`。身份、源文摘要、提案版本由 core 绑定，`summary` 按有效修订最高严重度推导，空集为“无问题”，模型不用填写。`preview: true`（CLI `unit-submit --preview`）可整包预检；正式提交会从不可变源文生成全文报告，编译为 v2 后走既有图片/calc 证据校验与 `verify-report`，通过后仍须父代理复核。

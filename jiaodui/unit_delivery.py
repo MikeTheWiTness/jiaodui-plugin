@@ -85,6 +85,11 @@ def _snapshot(root: Path, unit: Path) -> dict:
     return value
 
 
+def locked_snapshot(root: Path, unit: Path) -> dict:
+    """读取已持有材料锁的单元快照；调用方必须先进入 material.locked。"""
+    return _snapshot(root, unit)
+
+
 def read_unit_snapshot(task_id: str, unit_id: str, *, with_proposal: bool = False) -> dict:
     root, unit = material.find_unit_by_id(task_id, unit_id)
     with material.locked(root):
@@ -92,7 +97,7 @@ def read_unit_snapshot(task_id: str, unit_id: str, *, with_proposal: bool = Fals
         if snapshot["task_id"] != task_id or snapshot["unit_id"] != unit_id:
             raise BusinessError("task/unit身份不匹配", code="identity-mismatch")
         if with_proposal:
-            previous = _submitted_base(root, unit, snapshot) if data_path(unit).is_file() else None
+            previous = _submitted_base(root, unit, snapshot, strict=False) if data_path(unit).is_file() else None
             snapshot["proposal"] = None if previous is None else {
                 "proposal_revision": previous["proposal_revision"],
                 "corrections": [{"id": item["id"], "old_text": item["expected_original"],
@@ -103,11 +108,18 @@ def read_unit_snapshot(task_id: str, unit_id: str, *, with_proposal: bool = Fals
     return snapshot
 
 
-def _submitted_base(root: Path, unit: Path, snapshot: dict) -> dict:
-    """增量只继承同轮同输入、当前已登记且通过闸门的提案。"""
+def _submitted_base(root: Path, unit: Path, snapshot: dict, *,
+                    strict: bool = True) -> dict | None:
+    """增量只继承同轮同输入、当前已登记且通过闸门的提案。
+
+    strict=False 供只读 snapshot 使用：数据不可继承时返回 None，不让整次读取失败；
+    提交路径仍用 strict=True，把同样的状态转成可诊断的 proposal-base-invalid。
+    """
     try:
         previous = json.loads(data_path(unit).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
+        if not strict:
+            return None
         raise BusinessError("基础提案不存在或数据损坏，请提交完整 v3", code="proposal-base-invalid") from exc
     from .report_suggestions import json_bytes
     proposal = previous.get("proposal") if isinstance(previous, dict) else None
@@ -120,6 +132,8 @@ def _submitted_base(root: Path, unit: Path, snapshot: dict) -> dict:
             or hashlib.sha256(json_bytes(proposal)).hexdigest() != previous.get("proposal_sha256")
             or not material.registered(root, material.load(root), unit)
             or not verify_unit(unit).ok):
+        if not strict:
+            return None
         raise BusinessError("基础提案不是同轮同输入的有效当前提交，请重读 snapshot 并提交完整 v3", code="proposal-base-invalid")
     return previous
 

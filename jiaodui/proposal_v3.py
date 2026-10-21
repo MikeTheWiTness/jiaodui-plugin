@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from .anchor import resolve_anchor, validate_revision_input
-from .evidence_layers import merge_layers, split_v2
+from .evidence_layers import merge_layers, prune_inherited_evidence, split_v2
 from .errors import BusinessError
 from .report_suggestions import _SEVERITY_RANK, bind_current_proposal, proposal_json_schema as v2_schema
 from .source_index import _location_id, resolve_location, source_digest
@@ -169,12 +169,11 @@ def compile_proposal(source: str, payload: dict, snapshot: dict, *, image_manife
     summary = max((item["severity"] for item in output), key=_SEVERITY_RANK.__getitem__, default="无问题")
     compiled = bind_current_proposal({"schema_version": 2, "corrections": output,
         "evidence": compiled_evidence, "summary": summary, "self_check": deepcopy(payload["self_check"])}, snapshot)
-    # 只保留当前有效层；继承项按 merge_layers 的同一规则修剪，不积累撤回历史。
+    # 只保留当前有效层；与 merge_layers 共用同一修剪谓词，但这里保留 inherited_ref
+    # 供后续增量继承。条件比 merge_layers 更窄（withdrawn ⊆ inactive、
+    # active_refs ⊇ active_references），重编译时会把多留的项再剪掉，不会造成 restored != base。
     active_refs = {ref for item in history if item.get("status") != "retracted" for ref in item["evidence_ids"]}
-    for key in ("assumptions", "calculations"):
-        if isinstance(evidence.get(key), list):
-            evidence[key] = [item for item in evidence[key] if not (
-                item.get("inherited_ref") in withdrawn_ids and item["id"] not in active_refs)]
+    prune_inherited_evidence(evidence, withdrawn_ids, active_refs)
     for key in ("assumptions", "calculations"):
         if isinstance(evidence.get(key), list):
             for entry in evidence[key]:

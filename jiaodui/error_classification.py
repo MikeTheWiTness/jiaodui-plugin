@@ -71,7 +71,12 @@ ERROR_CATEGORY_EXACT: dict[str, str] = {
     "parse-v2-requires-submit": "call_correction",
     "data-invalid": "call_correction",
     "data-missing": "call_correction",
+    # v3 提交状态错误：基础/绑定错误是调用方可修正的提交状态，沿用 proposal.* 的
+    # call_correction；只有 anchor./revise. 的定位输入诊断是 interactive。
     "proposal-json-invalid": "call_correction",
+    "proposal-base-invalid": "call_correction",
+    "proposal-binding-conflict": "call_correction",
+    "proposal-binding-unavailable": "call_correction",
     "proposal-revision-stale": "call_correction",
     "source-overwrite": "call_correction",
     "archive-conflict": "call_correction",

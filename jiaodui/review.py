@@ -8,7 +8,7 @@ from typing import Any
 from . import material
 from .errors import BusinessError
 from .paths import data_path, report_path
-from .unit_delivery import _snapshot
+from .unit_delivery import locked_snapshot
 
 
 def self_check_digest(data: dict) -> str:
@@ -60,7 +60,7 @@ def record_parent_review(task_id: str, unit_id: str, *, expected_snapshot_sha256
     ensure_inside(root)
     with material.locked(root):
         # 已持有材料锁，直接读取锁内快照，避免再次进入非重入锁。
-        current = _snapshot(root, unit)
+        current = locked_snapshot(root, unit)
         if current["snapshot_sha256"] != expected_snapshot_sha256:
             raise BusinessError("父复核依据的报告版本已过期", code="review-stale",
                                 details={"current_snapshot_sha256": current["snapshot_sha256"]})
