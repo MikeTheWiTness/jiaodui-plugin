@@ -42,6 +42,23 @@ def test_material_lock_file_persists_and_can_be_reacquired(tmp_path, monkeypatch
         assert lock_file.is_file()
 
 
+def test_thread_lock_table_releases_unused_entries(tmp_path, monkeypatch):
+    """线程锁表用弱引用，长驻进程不按材料目录无界累积。"""
+    import gc
+
+    workspace = tmp_path / "workspace"
+    root = workspace / "校对" / "锁表回收"
+    root.mkdir(parents=True)
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    key = os.path.normcase(str((root / material.LOCK_FILE).resolve()))
+
+    with material.locked(root):
+        assert key in material._THREAD_LOCKS
+
+    gc.collect()
+    assert key not in material._THREAD_LOCKS
+
+
 def test_material_lock_wait_has_a_bounded_timeout(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     root = workspace / "校对" / "锁超时测试"
