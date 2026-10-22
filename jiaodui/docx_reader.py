@@ -252,7 +252,7 @@ class DocxReader:
 
     def _materialize(self, rid: str) -> str | None:
         if rid in self._by_rel:
-            return self._by_rel[rid]
+            return self._by_rel[rid] or None
         target = self._rels[rid]
         if re.match(r"^[a-z]+://", target, re.I):
             self.warnings.append(f"跳过远程图片：{target}")
@@ -275,6 +275,17 @@ class DocxReader:
             destination = self.media_dir / name
         if not destination.exists():
             destination.write_bytes(data)
+        # Word 的缺图占位图（88×106 悲伤脸）不是题图：不复制、不引用，只留 warning。
+        from .convert import _is_broken_image_placeholder
+
+        if _is_broken_image_placeholder(destination):
+            try:
+                destination.unlink()
+            except OSError:
+                pass
+            self.warnings.append(f"已忽略讲义 DOCX 缺图占位图：{target}")
+            self._by_rel[rid] = ""
+            return None
         self._by_rel[rid] = name
         self.images.append({"name": name, "rel": rid, "bytes": len(data)})
         return name

@@ -1,7 +1,7 @@
 """docx 原生读取与结构拆分的契约测试。
 
-用 python-docx 现场构造固定模板夹具，不依赖 Downloads 里的真实材料；
-真实语料只做冒烟，不进 CI。
+用 python-docx 现场构造固定模板夹具；另用仓库内冻结的 m1 语料验证缺图占位图
+过滤。不依赖 Downloads 里的真实材料。
 """
 from __future__ import annotations
 
@@ -150,6 +150,25 @@ def test_unknown_table_shape_raises_unsupported(tmp_path):
 
     with pytest.raises(UnsupportedTemplate):
         read_docx(source, media_dir=tmp_path / "media")
+
+
+def test_broken_image_placeholders_are_skipped(tmp_path):
+    from jiaodui.convert import _is_broken_image_placeholder
+
+    fixture = (Path(__file__).resolve().parents[1]
+               / "evaluation/m1/source/第 6 讲校对测试.docx")
+    if not fixture.is_file():
+        pytest.skip("缺少 m1 冻结语料")
+    media = tmp_path / "media"
+
+    document = read_docx(fixture, media_dir=media, link_prefix="x")
+
+    assert document.stats["images"] == 5
+    assert not any(_is_broken_image_placeholder(path)
+                   for path in media.iterdir() if path.is_file())
+    assert any("缺图占位图" in warning for warning in document.warnings)
+    assert sorted(item["name"] for item in document.images) == [
+        "image4.png", "image5.png", "image6.png", "image7.png", "image8.png"]
 
 
 def test_broken_package_raises_read_error(tmp_path):
