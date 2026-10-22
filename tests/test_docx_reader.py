@@ -128,6 +128,24 @@ def test_text_is_faithful_to_docx(tmp_path):
     assert _normal(_docx_text(source)) == _normal(_markdown_plain(document.markdown))
 
 
+def test_nested_table_inside_single_cell_is_kept(tmp_path):
+    document = Document()
+    outer = document.add_table(rows=1, cols=1)
+    inner = outer.cell(0, 0).add_table(rows=2, cols=2)
+    inner.cell(0, 0).text = "L与d的关系"
+    inner.cell(0, 1).text = "图示"
+    inner.cell(1, 0).text = "$L<d$"
+    inner.cell(1, 1).text = "进"
+    inner.style = document.styles["Table Grid"]
+    source = tmp_path / "nested.docx"
+    document.save(source)
+
+    result = read_docx(source, media_dir=tmp_path / "media")
+
+    assert "| L与d的关系 | 图示 |" in result.markdown
+    assert "| $L<d$ | 进 |" in result.markdown
+
+
 def test_single_row_layout_table_flattens(tmp_path):
     document = Document()
     document.add_heading("模块一 测试", level=2)
@@ -204,6 +222,42 @@ def test_structural_split_keeps_teacher_version_questions(tmp_path, monkeypatch)
         "**练1**", "**教师版-基础练习**(★★★☆☆)", "**练2**"]
     assert "题干二" in Path(result.units[1]["file"]).read_text(encoding="utf-8")
     assert "题干三" not in Path(result.units[1]["file"]).read_text(encoding="utf-8")
+
+
+def test_structural_split_splits_knowledge_at_sections(tmp_path, monkeypatch):
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(tmp_path))
+    raw = tmp_path / "材料_raw.md"
+    raw.write_text(
+        "### 直击课堂\n"
+        "![](./images/nav.png)\n"
+        "\n"
+        "## 模块一\n"
+        "### 模型大招\n"
+        "模型正文\n"
+        "\n"
+        "### 必备知识\n"
+        "知识正文\n"
+        "\n"
+        "**练1**\n"
+        "题干\n",
+        encoding="utf-8")
+    blocks = [
+        {"kind": "heading", "level": 3, "start_line": 1, "end_line": 1, "title": "直击课堂"},
+        {"kind": "paragraph", "level": 0, "start_line": 2, "end_line": 2, "title": ""},
+        {"kind": "heading", "level": 2, "start_line": 4, "end_line": 4, "title": "模块一"},
+        {"kind": "heading", "level": 3, "start_line": 5, "end_line": 5, "title": "模型大招"},
+        {"kind": "paragraph", "level": 0, "start_line": 6, "end_line": 6, "title": ""},
+        {"kind": "heading", "level": 3, "start_line": 8, "end_line": 8, "title": "必备知识"},
+        {"kind": "paragraph", "level": 0, "start_line": 9, "end_line": 9, "title": ""},
+        {"kind": "question", "level": 0, "start_line": 11, "end_line": 12, "title": "**练1**"},
+    ]
+
+    result = split_structural(str(raw), blocks, str(tmp_path / "units"), "材料")
+
+    assert [unit["title"] for unit in result.units] == [
+        "直击课堂", "模块一", "必备知识", "**练1**"]
+    model = Path(result.units[1]["file"]).read_text(encoding="utf-8")
+    assert "### 模型大招" in model and "模型正文" in model
 
 
 def test_structural_split_drops_heading_only_run(tmp_path, monkeypatch):
@@ -298,6 +352,23 @@ def test_forced_native_engine_rejects_unknown_structure(tmp_path, monkeypatch):
     with pytest.raises(UnsupportedError):
         convert.convert_to_raw(str(source), str(tmp_path / "raw"), "材料",
                                mode="lecture", import_engine="docx")
+
+
+def test_navigation_units_are_marked_skip(tmp_path, monkeypatch):
+    from jiaodui.split import mark_navigation_units
+
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(tmp_path))
+    root = tmp_path / "units" / "材料"
+    for name, first_line in (("单元1", "### 直击课堂"), ("单元2", "### 模型")):
+        unit = root / name
+        unit.mkdir(parents=True)
+        (unit / f"{name}.md").write_text(first_line + "\n正文\n", encoding="utf-8")
+
+    marked = mark_navigation_units(str(tmp_path / "units"), "材料")
+
+    assert marked == 1
+    assert (root / "单元1" / ".skip_proofread").is_file()
+    assert not (root / "单元2" / ".skip_proofread").exists()
 
 
 def test_structural_split_rejects_out_of_range_block(tmp_path, monkeypatch):

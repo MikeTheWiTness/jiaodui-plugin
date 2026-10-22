@@ -760,9 +760,9 @@ def split_structural(raw_md, blocks: list[dict], output_root: str, base_name: st
                      *, before_write: Callable[[list[str]], None] | None = None) -> SplitResult:
     """按 convert 记录的原生块计划切单元，不跑标题正则。
 
-    计划来自 docx 读取器：题目表是确定边界，连续的非题目块合成知识单元。
-    只有标题、没有正文的知识段丢弃（与 split_lecture 的 _drop_title_only_units
-    一致），因此「基础演练」这类组标题不会单独成单元。
+    计划来自 docx 读取器：题目表是确定边界；连续的非题目块按 ##/### 小节
+    合成知识单元。只有标题、没有正文的知识段丢弃（与 split_lecture 的
+    _drop_title_only_units 一致），因此「基础演练」这类组标题不会单独成单元。
 
     Args:
         raw_md: 原生读取产出的 raw Markdown 路径（也接受正文）。
@@ -797,6 +797,14 @@ def split_structural(raw_md, blocks: list[dict], output_root: str, base_name: st
     planned: list[tuple[str, str]] = []
     pending: list[tuple[int, dict]] = []
 
+    def has_body() -> bool:
+        if not pending:
+            return False
+        start = min(span(block, index)[0] for index, block in pending)
+        end = max(span(block, index)[1] for index, block in pending)
+        return any(line.strip() and not line.lstrip().startswith("#")
+                   for line in lines[start - 1:end])
+
     def flush() -> None:
         if not pending:
             return
@@ -820,6 +828,10 @@ def split_structural(raw_md, blocks: list[dict], output_root: str, base_name: st
             if text:
                 planned.append((text, block.get("title") or ""))
         else:
+            level = block.get("level") or 0
+            # ##/### 小节边界：已有正文时开新知识单元；只有标题时继续挂到下一节。
+            if block.get("kind") == "heading" and 0 < level <= 3 and has_body():
+                flush()
             pending.append((index, block))
     flush()
 

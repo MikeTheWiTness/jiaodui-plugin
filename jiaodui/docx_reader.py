@@ -470,6 +470,12 @@ class DocxReader:
     def _parse_heading_table(self, table) -> Block | None:
         row = table.find(w("tr"))
         cell = row.find(w("tc"))
+        # 1×1 表里也可能再嵌数据表（答案/解析中常见），必须整格展开。
+        if cell.findall(w("tbl")):
+            lines = self._container_lines(cell)
+            if lines:
+                return Block(kind="paragraph", lines=lines, title=lines[0])
+            return None
         entries: list[tuple[str, int]] = []
         for paragraph in cell.findall(w("p")):
             value = self._text(paragraph).strip()

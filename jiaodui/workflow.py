@@ -357,6 +357,13 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
                   "raw_sha256": material.sha256(raw),
                   "config_sha256": hashlib.sha256(json.dumps(config, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
         result = split(before_write=check_unit_set)
+        # 导航/封面段按学科 nav_patterns 标记跳过；只打标记，不删除单元。
+        from .split import mark_navigation_units
+
+        marked = mark_navigation_units(str(target), name,
+                                       (config.get("nav_patterns") or None))
+        if marked:
+            log(f"   ⏭️ 已标记 {marked} 个导航单元跳过校对")
         if result.coverage is not None:
             params["slice_coverage"] = result.coverage
         data["material_type"] = selection
