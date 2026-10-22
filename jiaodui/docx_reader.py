@@ -87,6 +87,7 @@ class DocxReader:
         self.images: list[dict] = []
         self._by_rel: dict[str, str] = {}
         self._data_tables = 0
+        self._floating_md: set[str] = set()
         try:
             with zipfile.ZipFile(self.path) as archive:
                 self._document = etree.fromstring(archive.read("word/document.xml"))
@@ -233,6 +234,7 @@ class DocxReader:
         if alt.lower() == "test":
             alt = ""
         alt = alt.replace("[", "\\[").replace("]", "\\]")
+        floating = drawing.find(f".//{{{WP}}}anchor") is not None
         blip = drawing.find(f".//{{{A}}}blip")
         if blip is None:
             return ""
@@ -243,7 +245,10 @@ class DocxReader:
         name = self._materialize(rid)
         if name is None:
             return ""
-        return f"![{alt}]({self.link_prefix}/{name})"
+        markdown = f"![{alt}]({self.link_prefix}/{name})"
+        if floating:
+            self._floating_md.add(markdown)
+        return markdown
 
     def _materialize(self, rid: str) -> str | None:
         if rid in self._by_rel:
@@ -498,10 +503,14 @@ class DocxReader:
         for cell in rows[start + 2].findall(w("tc")):
             option_lines.extend(self._container_lines(cell))
         options = self._group_options(option_lines)
+        figures, options = self._split_floating_figures(options)
         answer = self._parse_answer_rows(rows[start + 3:])
 
         lines = [title]
         lines.extend(stem)
+        # Word 里浮在选项单元格的题图属于题干版面，挪到选项前；
+        # 行内图（选项本身是图像）保持原位。
+        lines.extend(figures)
         lines.extend(options)
         lines.extend(answer)
         return Block(kind="question", lines=lines, title=title, payload={
@@ -528,6 +537,25 @@ class DocxReader:
             body = " ".join(part.strip() for part in option["parts"] if part.strip())
             rendered.append(f"{option['letter']}. {body}".rstrip())
         return rendered
+
+    def _split_floating_figures(self, options: list[str]) -> tuple[list[str], list[str]]:
+        """把浮在选项单元格里的题图挪到选项前；行内图保持原位。"""
+        figures: list[str] = []
+        kept: list[str] = []
+        for line in options:
+            tokens = re.findall(r"!\[[^\]]*\]\([^)]*\)", line)
+            floating = [token for token in tokens if token in self._floating_md]
+            if not floating:
+                kept.append(line)
+                continue
+            for token in floating:
+                figures.append(token)
+                line = line.replace(token, "", 1)
+            line = re.sub(r"[ \t]{2,}", " ", line).strip()
+            if re.fullmatch(r"[A-H]\.", line):
+                continue  # 只剩字母的空选项
+            kept.append(line)
+        return figures, kept
 
     def _parse_answer_rows(self, rows) -> list[str]:
         items: list[tuple[str, list[str]]] = []
