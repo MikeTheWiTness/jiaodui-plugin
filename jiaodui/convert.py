@@ -1543,6 +1543,10 @@ def _native_docx_to_raw(src, raw_md, images_dir, base, warnings):
     media_dir = images_dir / "media"
     document = read_docx(str(src), media_dir=media_dir,
                          link_prefix=f"./{base}_images/media")
+    if not document.questions:
+        from .docx_reader import UnsupportedTemplate
+
+        raise UnsupportedTemplate("未识别到题目表（固定讲义模板要求至少一道题）")
     raw_md.write_text(document.markdown, encoding="utf-8")
     referenced = {item["name"] for item in document.images}
     stale = [path for path in (media_dir.iterdir() if media_dir.is_dir() else [])
