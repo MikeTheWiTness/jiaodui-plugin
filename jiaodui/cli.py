@@ -83,10 +83,12 @@ def cmd_convert(args: argparse.Namespace) -> int:
     result = convert_material(args.file, args.out_dir, args.base_name,
                               material_name=args.material_name, use_mathjax=args.mathjax,
                               legacy_layout=args.legacy_layout, mode=args.mode,
-                              mode_origin=args.mode_origin, mode_reason=args.mode_reason)
+                              mode_origin=args.mode_origin, mode_reason=args.mode_reason,
+                              import_engine=args.import_engine)
     payload = {"ok": True, "raw_md": result.raw_md, "images_dir": result.images_dir,
                "copied": result.copied, "missing": result.missing,
-               "warnings": result.warnings, "source_kind": result.source_kind, "mode": result.mode}
+               "warnings": result.warnings, "source_kind": result.source_kind,
+               "mode": result.mode, "engine": result.engine}
     if args.json:
         _json_out(payload)
     else:
@@ -589,6 +591,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--base-name")
     sp.add_argument("--mathjax", action="store_true", default=None)
     sp.add_argument("--mode", choices=["exam", "lecture"], help="材料类型，讲义自动启用其专用转换参数")
+    sp.add_argument("--import-engine", choices=["auto", "docx", "pandoc"], default="auto",
+                    help="docx 导入引擎：原生读取固定模板 / 强制 pandoc / 自动（默认）")
     sp.set_defaults(func=cmd_convert)
 
     sp = sub.add_parser("split", help="规则拆分：源文 → 单元目录")

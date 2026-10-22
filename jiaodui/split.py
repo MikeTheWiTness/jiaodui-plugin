@@ -754,6 +754,97 @@ def split_lecture(raw_md: str, output_root: str, base_name: str, config: dict,
     return result
 
 
+# ─── 结构拆分（原生 docx 导入用） ───────────────────────────
+
+def split_structural(raw_md, blocks: list[dict], output_root: str, base_name: str,
+                     *, before_write: Callable[[list[str]], None] | None = None) -> SplitResult:
+    """按 convert 记录的原生块计划切单元，不跑标题正则。
+
+    计划来自 docx 读取器：题目表是确定边界，连续的非题目块合成知识单元。
+    只有标题、没有正文的知识段丢弃（与 split_lecture 的 _drop_title_only_units
+    一致），因此「基础演练」这类组标题不会单独成单元。
+
+    Args:
+        raw_md: 原生读取产出的 raw Markdown 路径（也接受正文）。
+        blocks: conversion.blocks，每项含 kind/start_line/end_line/title。
+        output_root: 输出根目录，单元写入 output_root/base_name/。
+        base_name: 材料名。
+        before_write: 单元名确定后、写盘前调用，供材料流程核对集合。
+
+    Raises:
+        ContractError: 块计划为空或行号越界（raw 与清单不一致）。
+    """
+    base_name = (base_name or "").strip()
+    content, src_media = _load_raw(raw_md, base_name, {})
+    lines = content.splitlines()
+    result = SplitResult()
+    if not content.strip() or not blocks:
+        result.warnings.append("源文为空或缺少块计划，未识别到任何单元")
+        if before_write is not None:
+            before_write([])
+        return result
+
+    def span(block: dict, index: int) -> tuple[int, int]:
+        start = block.get("start_line")
+        end = block.get("end_line")
+        if type(start) is not int or type(end) is not int or not 1 <= start <= end <= len(lines):
+            raise ContractError(
+                "块计划行号与 raw 不一致，未写入单元",
+                details={"block_index": index, "start_line": start,
+                         "end_line": end, "total_lines": len(lines)})
+        return start, end
+
+    planned: list[tuple[str, str]] = []
+    pending: list[tuple[int, dict]] = []
+
+    def flush() -> None:
+        if not pending:
+            return
+        start = min(span(block, index)[0] for index, block in pending)
+        end = max(span(block, index)[1] for index, block in pending)
+        text = "\n".join(lines[start - 1:end]).strip()
+        body = [line for line in text.splitlines()
+                if line.strip() and not line.lstrip().startswith("#")]
+        if body:
+            title = pending[0][1].get("title") or body[0].strip()
+            planned.append((text, title))
+        pending.clear()
+
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            raise ContractError("块计划项必须为对象", details={"block_index": index})
+        if block.get("kind") == "question":
+            flush()
+            start, end = span(block, index)
+            text = "\n".join(lines[start - 1:end]).strip()
+            if text:
+                planned.append((text, block.get("title") or ""))
+        else:
+            pending.append((index, block))
+    flush()
+
+    if not planned:
+        result.warnings.append("块计划中没有可交付单元")
+        if before_write is not None:
+            before_write([])
+        return result
+
+    names = [f"单元{number}" for number in range(1, len(planned) + 1)]
+    if before_write is not None:
+        before_write(names)
+    target_root = ensure_tree(Path(output_root) / base_name)
+    target_root.mkdir(parents=True, exist_ok=True)
+    if src_media is not None and not src_media.exists():
+        log(f"   🔍 图片源目录不存在: {src_media}")
+    for unit_name, (text, title) in zip(names, planned):
+        unit_dir, md_path, img_result = _write_unit(target_root, unit_name, text, src_media)
+        _record(result, unit_dir, md_path, title, img_result)
+    if result.missing:
+        result.warnings.append(f"有 {result.missing} 张图片未找到")
+    log(f"   📂 结构拆分完成: {len(result.units)} 个单元, 图片 {result.copied} 张")
+    return result
+
+
 # ─── 边界切片（智能拆分用） ─────────────────────────────────
 
 def split_by_strategy(raw_md: str, output_root: str, base_name: str, config: dict,

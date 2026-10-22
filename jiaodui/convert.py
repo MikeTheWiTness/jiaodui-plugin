@@ -73,6 +73,10 @@ class ConvertResult:
     warnings: list[str] = field(default_factory=list)
     source_kind: str = ""
     mode: str | None = None
+    engine: str = ""
+    """实际使用的转换引擎：docx（原生读取）/ pandoc / md / idml。"""
+    blocks: list[dict] = field(default_factory=list)
+    """原生读取的块计划（行号基于 raw.md）；供结构拆分复用。"""
 
 
 # ============================================================
@@ -1532,8 +1536,55 @@ def _organize_images(content, source_dirs, images_dir, base, warnings, *,
     return new_content, copied, missing
 
 
-def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, *, mode=None):
-    """docx 公共转换后仅 exam 走试卷后处理；讲义清理留到拆分时执行。"""
+def _native_docx_to_raw(src, raw_md, images_dir, base, warnings):
+    """原生读取 docx：直接产出规范 md 与图片，返回 (图片数, 块计划)。"""
+    from .docx_reader import read_docx
+
+    media_dir = images_dir / "media"
+    document = read_docx(str(src), media_dir=media_dir,
+                         link_prefix=f"./{base}_images/media")
+    raw_md.write_text(document.markdown, encoding="utf-8")
+    referenced = {item["name"] for item in document.images}
+    stale = [path for path in (media_dir.iterdir() if media_dir.is_dir() else [])
+             if path.is_file() and path.name not in referenced]
+    for path in stale:
+        try:
+            path.unlink()
+        except OSError as exc:
+            warnings.append(f"旧图片清理失败：{path.name}（{exc}）")
+    warnings.extend(item for item in document.warnings if item not in warnings)
+    blocks = [{"kind": block.kind, "level": block.level, "title": block.title,
+               "start_line": block.start_line, "end_line": block.end_line}
+              for block in document.blocks]
+    return len(document.images), blocks
+
+
+def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, *,
+                         mode=None, import_engine="auto"):
+    """docx 公共转换后仅 exam 走试卷后处理；讲义清理留到拆分时执行。
+
+    import_engine=auto 时优先原生读取固定模板；结构不认识、或显式要求 pandoc 时
+    走 pandoc。exam 暂不启用原生读取（题号规则与讲义模板不同）。
+    """
+    if import_engine not in {"auto", "docx", "pandoc"}:
+        from .errors import UsageError
+        raise UsageError("import_engine 必须为 auto / docx / pandoc")
+    if import_engine != "pandoc" and mode != "exam":
+        try:
+            copied, blocks = _native_docx_to_raw(src, raw_md, images_dir, base, warnings)
+        except Exception as exc:
+            from .docx_reader import DocxReadError, UnsupportedTemplate
+
+            if not isinstance(exc, (UnsupportedTemplate, DocxReadError)):
+                raise
+            if import_engine == "docx":
+                raise UnsupportedError(
+                    "docx 结构不在原生模板内，无法用原生读取",
+                    details={"path": str(src), "reason": str(exc)}) from exc
+            warnings.append(f"原生读取不支持（{exc}），已回退 pandoc")
+        else:
+            return copied, 0, "docx", blocks
+
     if not check_pandoc():
         raise EnvError("Pandoc 未安装，无法转换 Word 文档", details={"path": str(src)})
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -1565,7 +1616,7 @@ def _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, *
         f.write(content)
     if mode == "exam":
         post_process_md(str(raw_md))
-    return copied, missing
+    return copied, missing, "pandoc", []
 
 
 def _convert_md_to_raw(src, raw_md, images_dir, base, warnings, *, mode=None):
@@ -1602,7 +1653,8 @@ def _convert_idml_to_raw(src, raw_md, images_dir, base, warnings, *, mode=None):
 
 
 def convert_to_raw(src_path: str, out_dir: str | None = None, base_name: str | None = None,
-                   use_mathjax: bool | None = None, *, mode: str | None = None) -> ConvertResult:
+                   use_mathjax: bool | None = None, *, mode: str | None = None,
+                   import_engine: str = "auto") -> ConvertResult:
     """把源文件转换为 out_dir/{base_name}_raw.md，并归置图片。
 
     - docx：pandoc docx→md → normalize_caret_tilde → 格式增强 → 图片归置；
@@ -1646,15 +1698,21 @@ def convert_to_raw(src_path: str, out_dir: str | None = None, base_name: str | N
         raise UnsupportedError(
             "不支持旧版 .doc 格式：请先用 Word / LibreOffice 另存为 .docx 再转换",
             details={"ext": ext, "path": str(src)})
+    engine = ""
+    blocks: list[dict] = []
     if ext == ".docx":
-        copied, missing = _convert_docx_to_raw(src, raw_md, images_dir, base, use_mathjax, warnings, mode=mode)
+        copied, missing, engine, blocks = _convert_docx_to_raw(
+            src, raw_md, images_dir, base, use_mathjax, warnings, mode=mode,
+            import_engine=import_engine)
         source_kind = "docx"
     elif ext in (".md", ".markdown"):
         copied, missing = _convert_md_to_raw(src, raw_md, images_dir, base, warnings, mode=mode)
         source_kind = "md"
+        engine = "md"
     elif ext == ".idml":
         copied, missing = _convert_idml_to_raw(src, raw_md, images_dir, base, warnings, mode=mode)
         source_kind = "idml"
+        engine = "idml"
     else:
         raise UnsupportedError(f"不支持的文件格式: {ext}", details={"ext": ext, "path": str(src)})
 
@@ -1666,4 +1724,6 @@ def convert_to_raw(src_path: str, out_dir: str | None = None, base_name: str | N
         warnings=warnings,
         source_kind=source_kind,
         mode=mode,
+        engine=engine,
+        blocks=blocks,
     )
