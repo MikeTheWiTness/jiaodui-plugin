@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const packageRoot=process.argv[3];
 const bundleVersion=JSON.parse(readFileSync(join(packageRoot,'package.json'),'utf8')).version;
+const schemaV3Path=join(packageRoot,'tools','proposal-schema-v3.json');
 const { apply, inject } = await import(pathToFileURL(join(packageRoot,'tools','index.js')).href);
 let tool;
 const registered=new Map();
@@ -168,8 +169,8 @@ assert.equal(delivery.parameters.additionalProperties,false);
 assert.deepEqual(delivery.parameters.required,['operation','paper_dir']);
 assert.deepEqual(delivery.parameters.properties.operation.enum,['build-report','build-docx']);
 await prepare.execute({operation:'check-env'},exec);
-assert.deepEqual(requests.at(-1).argv.slice(1),['--json','check-env','--expect-schema-version','3','--expect-bundle-version',bundleVersion],
-  'check-env 必须带契约探针，版本号相同但内容不同也要在入口暴露');
+assert.deepEqual(requests.at(-1).argv.slice(1),['--json','check-env','--expect-schema-version','3','--expect-bundle-version',bundleVersion,'--expect-schema-file',schemaV3Path],
+  'check-env 必须带版本与 schema 文件探针，同版本内容漂移也要在入口暴露');
 await prepare.execute({operation:'inspect-source',path:'/tmp/a.docx',preview_chars:0},exec);
 assert.deepEqual(requests.at(-1).argv.slice(1),['--json','inspect-source','/tmp/a.docx','--preview-chars','0']);
 await prepare.execute({operation:'convert',path:'/tmp/a.docx',mode:'lecture',mode_origin:'user',mode_reason:'嵌套表格'},exec);

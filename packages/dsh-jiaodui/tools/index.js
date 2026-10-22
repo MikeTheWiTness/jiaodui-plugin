@@ -89,9 +89,8 @@ function render(args, value) {
 const CALC_SCHEMAS = JSON.parse(
   readFileSync(fileURLToPath(new URL('./calc-schemas.json', import.meta.url)), 'utf8'),
 ).operations
-const SUBMIT_PROPOSAL_SCHEMA = JSON.parse(
-  readFileSync(fileURLToPath(new URL('./proposal-schema-v3.json', import.meta.url)), 'utf8'),
-).schema
+const PROPOSAL_SCHEMA_V3_PATH = fileURLToPath(new URL('./proposal-schema-v3.json', import.meta.url))
+const SUBMIT_PROPOSAL_SCHEMA = JSON.parse(readFileSync(PROPOSAL_SCHEMA_V3_PATH, 'utf8')).schema
 const SUBMIT_PROPOSAL_V2_SCHEMA = JSON.parse(
   readFileSync(fileURLToPath(new URL('./proposal-schema-bind-current.json', import.meta.url)), 'utf8'),
 ).schema
@@ -144,7 +143,8 @@ function taskPrepareArgs(args) {
       // 契约探针：版本号相同不代表内容相同，check-env 必须比对插件期望与核心能力
       return ['check-env',
         '--expect-schema-version', String(SUBMIT_PROPOSAL_SCHEMA.properties.schema_version.const),
-        '--expect-bundle-version', BUNDLE_VERSION]
+        '--expect-bundle-version', BUNDLE_VERSION,
+        '--expect-schema-file', PROPOSAL_SCHEMA_V3_PATH]
     case 'inspect-source':
       return ['inspect-source', ...target,
         ...(args.preview_chars === undefined || args.preview_chars === null

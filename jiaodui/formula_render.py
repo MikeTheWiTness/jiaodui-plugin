@@ -138,7 +138,7 @@ _RELATION_NORMALIZATIONS = (
     (re.compile(r"\\right\s*\\\|"), r"\\right\\Vert"),
     (re.compile(r"\\\|"), r"{\\Vert}"),
 )
-_TEXT_COMMAND_RE = re.compile(r"\\(?:text|mbox)\{([^{}]*)\}")
+_MBOX_RE = re.compile(r"\\mbox\{([^{}]*)\}")
 _HSPACE_RE = re.compile(r"\\hspace\*?\{[^{}]*\}")
 _MATHRM_SPACE_RE = re.compile(r"\\mathrm\{\s*\\,\s*\}")
 _WRAPPER_RE = re.compile(
@@ -150,12 +150,13 @@ _LIMITS_RE = re.compile(r"\\(?:limits|nolimits)(?![A-Za-z])")
 def normalize_latex(latex_body: str) -> str:
     r"""把 pandoc 常见 LaTeX 写法归一成 matplotlib mathtext 能解析的形式。
 
-    覆盖实测失败的 \gt / \lt / \ge / \le / \|，以及 \text / \mbox、
-    \hspace、\mathrel 等包裹命令。归一化只做等价替换，不负责判断公式语义；
-    归一化后仍失败由调用方按语法不支持降级。
+    覆盖实测失败的 \gt / \lt / \ge / \le / \|，以及 \mbox → \text、
+    \hspace、\mathrel 等包裹命令。\text 本身由 mathtext 支持，保留原样，
+    避免把其中的 # / 裸 % 等文本字符带进数学模式。归一化只做可渲染化替换，
+    不负责判断公式语义；归一化后仍失败由调用方按语法不支持降级。
     """
     body = _MATHRM_SPACE_RE.sub(r"\\mathrm{}", latex_body)
-    body = _TEXT_COMMAND_RE.sub(r"\\mathrm{\1}", body)
+    body = _MBOX_RE.sub(r"\\text{\1}", body)
     body = _HSPACE_RE.sub(r"\ ", body)
     body = _WRAPPER_RE.sub(r"\1", body)
     body = _STYLE_RE.sub("", body)

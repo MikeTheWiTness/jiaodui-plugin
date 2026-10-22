@@ -22,7 +22,7 @@
 下面的 CLI 写法只在没有该工具（或需要上面没登记的参数）时作为退路：
 
 ```text
-jiaodui check-env [--expect-schema-version 2|3 --expect-bundle-version V]
+jiaodui check-env [--expect-schema-version 2|3 --expect-bundle-version V --expect-schema-file PATH]
 jiaodui inspect-source <file> [--preview-chars 0..2000] --json
 jiaodui inspect-images --unit <unit_dir> --json
 jiaodui convert <file> --mode exam|lecture [--material-name NAME] --work-root W --json
@@ -32,7 +32,7 @@ jiaodui precheck-split <paper_dir>
 jiaodui status <paper_dir> --json
 ```
 
-`check-env` 的 `contract` 项比对插件声明的提案 schema 版本与核心实际能力；插件和 CLI 版本号相同但内容不同时也会在这里失败，**不要把它当成本地依赖检查**。`inspect-images` 按正文顺序列出图片引用与实际读取图，派发单元前先跑。
+`check-env` 的 `contract` 项比对插件声明的提案 schema 版本、bundle 版本与核心实际能力，并在提供 `--expect-schema-file` 时逐字段比对 schema 内容；新版 CLI 在这些不一致时失败，旧 CLI 会因不认识探针参数直接 exit 2。**不要把它当成本地依赖检查**。`inspect-images` 按正文顺序列出图片引用与实际读取图，派发单元前先跑。
 
 `split` 可选 `--rerun` 开新轮；单元集合变更须显式 `--replace-units`，陈旧单元移入 `.superseded/<run_id>/`，只移动不删除。人工接纳现有集合用 `--adopt-units`。`convert` 另有 `--out-dir`、`--base-name`、`--mathjax`；`split` / `slice` 另有 `--base-name`、`--out-root`、`--no-clean`。材料类型来源可用 `--mode-origin` / `--mode-reason` 登记。所有选项以 `jiaodui <command> --help` 为准。
 

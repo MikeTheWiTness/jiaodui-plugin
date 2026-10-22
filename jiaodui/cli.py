@@ -59,7 +59,8 @@ def cmd_check_env(args: argparse.Namespace) -> int:
     from .checkenv import check_env
 
     report = check_env(expect_schema_version=args.expect_schema_version,
-                       expect_bundle_version=args.expect_bundle_version)
+                       expect_bundle_version=args.expect_bundle_version,
+                       expect_schema_file=args.expect_schema_file)
     if args.json:
         _json_out(report.to_dict())
     else:
@@ -524,7 +525,9 @@ def cmd_build_docx(args: argparse.Namespace) -> int:
         if result.image_missing_count:
             anomaly += f"，图片未嵌入 {result.image_missing_count}"
         if result.comment_formula_fallback_count:
-            anomaly += f"，公式降级 {result.comment_formula_fallback_count}"
+            anomaly += (f"，公式降级 {result.comment_formula_fallback_count}"
+                        f"（依赖 {result.comment_formula_dependency_missing_count}"
+                        f" / 语法 {result.comment_formula_syntax_unsupported_count}）")
         log(f" 标记 {result.marker_count} = 锚点 {result.anchor_count} + 公式兜底 "
             f"{result.formula_fallback_count}，缺失 {result.missing_count}，"
             f"标题批注 {result.heading_comment_count}{anomaly}")
@@ -567,6 +570,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="插件期望的提案 schema 版本；与核心能力不一致即预检失败")
     sp.add_argument("--expect-bundle-version",
                     help="插件 bundle 版本；与核心版本不一致即预检失败")
+    sp.add_argument("--expect-schema-file",
+                    help="插件随包的提案 schema 文件；与核心导出逐字段比对")
     sp.set_defaults(func=cmd_check_env)
 
     sp = sub.add_parser("inspect-source", help="只读检查 Word 嵌套表格与有限正文节选")

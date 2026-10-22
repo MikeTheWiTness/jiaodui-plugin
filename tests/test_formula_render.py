@@ -89,6 +89,9 @@ class TestLatexToPng:
         r"\mathrm{\,}",
         r"\text{abc}",
         r"\mbox{abc}",
+        r"\text{a # b}",
+        r"\text{a % b}",
+        r"\mbox{a # b}",
         r"\hspace{1em}a",
         r"\left\| x \right\|",
     ])
@@ -109,7 +112,8 @@ def test_normalize_latex_maps_pandoc_commands():
     assert normalize_latex(r"a \le b") == r"a \leq b"
     assert normalize_latex(r"\|x\|") == r"{\Vert}x{\Vert}"
     assert normalize_latex(r"\left\|x\right\|") == r"\left\Vertx\right\Vert"
-    assert normalize_latex(r"\text{中文}") == r"\mathrm{中文}"
+    assert normalize_latex(r"\text{中文}") == r"\text{中文}"
+    assert normalize_latex(r"\mbox{中文}") == r"\text{中文}"
     assert normalize_latex(r"\mathrm{\,}") == r"\mathrm{}"
 
 

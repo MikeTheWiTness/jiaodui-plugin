@@ -107,6 +107,9 @@ class DocxBuildResult:
     - over_count：逐单元「锚点+兜底 多于报告标记数」的超出量之和（记账异常，必须为 0）
     - image_missing_count：单元图片未能嵌入交付的数量（缺图，必须为 0）
     - comment_formula_fallback_count：批注内公式渲染失败降级为文本的数量（允许，只告警）
+    - comment_formula_dependency_missing_count：其中因 matplotlib / 中文字体不可用而降级的数量
+    - comment_formula_syntax_unsupported_count：其中因 mathtext 语法不支持而降级的数量
+    - comment_formula_failures：降级公式原文与原因（{formula, reason, detail?}）
     - heading_comment_count：无问题单元的标题批注数（单列，不参与缺失计算）
     - units：每单元 {unit, markers, anchors, fallbacks, missing, heading_comment}
     """

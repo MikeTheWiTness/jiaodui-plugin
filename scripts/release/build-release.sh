@@ -23,14 +23,15 @@ python_can_build() {
   local candidate="$1"
   [[ -n "$candidate" && -x "$candidate" ]] || return 1
   "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1 || return 1
-  "$candidate" -m build --version >/dev/null 2>&1
+  "$candidate" -m build --version >/dev/null 2>&1 || return 1
+  "$candidate" -m pip --version >/dev/null 2>&1
 }
 
 EXPLICIT_PYTHON="$(printenv PYTHON || true)"
 if [[ -n "$EXPLICIT_PYTHON" ]]; then
   PYTHON_BIN="$(resolve_python "$EXPLICIT_PYTHON")"
   if ! python_can_build "$PYTHON_BIN"; then
-    printf '指定的 PYTHON=%s 不可用于构建：需要 Python >=3.12 且已安装 build。\n' "$EXPLICIT_PYTHON" >&2
+    printf '指定的 PYTHON=%s 不可用于构建：需要 Python >=3.12、build 与 pip。\n' "$EXPLICIT_PYTHON" >&2
     printf '请先执行：<该解释器> -m pip install build，或用 PYTHON=/path/to/python 重新运行。\n' >&2
     exit 3
   fi
@@ -45,12 +46,13 @@ else
   done
   if [[ -z "$PYTHON_BIN" ]]; then
     printf '%s\n' '未找到可用于构建的 Python：已检查 python3.12、仓库 .venv/bin/python、python3。' >&2
-    printf '%s\n' '需要 Python >=3.12 且已安装 build；请执行 python3.12 -m pip install build，' >&2
+    printf '%s\n' '需要 Python >=3.12 且已安装 build 与 pip；请执行 python3.12 -m pip install build，' >&2
     printf '%s\n' '或设置 PYTHON 指向带 build 的解释器后重试。' >&2
     exit 3
   fi
 fi
 PYTHON="$PYTHON_BIN"
+printf '使用构建解释器：%s\n' "$PYTHON" >&2
 
 # 已落地的学科插件包：一次发布同时带全部包，目标机只装需要的那一个。
 BUNDLE_PACKAGES=(dsh-jiaodui dsh-jiaodui-chemistry)
