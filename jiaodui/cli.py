@@ -97,6 +97,21 @@ def cmd_convert(args: argparse.Namespace) -> int:
     return ExitCode.OK
 
 
+def cmd_import(args: argparse.Namespace) -> int:
+    from .workflow import import_material
+    payload = import_material(args.file, subject=args.subject, mode=args.mode,
+                              material_name=args.material_name,
+                              import_engine=args.import_engine,
+                              rerun=args.rerun, replace_units=args.replace_units)
+    if args.json:
+        _json_out(payload)
+    else:
+        log(f" ✅ 导入完成（{payload['engine']}）：{payload['units']} 个单元"
+            f"（题目 {payload['question_units']} / 知识 {payload['knowledge_units']}）")
+        print(json.dumps(payload, ensure_ascii=False))
+    return ExitCode.OK
+
+
 def _split(args: argparse.Namespace) -> int:
     from .workflow import split_material
     result = split_material(args.raw_md, subject=args.subject, mode=args.mode,
@@ -594,6 +609,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--import-engine", choices=["auto", "docx", "pandoc"], default="auto",
                     help="docx 导入引擎：原生读取固定模板 / 强制 pandoc / 自动（默认）")
     sp.set_defaults(func=cmd_convert)
+
+    sp = sub.add_parser("import", help="一次完成转换、结构拆分与预检，返回紧凑摘要")
+    sp.add_argument("file")
+    sp.add_argument("--subject", required=True)
+    sp.add_argument("--mode", choices=["exam", "lecture"],
+                    help="材料类型；省略时仅固定 docx 模板可按结构判定")
+    sp.add_argument("--material-name")
+    sp.add_argument("--import-engine", choices=["auto", "docx", "pandoc"], default="auto")
+    sp.add_argument("--rerun", action="store_true")
+    sp.add_argument("--replace-units", action="store_true")
+    sp.set_defaults(func=cmd_import)
 
     sp = sub.add_parser("split", help="规则拆分：源文 → 单元目录")
     sp.add_argument("raw_md")

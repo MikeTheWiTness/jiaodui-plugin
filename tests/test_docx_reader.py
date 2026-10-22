@@ -224,6 +224,32 @@ def test_convert_falls_back_to_pandoc(tmp_path, monkeypatch):
     assert Path(result.raw_md).read_text(encoding="utf-8").startswith("# pandoc")
 
 
+def test_import_material_returns_compact_summary(tmp_path, monkeypatch):
+    from jiaodui.workflow import import_material
+
+    workspace = tmp_path / "W"
+    workspace.mkdir()
+    monkeypatch.setenv("JIAODUI_WORK_ROOT", str(workspace))
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    source = _build_template(source_dir)
+
+    summary = import_material(str(source), subject="高中物理")
+
+    assert summary["ok"] is True
+    assert summary["mode"] == "lecture"
+    assert summary["mode_origin"] == "structure"
+    assert summary["engine"] == "docx"
+    assert summary["units"] == 1
+    assert summary["question_units"] == 1
+    assert summary["knowledge_units"] == 0
+    assert summary["copied"] == 1
+    assert summary["first_units"][0]["name"] == "单元1"
+    # 摘要保持紧凑：不携带完整单元列表与 unit_ids
+    assert "unit_ids" not in summary
+    assert "units_detail" not in summary
+
+
 def test_forced_native_engine_rejects_unknown_structure(tmp_path, monkeypatch):
     from jiaodui import convert
     from jiaodui.errors import UnsupportedError

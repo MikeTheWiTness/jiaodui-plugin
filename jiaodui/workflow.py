@@ -389,6 +389,68 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
         return result
 
 
+
+def import_material(file: str | Path, *, subject: str, mode: str | None = None,
+                    material_name: str | None = None, use_mathjax: bool | None = None,
+                    import_engine: str = "auto", rerun: bool = False,
+                    replace_units: bool = False) -> dict:
+    """一次完成 convert → split → precheck，返回供父 agent 直接消费的紧凑摘要。
+
+    原生 docx 模板可以由结构确定类型（题目表 + 标题表），因此 mode 可省略；
+    其他格式或回退 pandoc 时无法可靠判断，仍要求显式 mode。
+    """
+    from .split import precheck_split
+
+    converted = convert_material(file, material_name=material_name, use_mathjax=use_mathjax,
+                                 mode=mode, import_engine=import_engine)
+    selection = None
+    if mode is None:
+        questions = [block for block in converted.blocks if block.get("kind") == "question"]
+        if converted.engine == "docx" and questions:
+            selection = {"mode": "lecture", "origin": "structure",
+                         "reason": f"固定讲义模板：{len(questions)} 个题目表"}
+            mode = "lecture"
+        else:
+            raise UsageError("无法自动判断材料类型（非固定模板），请指定 --mode")
+    directory = material.find_material(converted.raw_md)
+    if directory is None:
+        raise BusinessError("导入后的材料清单缺失", code="manifest-required")
+    split = split_material(converted.raw_md, subject=subject, mode=mode, rerun=rerun,
+                           replace_units=replace_units,
+                           mode_origin=(selection or {}).get("origin"),
+                           mode_reason=(selection or {}).get("reason"))
+    data = material.load(directory)
+    paper_dir = material.relative_path(directory, data["paths"]["paper"])
+    precheck = precheck_split(str(paper_dir))
+    question_units = sum(1 for unit in split.units
+                         if str(unit.get("title") or "").lstrip().startswith("**"))
+    warnings: list[str] = []
+    for item in [*converted.warnings, *split.warnings, *precheck.warnings]:
+        if item not in warnings:
+            warnings.append(item)
+    return {
+        "ok": True,
+        "material": data["material_name"],
+        "material_dir": str(directory),
+        "paper": str(paper_dir),
+        "mode": mode,
+        "mode_origin": (selection or {}).get("origin"),
+        "engine": converted.engine,
+        "units": len(split.units),
+        "question_units": question_units,
+        "knowledge_units": len(split.units) - question_units,
+        "copied": split.copied,
+        "missing": split.missing,
+        "empty": len(precheck.empty_units),
+        "overlong": len(precheck.overlong_units),
+        "chars": {"min": precheck.length_min, "median": precheck.length_median,
+                  "max": precheck.length_max},
+        "first_units": [{"name": unit.get("name"), "title": unit.get("title")}
+                        for unit in split.units[:3]],
+        "task_id": data.get("task_id"),
+        "warnings": warnings,
+    }
+
 def slice_material(boundaries_file: str | Path | None, *, raw: str | Path | None = None,
                    subject: str | None = None, mode: str | None = None,
                    out_root: str | Path | None = None, base_name: str | None = None,
