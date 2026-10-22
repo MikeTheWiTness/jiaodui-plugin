@@ -459,20 +459,25 @@ class DocxReader:
     def _parse_heading_table(self, table) -> Block | None:
         row = table.find(w("tr"))
         cell = row.find(w("tc"))
-        paragraphs = cell.findall(w("p"))
-        text = ""
-        level = 0
-        for p in paragraphs:
-            value = self._text(p).strip()
+        entries: list[tuple[str, int]] = []
+        for paragraph in cell.findall(w("p")):
+            value = self._text(paragraph).strip()
             if value:
-                text = value
-                level = self._heading_level(p)
-                break
-        if not text:
+                entries.append((value, self._heading_level(paragraph)))
+        if not entries:
             return None
-        if level == 0:
-            level = 4
-        return self._heading_block(level, text)
+        if len(entries) == 1:
+            text, level = entries[0]
+            # 单个长段落是知识正文，不是标题。
+            if level == 0 and len(text) > 20:
+                return Block(kind="paragraph", lines=[text], title=text)
+            return self._heading_block(level, text)
+        # 1×1 表常承载整段知识（“解题要点”+ 多条正文），必须全部保留。
+        lines = [text for text, _ in entries]
+        first_level = entries[0][1]
+        if first_level:
+            lines[0] = f"{'#' * max(1, min(6, first_level))} {lines[0]}"
+        return Block(kind="paragraph", lines=lines, title=entries[0][0])
 
     def _row_text(self, row) -> str:
         return " ".join(
@@ -642,6 +647,15 @@ class DocxReader:
             return self._parse_heading_table(table)
         if len(rows) >= 3 and all(count == 1 for count in cells):
             return self._parse_question(table)
+        if len(rows) == 1:
+            # 单行多列是版式条（空 | 模型识别 | 空）或内容行，按段落输出。
+            lines: list[str] = []
+            for cell in rows[0].findall(w("tc")):
+                lines.extend(self._container_lines(cell))
+            lines = [line for line in lines if line.strip()]
+            if lines:
+                return Block(kind="paragraph", lines=lines, title=lines[0])
+            return None
         if self._is_data_table(table):
             rendered = self._render_data_table(table)
             if rendered:

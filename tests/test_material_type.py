@@ -155,7 +155,10 @@ def test_real_lecture_import_split_and_legacy_report_gate(tmp_path):
     from jiaodui.convert import find_pandoc
     if not find_pandoc():
         pytest.skip("需要 Pandoc")
-    result = convert_material(fixture / "source/第 6 讲校对测试.docx", mode="lecture")
+    # 冻结语料是 pandoc 时代的 v1 产物：显式走 pandoc，锁住历史单元逐字一致。
+    result = convert_material(fixture / "source/第 6 讲校对测试.docx", mode="lecture",
+                              import_engine="pandoc")
+    assert result.engine == "pandoc"
     # image1/2/3 是同一破图占位图；保留 image4..8 五张有效图。
     assert result.copied == 5 and result.missing == 0
     split = split_material(result.raw_md, subject="高中物理")

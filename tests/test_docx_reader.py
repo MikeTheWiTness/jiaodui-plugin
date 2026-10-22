@@ -90,6 +90,14 @@ def _normal(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _add_unknown_table(document):
+    """两行两列、每行只有一个非空单元格：既不是题目/标题，也不是数据表。"""
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "甲"
+    table.cell(1, 0).text = "乙"
+    return table
+
+
 def test_reads_template_options_and_data_table(tmp_path):
     source = _build_template(tmp_path)
     media = tmp_path / "media"
@@ -120,12 +128,23 @@ def test_text_is_faithful_to_docx(tmp_path):
     assert _normal(_docx_text(source)) == _normal(_markdown_plain(document.markdown))
 
 
+def test_single_row_layout_table_flattens(tmp_path):
+    document = Document()
+    document.add_heading("模块一 测试", level=2)
+    bar = document.add_table(rows=1, cols=3)
+    bar.cell(0, 1).text = "模型识别"
+    source = tmp_path / "layout.docx"
+    document.save(source)
+
+    result = read_docx(source, media_dir=tmp_path / "media")
+
+    assert "模型识别" in result.markdown
+    assert result.stats["tables"] == 0
+
+
 def test_unknown_table_shape_raises_unsupported(tmp_path):
     document = Document()
-    table = document.add_table(rows=1, cols=3)
-    table.cell(0, 0).text = "甲"
-    table.cell(0, 1).text = "乙"
-    table.cell(0, 2).text = "丙"
+    _add_unknown_table(document)
     source = tmp_path / "bad.docx"
     document.save(source)
 
@@ -203,10 +222,7 @@ def test_convert_falls_back_to_pandoc(tmp_path, monkeypatch):
 
     monkeypatch.setenv("JIAODUI_WORK_ROOT", str(tmp_path))
     document = Document()
-    table = document.add_table(rows=1, cols=3)
-    table.cell(0, 0).text = "甲"
-    table.cell(0, 1).text = "乙"
-    table.cell(0, 2).text = "丙"
+    _add_unknown_table(document)
     source = tmp_path / "bad.docx"
     document.save(source)
 
@@ -256,10 +272,7 @@ def test_forced_native_engine_rejects_unknown_structure(tmp_path, monkeypatch):
 
     monkeypatch.setenv("JIAODUI_WORK_ROOT", str(tmp_path))
     document = Document()
-    table = document.add_table(rows=1, cols=3)
-    table.cell(0, 0).text = "甲"
-    table.cell(0, 1).text = "乙"
-    table.cell(0, 2).text = "丙"
+    _add_unknown_table(document)
     source = tmp_path / "bad.docx"
     document.save(source)
 
