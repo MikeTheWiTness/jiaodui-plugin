@@ -11,6 +11,7 @@ YAML 用例需要 pyyaml（pyproject 的 dev 额外依赖）。
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -230,6 +231,27 @@ def test_preset_declares_subject_identity_and_minimal_agent_capabilities(bundle:
     delegation = {p["id"]: p for p in plugins["delegation"]["config"]}
     assert delegation["tool-subagent-fork"]["disabled"] is True
     assert "tool-subagent" in delegation
+
+
+@pytest.mark.parametrize("bundle", BUNDLE_IDS)
+def test_persona_templates_only_reference_variables_the_loop_registers(bundle: str):
+    """persona 模板只能引用宿主已注册的提示词变量。
+
+    DSH 的 agent loop 只注册 `provider` 与 `model`；`{{cwd}}` 不是内置变量，
+    引用了它会让整轮 prompt 组装在发出模型请求前直接失败（错误为
+    `unknown prompt variable "{{cwd}}"`）。当前工作目录由宿主运行时上下文提供，
+    自定义 persona 不应再用模板复述。
+    """
+    registered = {"provider", "model"}
+    for config in (_preset_config(bundle), _child_preset_config(bundle)):
+        plugins = {p["id"]: p for p in config["plugins"]}
+        persona = plugins["persona"]["config"]
+        text = persona.get("prefix", "") + persona.get("suffix", "")
+        used = set(re.findall(r"\{\{([a-z][a-z0-9_]*)\}\}", text))
+        assert used <= registered, (
+            f"{config['id']} 的 persona 引用了未注册变量 {sorted(used - registered)}；"
+            f"宿主只注册 {sorted(registered)}，未知变量会让整轮 prompt 组装失败"
+        )
 
 
 @pytest.mark.parametrize("bundle", BUNDLE_IDS)

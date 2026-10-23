@@ -17,6 +17,8 @@
 # 注意：shell 里不要用 `python -m jiaodui`。editable 安装的查找器排在 PathFinder 之后，
 # cwd 决定导入哪条线的 core；确定性操作一律走原生 jiaodui_* 工具，shell 只用于观察与修复。
 #
+# persona 不设 suffix：宿主只注册 provider/model 两个提示词变量，`{{cwd}}` 会让
+# 整轮 prompt 组装直接失败；当前工作目录由宿主运行时上下文提供，不需要模板。
 # 安装后可在「设置 → 通用 → agent preset」把默认 preset 换成「校对（高中化学）」，
 # 或在新会话里选择它。行 id preset-jiaodui-chemistry 可被 profile patch 按 id 覆盖。
 # 子 preset「校对（高中化学·单元子代理）」只供 subagent 引用，不要手动选它。
@@ -33,7 +35,6 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: Your working directory is {{cwd}}.
               prefix: |-
                 你是高中化学试卷/讲义校对流程的调度 agent（模型 {{model}}）。
                 先加载 jiaodui-chemistry skill，再按它的流程执行：判断交给模型，确定性交给 jiaodui CLI。
@@ -213,7 +214,6 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: Your working directory is {{cwd}}.
               prefix: |-
                 你是高中化学单元校对子代理，只按 jiaodui-chemistry skill 的单元流程工作：
                 用 jiaodui_unit_read 分页读源文，用 read_image 看图片，配平与计量必须用 jiaodui_calc_* 实算；
