@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN" xml:lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="generator" content="pandoc">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>JiaoDuiAgentSkill 项目架构与设计</title>
+  <style>
+
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+
+ul.task-list[class]{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+font-size: inherit;
+width: 0.8em;
+margin: 0 0.8em 0.2em -1.6em;
+vertical-align: middle;
+}
+.display.math{display: block; text-align: center; margin: 0.5rem auto;}
+
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+  <style type="text/css">
+:root{
+--paper:#faf9f5;--card:#fffefa;--ink:#35322c;--muted:#756c60;
+--orange:#c76a4c;--soft-orange:#f3e0d4;--yellow:#ebc777;--soft-yellow:#f5ebce;
+--line:#e3dacb;--bg:#eae7df;--brown-1:#6b5b3e;--brown-2:#8c6331;
+--brown-3:#8d7461;--brown-4:#987254;--brown-5:#a2937e;--ink-2:#4a4034;
+--tint-a:#fffaf0;--tint-b:#fffaf3;--tint-c:#fffdf8;--hair-1:#efe6d6;
+--hair-2:#f3ece0;--hair-3:#f4ede1;--edge-1:#e2cda3;--edge-2:#e8d9b5;--edge-3:#e6c6b7;
+--radius:16px;--radius-sm:12px;--shadow:0 12px 45px #34271812;
+--font:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+--font-num:Georgia,"Times New Roman",serif;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:var(--orange);text-decoration:none}a:hover{text-decoration:underline}
+#title-block-header{display:none}
+#TOC{position:fixed;z-index:5;left:22px;top:22px;bottom:22px;width:266px;padding:25px 22px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:auto;color:var(--muted);font-size:13px;line-height:1.65}
+#TOC:before{content:"✳ JIAODUI / 架构与设计";display:block;margin-bottom:22px;color:var(--orange);font-size:15px;font-weight:750;letter-spacing:1px}
+#TOC ul{list-style:none;padding:0;margin:0}#TOC li{margin:8px 0}#TOC a{display:block;padding:4px 8px;border-radius:8px;color:var(--muted)}#TOC a:hover{background:var(--soft-orange);color:var(--orange);text-decoration:none}
+h1{max-width:980px;margin:0 auto;padding:42px 0 18px;font-size:30px;font-weight:750;line-height:1.2;letter-spacing:-.5px;border-left:6px solid var(--orange);padding-left:16px}
+blockquote,body>h2,body>h3,body>p,body>ol,table,body>figure,body>.sourceCode{max-width:980px;margin-left:auto;margin-right:auto}
+h2{margin-top:44px;margin-bottom:18px;padding:12px 0 0 15px;border-top:1px solid var(--line);border-left:5px solid var(--orange);font-size:19px;font-weight:700;line-height:1.3;scroll-margin-top:24px}
+h3{margin-top:30px;margin-bottom:12px;padding-left:12px;border-left:3px solid var(--yellow);font-size:16px;font-weight:700;line-height:1.35;scroll-margin-top:24px}
+p{margin:13px 0}strong{color:var(--ink-2)}
+blockquote{margin-top:22px;margin-bottom:26px;padding:16px 22px;background:var(--soft-orange);border:1px solid var(--edge-3);border-left:5px solid var(--orange);border-radius:var(--radius-sm);color:var(--muted);font-size:14px}
+blockquote p{margin:4px 0}
+figure{margin-top:24px;margin-bottom:28px;padding:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+figure img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--paper)}
+figcaption{margin:9px 0 0;text-align:center;color:var(--brown-3);font-size:13px}
+table{display:block;overflow-x:auto;width:calc(100% - 44px);border:1px solid var(--line);border-radius:var(--radius-sm);border-spacing:0;background:var(--card);font-size:13px;line-height:1.65;box-shadow:var(--shadow)}
+table thead{background:var(--soft-yellow)}th{text-align:left;padding:11px 14px;color:var(--brown-1);font-weight:700;white-space:nowrap;border-bottom:1px solid var(--edge-2)}
+td{padding:10px 14px;vertical-align:top;border-bottom:1px solid var(--hair-1);min-width:120px}tbody tr:nth-child(even) td{background:var(--tint-a)}tbody tr:last-child td{border-bottom:0}td:first-child{font-weight:650;color:var(--ink-2)}
+code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:var(--soft-yellow);border:1px solid var(--edge-2);border-radius:5px;padding:2px 5px;font-size:.86em;overflow-wrap:anywhere;color:var(--ink-2)}
+pre{margin:0;background:var(--ink);color:var(--paper);border-radius:var(--radius-sm);padding:22px;font-size:13px;line-height:1.7;overflow:auto}pre code{padding:0;border:0;background:transparent;color:inherit;white-space:pre}
+.sourceCode{margin-top:20px;margin-bottom:24px;padding:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+.sourceCode pre{border-radius:0}.sourceCode a{color:var(--yellow)}
+ol{padding-left:26px}li{margin:8px 0}section{display:block}
+@media(max-width:1120px){body{padding:0 24px 42px}#TOC{position:static;width:auto;margin:22px auto 28px;max-width:980px;max-height:none}#TOC ul{columns:2;column-gap:28px}h1,blockquote,body>h2,body>h3,body>p,body>ol,table,body>figure,body>.sourceCode{max-width:980px}}
+@media(max-width:640px){body{padding:0 14px 32px;font-size:14px}#TOC{margin:14px 0 22px;padding:18px 16px}#TOC ul{columns:1}h1{padding-top:26px;font-size:26px}h2{margin-top:34px;font-size:18px}table{width:100%;font-size:12.5px}th,td{padding:9px 10px}figure{padding:9px}pre{padding:16px;font-size:12px}}
+@media print{@page{size:A4;margin:14mm 12mm}body{background:var(--paper);padding:0;font-size:10.5pt;line-height:1.65}#TOC{position:static;max-height:none;width:auto;box-shadow:none;margin:0 0 20px;padding:0 0 12px;border:0;border-bottom:1px solid var(--line);border-radius:0}#TOC:before{content:"目录";color:var(--ink);margin-bottom:8px}#TOC ul{columns:2}h1{padding-top:0;font-size:24pt}h2{margin-top:24px;padding-top:12px;font-size:17pt}h3{font-size:12pt}figure,blockquote,pre,.sourceCode,table{break-inside:avoid;box-shadow:none}table{width:100%;overflow:visible}a{color:inherit;text-decoration:none}}
+
+body{padding:30px 30px 60px 310px}
+.masthead,.chapter{max-width:980px;margin:0 auto 22px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 26px 20px;box-shadow:var(--shadow);min-width:0}
+.masthead{padding:28px 26px 22px}
+.masthead h1{padding:0 0 0 16px;margin:0;font-size:30px;line-height:1.35;overflow-wrap:anywhere}
+.masthead blockquote{margin:20px 0 0;background:var(--paper);border-left:3px solid var(--edge-1)}
+.chapter>h2:first-child{margin:0 0 18px;padding:0 0 0 12px;border-top:0;line-height:1.35}
+.chapter>p:last-child{margin-bottom:0}
+.table-wrap{max-width:100%;overflow-x:auto;margin:20px 0 24px;border:1px solid var(--line);border-radius:var(--radius-sm)}
+table{display:table;width:100%;margin:0;border:0;border-radius:0;border-collapse:separate;border-spacing:0;box-shadow:none;table-layout:fixed}
+th{position:sticky;top:0;z-index:1}td,th{overflow-wrap:anywhere;word-break:normal;min-width:0}
+pre.text{max-width:100%;margin:20px 0 24px}
+code span.co{color:var(--yellow)}code span.at,code span.st{color:var(--soft-orange)}
+figure{box-shadow:none}
+a:focus-visible{outline:2px solid var(--orange);outline-offset:3px}
+@media(max-width:1120px){body{padding:22px 24px 42px}#TOC{margin:0 auto 22px}}
+@media(max-width:900px){#TOC ul{columns:1}}
+@media(max-width:640px){body{padding:14px 12px 32px}.masthead,.chapter{padding:20px 16px 18px}.masthead h1{font-size:26px}.table-wrap table{min-width:520px}#TOC{margin:0 0 22px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{body{padding:0}.masthead,.chapter{max-width:none;padding:0;border:0;border-radius:0;box-shadow:none}.chapter{break-inside:auto}.masthead h1{font-size:24pt}.table-wrap{overflow:visible;box-shadow:none}table{width:100%;font-size:9pt}th,td{padding:7px 9px}pre{white-space:pre-wrap;background:var(--paper);color:var(--ink);border:1px solid var(--line)}pre code{white-space:pre-wrap}code span.co,code span.at,code span.st{color:var(--muted)}figure,blockquote,.sourceCode{box-shadow:none}h2,h3{break-after:avoid}thead{display:table-header-group}tr{break-inside:avoid}}
+
+body{line-height:1.6}
+.masthead,.chapter{max-width:880px}
+.meta{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:24px;font-size:13px;letter-spacing:1px;color:var(--muted)}
+.meta__mark{color:var(--orange);font-size:20px;vertical-align:-2px;margin-right:8px}
+.pill{padding:5px 12px;border:1px solid var(--line);border-radius:999px;font-size:12px;letter-spacing:0;white-space:nowrap}
+.rule{height:2px;margin-top:22px;background:linear-gradient(90deg,var(--orange),var(--yellow) 45%,var(--line));border:0;border-radius:2px}
+.masthead blockquote{border:0;border-left:3px solid var(--line);background:transparent;border-radius:0;padding:0 0 0 16px;font-size:12.5px;line-height:1.75}
+.masthead h1{font-size:30px}
+.chapter strong{color:var(--ink)}
+.chapter>p{max-width:70ch}
+.chapter figure{padding:10px 0;border:0;background:var(--paper)}
+.chapter figure img{border:0}
+.chapter pre{background:var(--paper);color:var(--ink);border:1px solid var(--line)}
+.chapter .sourceCode{box-shadow:none}
+.chapter code span.co{color:var(--muted)}
+.chapter code span.at,.chapter code span.st{color:var(--ink)}
+.foot{max-width:880px;margin:28px auto 0;color:var(--muted);font-size:12px;text-align:center;line-height:1.8}
+.chapter>h2:first-child{scroll-margin-top:36px}
+@media(max-width:640px){.meta{margin-bottom:18px;gap:8px;font-size:11.5px}.pill{padding:4px 9px}.masthead h1{font-size:26px}.table-wrap table{min-width:0}table{table-layout:auto}td,th{font-size:12px}td:first-child{min-width:64px}.chapter figure{overflow-x:auto}.chapter figure img{min-width:650px}.chapter>p{max-width:none}}
+@media print{.meta{margin-bottom:15px}.rule{margin-top:14px}.foot{margin-top:20px}.chapter figure img{min-width:0}.chapter figure{overflow:visible}.table-wrap table{min-width:0;table-layout:fixed}.chapter>p{max-width:none}}
+</style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">JiaoDuiAgentSkill 项目架构与设计</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#jiaoduiagentskill%E9%A1%B9%E7%9B%AE%E6%9E%B6%E6%9E%84%E4%B8%8E%E8%AE%BE%E8%AE%A1" id="toc-jiaoduiagentskill项目架构与设计">JiaoDuiAgentSkill：项目架构与设计</a>
+<ul>
+<li><a href="#%E9%A1%B9%E7%9B%AE%E5%AE%9A%E4%BD%8D%E4%B8%8E%E6%B1%87%E6%8A%A5%E7%BB%93%E8%AE%BA" id="toc-项目定位与汇报结论">1.
+项目定位与汇报结论</a></li>
+<li><a href="#%E7%9B%AE%E6%A0%87%E8%BE%B9%E7%95%8C%E4%B8%8E%E8%A7%92%E8%89%B2" id="toc-目标边界与角色">2.
+目标、边界与角色</a></li>
+<li><a href="#%E6%80%BB%E4%BD%93%E6%9E%B6%E6%9E%84" id="toc-总体架构">3. 总体架构</a></li>
+<li><a href="#%E4%B8%BB%E6%B5%81%E7%A8%8B%E4%B8%8E%E4%BA%A4%E4%BB%98%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F" id="toc-主流程与交付生命周期">4.
+主流程与交付生命周期</a></li>
+<li><a href="#%E6%95%B0%E6%8D%AE%E4%B8%8E%E5%B7%A5%E4%BD%9C%E5%8C%BA%E8%AE%BE%E8%AE%A1" id="toc-数据与工作区设计">5.
+数据与工作区设计</a></li>
+<li><a href="#%E7%BB%93%E6%9E%84%E5%8C%96%E6%8A%A5%E5%91%8A%E8%AE%BE%E8%AE%A1" id="toc-结构化报告设计">6.
+结构化报告设计</a></li>
+<li><a href="#%E7%8A%B6%E6%80%81%E8%B0%83%E5%BA%A6%E4%B8%8E%E5%A4%B1%E8%B4%A5%E6%81%A2%E5%A4%8D" id="toc-状态调度与失败恢复">7.
+状态、调度与失败恢复</a></li>
+<li><a href="#%E8%AE%A1%E7%AE%97%E5%9B%BE%E7%89%87%E4%B8%8E%E5%AD%A6%E7%A7%91%E6%89%A9%E5%B1%95" id="toc-计算图片与学科扩展">8.
+计算、图片与学科扩展</a></li>
+<li><a href="#%E9%83%A8%E7%BD%B2%E6%8E%A5%E5%8F%A3%E4%B8%8E%E8%BF%90%E7%BB%B4" id="toc-部署接口与运维">9.
+部署、接口与运维</a></li>
+<li><a href="#%E5%85%B3%E9%94%AE%E8%AE%BE%E8%AE%A1%E5%8F%96%E8%88%8D%E4%B8%8E%E8%B4%A8%E9%87%8F%E8%AF%81%E6%8D%AE" id="toc-关键设计取舍与质量证据">10. 关键设计取舍与质量证据</a></li>
+<li><a href="#%E6%9C%AC%E6%AC%A1%E5%AE%A1%E6%9F%A5%E4%B8%8E%E6%94%B9%E8%BF%9B%E4%BC%98%E5%85%88%E7%BA%A7" id="toc-本次审查与改进优先级">11.
+本次审查与改进优先级</a></li>
+<li><a href="#%E4%BE%9D%E6%8D%AE%E4%B8%8E%E8%BF%BD%E6%BA%AF" id="toc-依据与追溯">12. 依据与追溯</a></li>
+</ul></li>
+</ul>
+</nav>
+<header class="masthead"><div class="meta"><span><span class="meta__mark" aria-hidden="true">✳</span>JIAODUI · 项目汇报</span><span class="pill">架构与设计</span></div><h1 id="jiaoduiagentskill项目架构与设计">JiaoDuiAgentSkill：项目架构与设计</h1>
+<blockquote>
+<p>汇报版 · 2026-10-13 · Python 包 <code>jiaodui</code> 0.1.0 · 审查基线
+<code>07d0f38</code></p>
+<p>本文以当前代码、PRD、ADR
+和本次实测为依据。历史验收记录、当前实现、规划能力分别说明；不将自动测试通过等同于模型校对质量达标。</p>
+<p>2026-10-23 状态更新：R2 已由 <code>c5af354</code> 修复；R1 计算隔离与
+R3 数值精度仍待处理。材料锁按平台使用系统锁，Windows
+实现尚待实机验收。</p>
+</blockquote>
+<hr class="rule"></header><section class="chapter"><h2 id="项目定位与汇报结论">1. 项目定位与汇报结论</h2>
+<p>JiaoDuiAgentSkill 面向 K-12 教辅材料校对，将旧系统的“自研 agent
+循环与 GUI”重构为“宿主 agent 驱动、可分发 skill、确定性 Python
+核心”。agent 负责理解题意、判断错误、提出修改和复核；Python
+负责转换、切分、定位、计算、校验、记录和生成交付文件。</p>
+<p>最关键的设计变化是：<strong>模型提交结构化修改提案，程序从源文生成完整报告</strong>。模型无需重写整篇材料，程序保留源文、插入标记、执行一致性检查，再由父代理复核当前版本。项目价值在于减少正文遗漏、虚构标记、过期交付和修改建议丢失，并让恢复过程可追溯。</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr>
+<th>汇报维度</th>
+<th>当前结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>实施状态</td>
+<td>schema v2 结构化主链已合入；CLI 与 DSH 插件已实现</td>
+</tr>
+<tr>
+<td>学科范围</td>
+<td>高中物理已落地；其余六科仍在扩展计划中</td>
+</tr>
+<tr>
+<td>通用接入</td>
+<td>skill 与 CLI 可复用；独立 MCP server 尚未实现</td>
+</tr>
+<tr>
+<td>审查基线验证</td>
+<td>双口径均为 1,268 passed，另有 4 subtests passed；无失败、无跳过</td>
+</tr>
+<tr>
+<td>工程规模</td>
+<td>45 个 Python 文件、约 1.38 万行；62 个测试文件，仅作规模参考</td>
+</tr>
+<tr>
+<td>优先风险</td>
+<td>计算沙箱隔离、小量数值精度；迟到取消的 attempt 绑定已由
+<code>c5af354</code> 修复。详见第 11 节</td>
+</tr>
+</tbody>
+</table>
+</div></section><section class="chapter"><h2 id="目标边界与角色">2. 目标、边界与角色</h2>
+<p><strong>产品目标</strong>：对试卷、讲义完成单元校对，交付整卷
+Markdown 报告和 Word
+批注版。每条错误必须有可见修改建议；不合格报告不能冒充正式完成；失败和资源缺失必须留痕。</p>
+<p><strong>系统边界</strong>：Python 不调用模型
+API，不管理模型凭证，不实现聊天 GUI，不在内部重建 agent
+循环。原始材料保持不变，导入后在工作区副本与标准产物上工作；旧仓
+<code>../JiaoDuiAgent</code> 冻结，不作为运行时依赖。</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr>
+<th>角色</th>
+<th>负责内容</th>
+<th>关键约束</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>用户</td>
+<td>提供材料、学科与类型；确认执行模式；裁定争议与失败</td>
+<td>用户已明确的信息直接采用；取消具有最高停止效力</td>
+</tr>
+<tr>
+<td>父代理</td>
+<td>入口补缺、视觉能力确认、拆分选择、窗口调度、整卷通读与父复核</td>
+<td>单元阶段不逐份读取源文；入口学科与类型识别共用 2,000 字符额度</td>
+</tr>
+<tr>
+<td>单元子代理</td>
+<td>读取指定单元与图片、实算、校对、自查、提交 v2 提案</td>
+<td>仅接收路径与身份；禁止嵌套派发、修改源文和自由命名产物</td>
+</tr>
+<tr>
+<td>确定性核心</td>
+<td>执行工具、判定结构契约、保护写入边界、登记状态、生成文件</td>
+<td>核心逻辑单一；下游必须重新核对当前产物</td>
+</tr>
+<tr>
+<td>宿主平台</td>
+<td>模型、读图、子代理生命周期、权限、用量数据</td>
+<td>真实能力必须在宿主验证，CLI 无法独立证明</td>
+</tr>
+</tbody>
+</table>
+</div><p>本次审查只读取项目代码、规范与测试夹具；问题复现使用自动清理的临时合成材料，不逐单元读取真实教材源文。</p>
+</section><section class="chapter"><h2 id="总体架构">3. 总体架构</h2>
+<figure>
+<img role="img" aria-label="总体架构" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAwIDc0MiIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJKaWFvRHVpQWdlbnRTa2lsbCDlvZPliY3mgLvkvZPmnrbmnoQiPjx0aXRsZT5KaWFvRHVpQWdlbnRTa2lsbCDlvZPliY3mgLvkvZPmnrbmnoQ8L3RpdGxlPjxkZWZzPjxtYXJrZXIgaWQ9ImFycm93IiBtYXJrZXJXaWR0aD0iOCIgbWFya2VySGVpZ2h0PSI4IiByZWZYPSI3IiByZWZZPSI0IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0wLDAgTDgsNCBMMCw4IFoiIGZpbGw9IiM4ZDc0NjEiLz48L21hcmtlcj48L2RlZnM+PHN0eWxlPnRleHR7Zm9udC1mYW1pbHk6IlBpbmdGYW5nIFNDIiwiTWljcm9zb2Z0IFlhSGVpIixzYW5zLXNlcmlmfS5ib3gtdGl0bGV7Zm9udC1zaXplOjE5cHg7Zm9udC13ZWlnaHQ6NjUwO2ZpbGw6IzM1MzIyY30uYm94LXRleHR7Zm9udC1zaXplOjE1cHg7ZmlsbDojNzU2YzYwfS5sYWJlbHtmb250LXNpemU6MTVweDtmaWxsOiM4ZDc0NjF9LmJhbmR7Zm9udC1zaXplOjE2cHg7Zm9udC13ZWlnaHQ6NjAwO2ZpbGw6I2M3NmE0Y308L3N0eWxlPjxyZWN0IHdpZHRoPSIxMjAwIiBoZWlnaHQ9Ijc0MiIgcng9IjIwIiBmaWxsPSIjZmFmOWY1Ii8+PHRleHQgeD0iMzYiIHk9IjM0IiBjbGFzcz0iYmFuZCI+5b2T5YmN5p625p6EIMK3IOaooeWei+WIpOaWreS4juehruWumuaAp+aJp+ihjOWIhuWxgjwvdGV4dD48cmVjdCB4PSIzODAiIHk9IjUyIiB3aWR0aD0iNDQwIiBoZWlnaHQ9Ijc4IiByeD0iMTQiIGZpbGw9IiNmZmZhZjAiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSI2MDAuMCIgeT0iODIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGl0bGUiPueUqOaIt+S4juWuv+S4u+W5s+WPsDwvdGV4dD48dGV4dCB4PSI2MDAuMCIgeT0iMTA3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuaooeWeiyDCtyDmnYPpmZAgwrcg6KeG6KeJIMK3IOWtkOS7o+eQhueUn+WRveWRqOacnzwvdGV4dD48cGF0aCBkPSJNNDkwLDEzMCBWMTU3IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZDc0NjEiIHN0cm9rZS13aWR0aD0iMiIgbWFya2VyLWVuZD0idXJsKCNhcnJvdykiLz48cGF0aCBkPSJNNzEwLDEzMCBWMTU3IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ZDc0NjEiIHN0cm9rZS13aWR0aD0iMiIgbWFya2VyLWVuZD0idXJsKCNhcnJvdykiLz48cmVjdCB4PSIzMjAiIHk9IjE2MCIgd2lkdGg9IjI2MCIgaGVpZ2h0PSI5OCIgcng9IjE0IiBmaWxsPSIjZmZmZWZhIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iNDUwLjAiIHk9IjE5MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10aXRsZSI+54i25Luj55CGPC90ZXh0Pjx0ZXh0IHg9IjQ1MC4wIiB5PSIyMTUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5YWl5Y+j6KGl57y65LiO56qX5Y+j6LCD5bqmPC90ZXh0Pjx0ZXh0IHg9IjQ1MC4wIiB5PSIyMzciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5pW05Y236YCa6K+75LiO54mI5pys5aSN5qC4PC90ZXh0PjxyZWN0IHg9IjYyMCIgeT0iMTYwIiB3aWR0aD0iMjYwIiBoZWlnaHQ9Ijk4IiByeD0iMTQiIGZpbGw9IiNmZmZlZmEiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSI3NTAuMCIgeT0iMTkwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRpdGxlIj7ljZXlhYPlrZDku6PnkIY8L3RleHQ+PHRleHQgeD0iNzUwLjAiIHk9IjIxNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7mjIflrprljZXlhYPor7vlj5YgLyDlrp7nrpc8L3RleHQ+PHRleHQgeD0iNzUwLjAiIHk9IjIzNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7nu5PmnoTljJbmj5DmoYjkuI7oh6rmn6U8L3RleHQ+PHJlY3QgeD0iMzUiIHk9IjE2MCIgd2lkdGg9IjIzNSIgaGVpZ2h0PSI5OCIgcng9IjE0IiBmaWxsPSIjZjVlYmNlIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iMTUyLjUiIHk9IjE5MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10aXRsZSI+5oC75YWl5Y+jIHNraWxsPC90ZXh0Pjx0ZXh0IHg9IjE1Mi41IiB5PSIyMTUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5YWx5oCn5rWB56iLICsg5oyJ6ZyAIHJlZmVyZW5jZXM8L3RleHQ+PHRleHQgeD0iMTUyLjUiIHk9IjIzNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7op4TojIPnlLHlrr/kuLvor7vlj5Y8L3RleHQ+PHBhdGggZD0iTTI3MCwyMDkgSDMxNyIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjOGQ3NDYxIiBzdHJva2Utd2lkdGg9IjIiIG1hcmtlci1lbmQ9InVybCgjYXJyb3cpIiBzdHJva2UtZGFzaGFycmF5PSI2IDQiLz48cmVjdCB4PSI5MzAiIHk9IjE2MCIgd2lkdGg9IjIzNSIgaGVpZ2h0PSI5OCIgcng9IjE0IiBmaWxsPSIjZmFmOWY1IiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtZGFzaGFycmF5PSI3IDUiLz48dGV4dCB4PSIxMDQ3LjUiIHk9IjE5MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10aXRsZSI+TUNQIHNlcnZlcu+8iOinhOWIku+8iTwvdGV4dD48dGV4dCB4PSIxMDQ3LjUiIHk9IjIxNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7lvZPliY3ml6Dni6znq4vlrp7njrA8L3RleHQ+PHRleHQgeD0iMTA0Ny41IiB5PSIyMzciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5pyq5p2l5aSN55So5ZCM5LiA5qC45b+DPC90ZXh0PjxwYXRoIGQ9Ik00NTAsMjU4IFYyOTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxwYXRoIGQ9Ik03NTAsMjU4IFYyOTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxyZWN0IHg9IjMyMCIgeT0iMjk0IiB3aWR0aD0iNTYwIiBoZWlnaHQ9Ijc4IiByeD0iMTQiIGZpbGw9IiNmZmZhZjAiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSI2MDAuMCIgeT0iMzI0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRpdGxlIj5EU0gg5Y6f55Sf5bel5YW3IC8gQ0xJIOaOpeWFpTwvdGV4dD48dGV4dCB4PSI2MDAuMCIgeT0iMzQ5IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuWPguaVsOS4jiBzY2hlbWEgwrcg5a2Q6L+b56iLIGFyZ3Ygwrcg5bel5L2c5Yy65rOo5YWlPC90ZXh0PjxwYXRoIGQ9Ik02MDAsMzcyIFY0MDUiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxyZWN0IHg9IjM1IiB5PSI0MDgiIHdpZHRoPSIxMTMwIiBoZWlnaHQ9IjE5NSIgcng9IjE2IiBmaWxsPSIjZmZmZWZhIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iNjAwIiB5PSI0MzkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGl0bGUiPmppYW9kdWkgwrcg5ZSv5LiA56Gu5a6a5oCn5Lia5Yqh5qC45b+DPC90ZXh0PjxyZWN0IHg9IjU1IiB5PSI0NjMiIHdpZHRoPSIyNjUiIGhlaWdodD0iOTUiIHJ4PSIxNCIgZmlsbD0iI2ZmZmFmMCIgc3Ryb2tlPSIjZTNkYWNiIiBzdHJva2Utd2lkdGg9IjEuNSIvPjx0ZXh0IHg9IjE4Ny41IiB5PSI0OTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGl0bGUiPuWvvOWFpeS4juWNleWFg+WMljwvdGV4dD48dGV4dCB4PSIxODcuNSIgeT0iNTE4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPui9rOaNoiAvIOaLhuWIhiAvIOWFqOmHj+imhuebljwvdGV4dD48cmVjdCB4PSIzMzAiIHk9IjQ2MyIgd2lkdGg9IjI2NSIgaGVpZ2h0PSI5NSIgcng9IjE0IiBmaWxsPSIjZmZmYWYwIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iNDYyLjUiIHk9IjQ5MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10aXRsZSI+6Lqr5Lu95LiO54q25oCBPC90ZXh0Pjx0ZXh0IHg9IjQ2Mi41IiB5PSI1MTgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5bel5L2c5Yy6IC8g6L2u5qyhIC8g5oGi5aSNPC90ZXh0PjxyZWN0IHg9IjYwNSIgeT0iNDYzIiB3aWR0aD0iMjY1IiBoZWlnaHQ9Ijk1IiByeD0iMTQiIGZpbGw9IiNmZmZhZjAiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSI3MzcuNSIgeT0iNDkzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRpdGxlIj7lrprkvY3kuI7kuqTku5g8L3RleHQ+PHRleHQgeD0iNzM3LjUiIHk9IjUxOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij52MiDnlJ/miJAgLyB2ZXJpZnkgLyDniLblrqE8L3RleHQ+PHJlY3QgeD0iODgwIiB5PSI0NjMiIHdpZHRoPSIyNjUiIGhlaWdodD0iOTUiIHJ4PSIxNCIgZmlsbD0iI2ZmZmFmMCIgc3Ryb2tlPSIjZTNkYWNiIiBzdHJva2Utd2lkdGg9IjEuNSIvPjx0ZXh0IHg9IjEwMTIuNSIgeT0iNDkzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRpdGxlIj7orqHnrpfkuI4gV29yZDwvdGV4dD48dGV4dCB4PSIxMDEyLjUiIHk9IjUxOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7lrp7nrpfor4Hmja4gLyDmibnms6jmoLjlr7k8L3RleHQ+PHRleHQgeD0iNjAwIiB5PSI1ODYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5qC45b+D6Zu25qih5Z6L5Yet6K+B77yb5omA5pyJ5o6l5YWl5aSN55So5Lia5Yqh5a6e546w77yb54q25oCB55Sx56OB55uY5Lqn54mp5o6o5a+8PC90ZXh0PjxwYXRoIGQ9Ik02MDAsNjAzIFY2MzIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxyZWN0IHg9IjE4MCIgeT0iNjM2IiB3aWR0aD0iODQwIiBoZWlnaHQ9Ijc2IiByeD0iMTQiIGZpbGw9IiNmNWViY2UiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSI2MDAuMCIgeT0iNjY2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRpdGxlIj7mjojmnYPlt6XkvZzljLogwrcg5qCh5a+5IC8g5p2Q5paZ55uu5b2VPC90ZXh0Pjx0ZXh0IHg9IjYwMC4wIiB5PSI2OTEiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5rqQ5Ymv5pysIMK3IHJhdyDCtyDljZXlhYMgwrcgSlNPTiDorrDlvZUgwrcg5pW05Y23IE1hcmtkb3duIMK3IFdvcmQg5om55rOoPC90ZXh0Pjwvc3ZnPg==" alt="总体架构">
+<figcaption aria-hidden="true">总体架构</figcaption>
+</figure>
+<p>架构分为三层：宿主提供推理与调度，接入层提供流程规范和协议转换，Python
+核心提供唯一的确定性实现。当前 DSH 原生工具通过子进程调用 CLI；MCP
+是未来通用接入目标，不能在汇报中列为现有组件。</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr>
+<th>层级</th>
+<th>当前载体</th>
+<th>设计职责</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>宿主层</td>
+<td>父代理、单元子代理、实际读图工具</td>
+<td>语义判断、派发、复核、用户交互</td>
+</tr>
+<tr>
+<td>规范层</td>
+<td><code>skills/jiaodui/SKILL.md</code> 与 references</td>
+<td>共性流程一次定义，学科规则按需披露</td>
+</tr>
+<tr>
+<td>适配层</td>
+<td><code>jiaodui/cli.py</code>；DSH <code>tools/index.js</code> 与
+preset</td>
+<td>参数解析、schema 投影、进程调用、输出与取消传播</td>
+</tr>
+<tr>
+<td>核心层</td>
+<td><code>jiaodui/</code> 业务模块</td>
+<td>转换、切分、状态、计算、报告校验、交付与恢复记账</td>
+</tr>
+<tr>
+<td>持久化层</td>
+<td>材料记录 JSON、单元 Markdown / JSON、图片、Word</td>
+<td>跨会话恢复、摘要绑定、当前交付与历史轮次追踪</td>
+</tr>
+</tbody>
+</table>
+</div><p>skill 是宿主行为规范，不是 Python 的另一份业务实现。CLI
+即使脱离插件仍能执行确定性流程；模型能力由调用方提供。</p>
+<h3 id="核心模块划分">3.1 核心模块划分</h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr>
+<th>子系统</th>
+<th>主要模块</th>
+<th>输入与输出</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>导入与入口</td>
+<td><code>inspect_source.py</code>、<code>material_type.py</code>、<code>convert.py</code></td>
+<td>文档结构事实、有限预览；docx / doc / md / idml 到 raw Markdown
+与图片</td>
+</tr>
+<tr>
+<td>单元化</td>
+<td><code>split.py</code>、<code>workflow.py</code>、<code>units.py</code></td>
+<td>规则 / 人工标记 / 整篇拆分，或宿主给定行区间；写出契约单元</td>
+</tr>
+<tr>
+<td>身份与轮次</td>
+<td><code>material.py</code>、<code>workdir.py</code>、<code>paths.py</code></td>
+<td>task / unit / run 身份、工作区授权、输入摘要与材料记录</td>
+</tr>
+<tr>
+<td>定位与提交</td>
+<td><code>unit_reader.py</code>、<code>source_index.py</code>、<code>report_suggestions.py</code>、<code>unit_delivery.py</code></td>
+<td>分页源文、版本绑定位置、v2 提案；生成并登记报告 / 数据</td>
+</tr>
+<tr>
+<td>校验与复核</td>
+<td><code>markers.py</code>、<code>verify.py</code>、<code>inspect_images.py</code>、<code>review.py</code></td>
+<td>标记真实性、正文完整性、资源、当前版本 accepted 复核</td>
+</tr>
+<tr>
+<td>状态与恢复</td>
+<td><code>status.py</code>、<code>execution_policy.py</code>、<code>error_classification.py</code>、<code>failure_note.py</code></td>
+<td>磁盘状态、调度建议、阶段心跳、有限恢复预算与失败记录</td>
+</tr>
+<tr>
+<td>确定性计算</td>
+<td><code>calc/operations.py</code>、<code>schema.py</code>、<code>templates.py</code>、<code>sandbox.py</code>、<code>dimensional.py</code>、<code>chemistry.py</code></td>
+<td>14 类计算 operation、白名单元数据、子进程结果与证据</td>
+</tr>
+<tr>
+<td>最终交付</td>
+<td><code>report.py</code>、<code>report_parse.py</code>、<code>docx_report.py</code>、<code>docx_comments.py</code>、<code>formula_render.py</code></td>
+<td>整卷报告、Word 批注与公式兜底；回读并核对实际锚点</td>
+</tr>
+<tr>
+<td>兼容修复</td>
+<td><code>report_repair.py</code>、旧报告解析入口</td>
+<td>历史 Markdown 报告读取与确定性修复；不承担正常 v2 提交</td>
+</tr>
+</tbody>
+</table>
+</div><h3 id="宿主适配设计">3.2 宿主适配设计</h3>
+<p>DSH 插件由 package、profile patch、原生工具和随包 skill
+组成。本次加载适配器统计到 27 项原生工具；preset 子代理白名单共 21
+项，包括 skill、只读文件与图片、单元工具、恢复工具和 12
+项计算工具。父侧持有取消、父复核与交付权限。</p>
+<p>适配器逐次从会话取得工作区，同时设置子进程 cwd 和
+<code>JIAODUI_WORK_ROOT</code>。它以 argv 调用 CLI，不拼接 shell
+命令；默认超时 180 秒、stdout / stderr 各 64 KiB
+上限，返回截断标记。用户中止按 AbortError
+传播，技术失败保留已收集的诊断。工具实际可见范围还受宿主注入影响，需真实
+catalog 验收。</p>
+</section><section class="chapter"><h2 id="主流程与交付生命周期">4. 主流程与交付生命周期</h2>
+<figure>
+<img role="img" aria-label="交付流程" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAwIDUyOSIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJKaWFvRHVpQWdlbnRTa2lsbCDnu5PmnoTljJbmiqXlkYrkuqTku5jkuLvpk74iPjx0aXRsZT5KaWFvRHVpQWdlbnRTa2lsbCDnu5PmnoTljJbmiqXlkYrkuqTku5jkuLvpk748L3RpdGxlPjxkZWZzPjxtYXJrZXIgaWQ9ImFycm93IiBtYXJrZXJXaWR0aD0iOCIgbWFya2VySGVpZ2h0PSI4IiByZWZYPSI3IiByZWZZPSI0IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0wLDAgTDgsNCBMMCw4IFoiIGZpbGw9IiM4ZDc0NjEiLz48L21hcmtlcj48L2RlZnM+PHN0eWxlPnRleHR7Zm9udC1mYW1pbHk6IlBpbmdGYW5nIFNDIiwiTWljcm9zb2Z0IFlhSGVpIixzYW5zLXNlcmlmfS5ib3gtdGl0bGV7Zm9udC1zaXplOjE5cHg7Zm9udC13ZWlnaHQ6NjUwO2ZpbGw6IzM1MzIyY30uYm94LXRleHR7Zm9udC1zaXplOjE1cHg7ZmlsbDojNzU2YzYwfS5sYWJlbHtmb250LXNpemU6MTVweDtmaWxsOiM4ZDc0NjF9LmJhbmR7Zm9udC1zaXplOjE2cHg7Zm9udC13ZWlnaHQ6NjAwO2ZpbGw6I2M3NmE0Y308L3N0eWxlPjxyZWN0IHdpZHRoPSIxMjAwIiBoZWlnaHQ9IjUyOSIgcng9IjIwIiBmaWxsPSIjZmFmOWY1Ii8+PHRleHQgeD0iMzYiIHk9IjM0IiBjbGFzcz0iYmFuZCI+5q2j5bi45Lqk5LuY5Li76ZO+IMK3IOS4iemBk+WujOaIkOadoeS7tjwvdGV4dD48cmVjdCB4PSIzNSIgeT0iNjUiIHdpZHRoPSIyNjAiIGhlaWdodD0iMTA4IiByeD0iMTQiIGZpbGw9IiNmZmZlZmEiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSIxNjUuMCIgeT0iOTUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGl0bGUiPjAxIOWFpeWPo+S4jumihOajgDwvdGV4dD48dGV4dCB4PSIxNjUuMCIgeT0iMTIwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuehruWumuWtpuenkSAvIOiusuS5ieaIluivleWNtzwvdGV4dD48dGV4dCB4PSIxNjUuMCIgeT0iMTQyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuacrOWcsOeOr+Wig+S4juWuv+S4u+inhuiniemXqOanmzwvdGV4dD48cmVjdCB4PSIzMjUiIHk9IjY1IiB3aWR0aD0iMjYwIiBoZWlnaHQ9IjEwOCIgcng9IjE0IiBmaWxsPSIjZmZmZWZhIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iNDU1LjAiIHk9Ijk1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRpdGxlIj4wMiDovazmjaLkuI7mi4bliIY8L3RleHQ+PHRleHQgeD0iNDU1LjAiIHk9IjEyMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7mupDlia/mnKwg4oaSIHJhdyDihpIg5Y2V5YWDPC90ZXh0Pjx0ZXh0IHg9IjQ1NS4wIiB5PSIxNDIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5YiH54mH5YWo6YeP6KaG55uWIC8g5piO56Gu6IqC6YCJPC90ZXh0PjxyZWN0IHg9IjYxNSIgeT0iNjUiIHdpZHRoPSIyNjAiIGhlaWdodD0iMTA4IiByeD0iMTQiIGZpbGw9IiNmZmZlZmEiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSI3NDUuMCIgeT0iOTUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGl0bGUiPjAzIOi9ruasoeaOiOadg+S4jua0vuWPkTwvdGV4dD48dGV4dCB4PSI3NDUuMCIgeT0iMTIwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuW9k+WJjSBydW4g56Gu6K6k5omn6KGM5qih5byPPC90ZXh0Pjx0ZXh0IHg9Ijc0NS4wIiB5PSIxNDIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+6Lev5b6EICsg6Lqr5Lu9ICsg5b+r54WnPC90ZXh0PjxyZWN0IHg9IjkwNSIgeT0iNjUiIHdpZHRoPSIyNjAiIGhlaWdodD0iMTA4IiByeD0iMTQiIGZpbGw9IiNmZmZlZmEiIHN0cm9rZT0iI2UzZGFjYiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz48dGV4dCB4PSIxMDM1LjAiIHk9Ijk1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRpdGxlIj4wNCDljZXlhYPor7vlj5bkuI7moKHlr7k8L3RleHQ+PHRleHQgeD0iMTAzNS4wIiB5PSIxMjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5YiG6aG16K+75paHIC8g5a6e6ZmF6K+75Zu+PC90ZXh0Pjx0ZXh0IHg9IjEwMzUuMCIgeT0iMTQyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuWunueulyDihpIg5Yik5patIOKGkiDoh6rmn6U8L3RleHQ+PHJlY3QgeD0iMzUiIHk9IjIzOCIgd2lkdGg9IjI2MCIgaGVpZ2h0PSIxMDgiIHJ4PSIxNCIgZmlsbD0iI2ZmZmVmYSIgc3Ryb2tlPSIjZTNkYWNiIiBzdHJva2Utd2lkdGg9IjEuNSIvPjx0ZXh0IHg9IjE2NS4wIiB5PSIyNjgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGl0bGUiPjA4IOeItuWkjeaguOS4juato+W8j+S6pOS7mDwvdGV4dD48dGV4dCB4PSIxNjUuMCIgeT0iMjkzIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuW9k+WJjSBzbmFwc2hvdCBhY2NlcHRlZDwvdGV4dD48dGV4dCB4PSIxNjUuMCIgeT0iMzE1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPuaVtOWNtyBjb21wbGV0ZSAvIFdvcmQg5Zue6K+7PC90ZXh0PjxyZWN0IHg9IjMyNSIgeT0iMjM4IiB3aWR0aD0iMjYwIiBoZWlnaHQ9IjEwOCIgcng9IjE0IiBmaWxsPSIjZmZmZWZhIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iNDU1LjAiIHk9IjI2OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10aXRsZSI+MDcg5b2T5YmN6L2u5qyh5oqA5pyv55m76K6wPC90ZXh0Pjx0ZXh0IHg9IjQ1NS4wIiB5PSIyOTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5oql5ZGKIC8g5pWw5o2u5pGY6KaB5YWl5riF5Y2VPC90ZXh0Pjx0ZXh0IHg9IjQ1NS4wIiB5PSIzMTUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+6YeK5pS+5qe95L2N77yM562J5b6F54i25a6hPC90ZXh0PjxyZWN0IHg9IjYxNSIgeT0iMjM4IiB3aWR0aD0iMjYwIiBoZWlnaHQ9IjEwOCIgcng9IjE0IiBmaWxsPSIjZmZmZWZhIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iNzQ1LjAiIHk9IjI2OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10aXRsZSI+MDYg56iL5bqP55Sf5oiQ5LiO57uf5LiA5qCh6aqMPC90ZXh0Pjx0ZXh0IHg9Ijc0NS4wIiB5PSIyOTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+5LuO5rqQ5paH5o+S5YWl5qCH6K6wPC90ZXh0Pjx0ZXh0IHg9Ijc0NS4wIiB5PSIzMTUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+6YCQ5a2X6L+Y5Y6fICsg6LWE5rqQ5qOA5p+lPC90ZXh0PjxyZWN0IHg9IjkwNSIgeT0iMjM4IiB3aWR0aD0iMjYwIiBoZWlnaHQ9IjEwOCIgcng9IjE0IiBmaWxsPSIjZmZmZWZhIiBzdHJva2U9IiNlM2RhY2IiIHN0cm9rZS13aWR0aD0iMS41Ii8+PHRleHQgeD0iMTAzNS4wIiB5PSIyNjgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGl0bGUiPjA1IOWumuS9jeS4jiB2MiDmj5DkuqQ8L3RleHQ+PHRleHQgeD0iMTAzNS4wIiB5PSIyOTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJib3gtdGV4dCI+6K+B5o2uICsg5L+u5pS56aG5ICsg6Ieq5p+lPC90ZXh0Pjx0ZXh0IHg9IjEwMzUuMCIgeT0iMzE1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYm94LXRleHQiPnNuYXBzaG90IENBUyDmi5Lnu53ml6fniYjmnKw8L3RleHQ+PHBhdGggZD0iTTI5NSwxMTkgSDMyMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjOGQ3NDYxIiBzdHJva2Utd2lkdGg9IjIiIG1hcmtlci1lbmQ9InVybCgjYXJyb3cpIi8+PHBhdGggZD0iTTU4NSwxMTkgSDYxMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjOGQ3NDYxIiBzdHJva2Utd2lkdGg9IjIiIG1hcmtlci1lbmQ9InVybCgjYXJyb3cpIi8+PHBhdGggZD0iTTg3NSwxMTkgSDkwMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjOGQ3NDYxIiBzdHJva2Utd2lkdGg9IjIiIG1hcmtlci1lbmQ9InVybCgjYXJyb3cpIi8+PHBhdGggZD0iTTEwMzUsMTczIFYyMzIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxwYXRoIGQ9Ik0zMjUsMjkyIEgzMDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxwYXRoIGQ9Ik02MTUsMjkyIEg1OTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxwYXRoIGQ9Ik05MDUsMjkyIEg4ODAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzhkNzQ2MSIgc3Ryb2tlLXdpZHRoPSIyIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPjxyZWN0IHg9IjM1IiB5PSIzODciIHdpZHRoPSIxMTMwIiBoZWlnaHQ9IjExMiIgcng9IjE0IiBmaWxsPSIjZmZmYWYwIiBzdHJva2U9IiNlM2RhY2IiLz48dGV4dCB4PSI2MDAiIHk9IjQyMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10aXRsZSI+5paH5pys5LiO5Zu+54mH6YCa6L+HIOKGkiDmnKzova7mioDmnK/nmbvorrAg4oaSIOW9k+WJjeeJiOacrOeItuWuoSBhY2NlcHRlZDwvdGV4dD48dGV4dCB4PSI2MDAiIHk9IjQ1MiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7lvoXlpI3moLjmlbTljbfmiqXlkYrlj6/lhYjnlJ/miJDvvIzkvYYgY29tcGxldGU9ZmFsc2XvvJtXb3JkIOWPqua2iOi0ueacieaViOS6pOS7mDwvdGV4dD48dGV4dCB4PSI2MDAiIHk9IjQ3OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImJveC10ZXh0Ij7lpLHotKXov5vlhaXmnInpmZDmgaLlpI3miJbkuqTkurroo4HlrprvvJvnlKjmiLflj5bmtojlgZzmraLooaXkvY3vvJvlhajov4fnqIvkv53nlZnno4Hnm5jorrDlvZU8L3RleHQ+PC9zdmc+" alt="交付流程">
+<figcaption aria-hidden="true">交付流程</figcaption>
+</figure>
+<ol type="1">
+<li><strong>入口补缺</strong>：用户已明确的学科或类型直接采用；未知类型先读
+Word
+嵌套表格统计，必要时有限预览或询问。大量嵌套表格承载正文是讲义强信号。</li>
+<li><strong>环境与视觉门槛</strong>：<code>check-env</code> 检查本地
+Python、pandoc
+等；宿主另行确认一层子代理、真实读图和交付能力。子代理无视觉能力时拒绝校对。</li>
+<li><strong>转换与拆分</strong>：<code>convert</code> 保存源副本和
+raw；<code>split</code>
+提供规则、人工标记、整篇策略；复杂边界由宿主判断后交给
+<code>slice</code>。默认 full 切片要求每个非空行恰好覆盖一次。</li>
+<li><strong>确认当前轮次执行模式</strong>：拆分后登记 automatic /
+interactive；新轮次会使旧授权失效。确认绑定当前
+run，不凭历史记录继续授权。</li>
+<li><strong>窗口调度</strong>：<code>dispatch-plan</code> 默认给出 8
+个并发槽位的建议；宿主负责实际派发、补位与停止。子代理收到工作区、目录、身份、快照与
+references 路径。</li>
+<li><strong>单元校对</strong>：子代理通过 <code>unit-read</code>
+分页读取，通过实际读图工具看图，按需实算；用 <code>unit-locate</code>
+获取重复短语候选和安全位置。</li>
+<li><strong>结构化交付</strong>：先自查，再以 snapshot 摘要提交 v2
+提案。核心定位、生成全文、校验文本与图片、写报告和数据，最后登记材料记录。</li>
+<li><strong>父复核与汇总</strong>：程序可先生成
+<code>complete=false</code> 的待复核整卷报告供父代理通读；父代理对当前
+snapshot 作 accepted / needs_revision 决定。全部有效单元 accepted
+或显式跳过后才可正式完成。</li>
+<li><strong>最终
+Word</strong>：重新核对当前状态，转换正文并植入批注，回读 OpenXML
+检查锚点、公式兜底与图片。失败产物不作为通过的正式交付。</li>
+</ol>
+<p>正式完成具有三个不同层次：<strong>文本与资源校验通过 →
+当前轮次技术登记 → 当前版本父复核 accepted</strong>。文件存在或
+<code>unit-submit</code> 返回 registered 都不能单独表示最终完成。</p>
+</section><section class="chapter"><h2 id="数据与工作区设计">5. 数据与工作区设计</h2>
+<h3 id="标准产物布局">5.1 标准产物布局</h3>
+<pre class="text"><code>工作区 W/
+└── 校对/&lt;材料名&gt;/
+    ├── source/                         源文件副本与导入资源
+    ├── raw/
+    │   ├── &lt;材料名&gt;_raw.md
+    │   └── &lt;材料名&gt;_images/media/
+    ├── units/&lt;材料名&gt;/
+    │   ├── 第1题/ 或 单元1/
+    │   │   ├── 第1题.md 或 单元1.md
+    │   │   ├── images/
+    │   │   ├── _校对报告.md
+    │   │   ├── _校对数据.json
+    │   │   └── _校对失败.md              发生失败时
+    │   └── .superseded/&lt;run_id&gt;/        陈旧单元整体归档
+    ├── _校对记录.json
+    ├── 校对报告/&lt;材料名&gt;_整卷报告.md
+    └── 校对Word/                       Word 批注交付</code></pre>
+<p>单元内允许既有跳过标记，禁止自由命名 attempt
+文件与副本报告。只保留当前交付正文；轮次、恢复、计算和复核摘要进入材料记录。改变单元集必须显式使用
+<code>--replace-units</code>，陈旧单元只移动、不删除，归档目录不参与当前扫描。</p>
+<h3 id="持久身份与摘要">5.2 持久身份与摘要</h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr>
+<th>数据对象</th>
+<th>核心字段</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>材料</td>
+<td><code>task_id</code>、<code>material_name</code>、<code>paths</code>、<code>unit_set</code>、<code>unit_ids</code></td>
+<td>持久身份和当前目录集合，不依赖会话记忆</td>
+</tr>
+<tr>
+<td>输入</td>
+<td><code>unit_inputs</code>、source SHA-256、图片相对路径与
+SHA-256</td>
+<td>源文或图片变化后，旧提交与登记失效</td>
+</tr>
+<tr>
+<td>轮次</td>
+<td><code>current_run_id</code>、<code>runs[]</code>、params、resources、actions</td>
+<td>显式重跑、参数或资源变化产生新轮次</td>
+</tr>
+<tr>
+<td>技术登记</td>
+<td><code>unit_records[]</code>、run、report / data 摘要、inputs</td>
+<td>证明磁盘报告与结构化数据属于当前输入和轮次</td>
+</tr>
+<tr>
+<td>过程记录</td>
+<td><code>unit_events</code>、<code>unit_state</code>、<code>terminated_attempts</code>、<code>recovery</code>、<code>calc_calls</code></td>
+<td>在途与停止判断、预算、计算证据、旧尝试终结</td>
+</tr>
+<tr>
+<td>父复核</td>
+<td><code>unit_reviews[]</code>、decision、report / proposal /
+self_check 摘要、inputs</td>
+<td>accepted 只对对应版本有效；保留历史决定</td>
+</tr>
+<tr>
+<td>提交快照</td>
+<td>task / unit / run、inputs、report / data 摘要、next
+revision、snapshot SHA-256</td>
+<td>Compare-and-swap：拒绝用旧判断覆盖新版本</td>
+</tr>
+</tbody>
+</table>
+</div><p><code>source_sha256</code> 绑定源文件字节，<code>body_sha256</code>
+绑定正文文本；当前正文提取是恒等操作，两者通常相同但语义不同。位置 ID
+绑定源文本摘要和字符区间，重复短语不能仅凭文字猜测位置。</p>
+<h3 id="写入与并发策略">5.3 写入与并发策略</h3>
+<p>工作区由宿主显式注入或 CLI <code>--work-root</code>
+指定。<code>ensure_inside</code> 对真实路径 resolve
+后校验，覆盖符号链接越界；可能被子进程写入的目录树也预先核对。</p>
+<p>材料级互斥使用材料根目录的持久 <code>.jiaodui.lock</code> 文件：POSIX
+由 <code>fcntl.flock</code> 锁定，Windows 由 <code>msvcrt</code>
+锁定首字节，进程内另有线程互斥。锁文件不得删除；锁等待最多 120
+秒（低于插件 180
+秒子进程预算，保证超时能返回结构化错误）。提交在锁内比较
+snapshot。报告、数据和清单各自使用临时文件、fsync
+与原子替换，清单登记作为最终提交标志；捕获到异常时恢复先前内容。这属于<strong>文件级原子替换与异常回滚</strong>，没有跨文件数据库事务或崩溃恢复日志，不应宣称断电时整个提交天然原子。未匹配的摘要会使下游拒绝消费。</p>
+<p>材料锁现有 POSIX 与 Windows 实现；Windows
+分支尚待实机验收。网络共享目录上的锁语义仍未纳入支持范围，需单独实测。</p>
+</section><section class="chapter"><h2 id="结构化报告设计">6. 结构化报告设计</h2>
+<h3 id="v2-提案">6.1 v2 提案</h3>
+<p>提案顶层包括 <code>schema_version</code>、task / unit / run
+身份、source / body
+摘要、<code>proposal_revision</code>、<code>summary</code>、<code>corrections</code>、<code>evidence</code>
+与 <code>self_check</code>。</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr>
+<th>提案部分</th>
+<th>设计要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>修改项</td>
+<td>id、location_id、expected_original、replacement、reason、category、severity、evidence_ids</td>
+</tr>
+<tr>
+<td>首轮证据</td>
+<td>假设 /
+依据、符号；图片逐项对应实际引用清单；计算引用当前单元当前轮次的
+call_id</td>
+</tr>
+<tr>
+<td>计算核验</td>
+<td>证据须指向成功调用；表达式与返回 result
+对照，不允许手写结果冒充实算</td>
+</tr>
+<tr>
+<td>自查</td>
+<td>有问题需覆盖真实性、修改语义、关联覆盖、范围与不确定性、严重度；无问题需
+no_issue_review</td>
+</tr>
+<tr>
+<td>版本</td>
+<td>revision 递增；snapshot 过期拒绝；重复
+ID、重叠区间、空操作、原文不符均拒绝</td>
+</tr>
+</tbody>
+</table>
+</div><p>核心从不可变源文插入
+<code>【编号|原文|修改建议】</code>，而不是把全文改写责任交给模型。竖线、反斜杠和标记括号有统一转义；读写使用同一套编码函数。v2
+报告带正文长度边界，正文中的“修改原因”等标题不会误切报告。</p>
+<p><strong>核心不变量</strong>：去掉标记并还原原文字段后，生成的正文必须逐字等于单元源文。图片证据绑定真实清单，但这只能证明路径与引用对应，不能证明模型确实理解图片。</p>
+<h3 id="单一交付闸门">6.2 单一交付闸门</h3>
+<p><code>verify_unit</code> 是完整闸门，CLI
+<code>verify-report</code>、结构化提交和下游生成复用它。它检查分段与标记语法、原因编号对应、严重度、标记真实性、原文完整性和图片资源。</p>
+<p><code>build-report</code> 的 <code>ok</code>
+只表示生成了诊断文件；<code>complete</code>
+才表示所选范围完整完成。待复核单元可进入诊断报告，但列入
+<code>unreviewed</code>，此时 complete 为
+false。缺失或不合格单元显示占位，未通过正文不被拼入。</p>
+<p>Word 只消费符合当前交付条件的单元。生成后逐单元核对：标记数 =
+实际批注锚点数 + 公式可见兜底数，缺失与超额均为 0，图片缺失为 0，并校验
+comments.xml 与 RangeStart / RangeEnd / Reference
+的配对结构。计数和结构校验不能代替版式与内容质量人工验收。</p>
+<h3 id="历史兼容的实际边界">6.3 历史兼容的实际边界</h3>
+<p>正常交付采用 v2；<code>parse-report</code> 禁止覆盖 v2
+的结构化数据，<code>repair-report</code> 只服务旧报告。</p>
+<p>但是当前 <code>parse_unit</code> 仍可把通过闸门的 v1 Markdown
+报告登记到新布局材料，且不要求 v2
+父复核。因此，“旧报告完全只读”尚未成为所有入口的硬约束。这是既有 T09
+待决策项：需要明确保留显式人工兼容交付，或禁止该登记；本汇报不将其隐藏为已完成能力。</p>
+</section><section class="chapter"><h2 id="状态调度与失败恢复">7. 状态、调度与失败恢复</h2>
+<h3 id="磁盘状态与调度状态">7.1 磁盘状态与调度状态</h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr>
+<th>状态 / 阶段</th>
+<th>条件与动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>未开始</td>
+<td>没有报告，进入待派发候选</td>
+</tr>
+<tr>
+<td>已交付未过校验</td>
+<td>有报告但不通过闸门；允许预算内修正</td>
+</tr>
+<tr>
+<td>失败</td>
+<td>不通过且有失败记录；交人裁定，不自动当作普通待派发</td>
+</tr>
+<tr>
+<td>本轮未完成</td>
+<td>文本通过，但缺当前登记或当前 v2 accepted 复核</td>
+</tr>
+<tr>
+<td>awaiting_parent_review</td>
+<td>有效 v2 已技术提交；释放执行槽位，等待父复核，不自动重派</td>
+</tr>
+<tr>
+<td>needs_revision</td>
+<td>父代理退回；重新进入候选，由宿主决定定向复核与派发</td>
+</tr>
+<tr>
+<td>已完成</td>
+<td>当前输入 / 轮次登记匹配；v2 还须 accepted</td>
+</tr>
+<tr>
+<td>跳过</td>
+<td>有显式跳过标记；整卷和 Word 按一致口径排除校对</td>
+</tr>
+<tr>
+<td>cancelled / stale</td>
+<td>停止补位或提示超时；用户取消不自动重试，技术取消可显式撤销</td>
+</tr>
+</tbody>
+</table>
+</div><p>已有有效的本轮完成产物不会因为旧 <code>_校对失败.md</code>
+而回退。重新拆分、报告或数据改变、输入摘要变化则重新计算状态。</p>
+<p><code>dispatch-plan</code>
+是只读调度建议，不会实际创建子代理或预占槽位。宿主仍负责先派发并登记心跳，避免多个调度方根据同一份计划重复派发。默认
+8 个槽位也不是吞吐性能承诺。</p>
+<h3 id="恢复预算">7.2 恢复预算</h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr>
+<th>类别</th>
+<th>每单元每轮额度</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>call_correction</td>
+<td>2</td>
+<td>工具调用参数修正</td>
+</tr>
+<tr>
+<td>calc_representation</td>
+<td>2</td>
+<td>计算表达方式调整</td>
+</tr>
+<tr>
+<td>report_repair</td>
+<td>3</td>
+<td>旧报告修复</td>
+</tr>
+<tr>
+<td>targeted_review</td>
+<td>2</td>
+<td>定向复核</td>
+</tr>
+<tr>
+<td>technical_redispatch</td>
+<td>1</td>
+<td>技术失败重派</td>
+</tr>
+<tr>
+<td>image_schema_fix</td>
+<td>2</td>
+<td>图片调用 / 证据格式修正；同时扣 1 次 call_correction</td>
+</tr>
+</tbody>
+</table>
+</div><p>错误码确定性映射类别。<code>attempt_id</code> 与稳定失败 SHA-256
+实现幂等；同 attempt
+改指纹或类别拒绝，重放与额度拒绝都不写盘。连带扣费任一余额不足时整次拒绝，不部分扣费。用户取消与权限拒绝只记录、不耗预算。</p>
+<p><strong>当前强制范围</strong>：core
+强制恢复记账入口的授权、分类、扣费和幂等；宿主负责每次恢复前调用该入口并遵守
+allowed。提交 /
+计算入口尚未全部绑定恢复票据，因此这不是不可绕过的全链路重试次数上限。该职责边界对应既有
+T10。</p>
+<p>失败说明必须包含原因、最后一次 verify
+完整输出和产物摘要。报告不能通过则不算完成，不以截断原因或隐藏失败凑完成率。</p>
+</section><section class="chapter"><h2 id="计算图片与学科扩展">8. 计算、图片与学科扩展</h2>
+<p>计算核心按注册元数据导出 schema，支持
+evaluate、simplify、solve、equality、differentiate、integrate、formula、dimensional、limit、geometry、vector_ops、circle_from_two_points、chemistry_balance、stoichiometry
+共 14
+类操作。高中物理配置只开放对应工具族；存在化学计算实现不等于高中化学校对流程已经落地。</p>
+<p>公式多根显式返回歧义，不猜第一根；圆轨迹返回前核对两点等距及方向条件。量纲声明支持单位表达式、显式量纲、物理量名与单位，以及候选读数组合；每个符号必须声明，无量纲也需明确说明。agent
+仍负责物理建模、符号对应和分支选择。</p>
+<p>图片清单按正文引用次序绑定
+reference_index、位置、原图和实际读取路径。透明线稿可提供白底读取图；缺图、无效图或不支持的远程引用会阻止交付。真实
+<code>read_image</code>
+执行与视觉理解由宿主验收，不能由证据对象自行证明。</p>
+<p>学科差异采用两类载体：人读
+<code>references/subjects/&lt;学科&gt;.md</code>，机器读包内
+<code>jiaodui/data/subjects/&lt;学科&gt;.json</code>。后者控制扩展名、拆分参数和工具族；仓库根
+<code>config/subjects/</code> 是镜像，不读取工作区同名配置，开发覆盖使用
+<code>JIAODUI_CONFIG_DIR</code>。扩科要求规范、配置、独立语料和宿主验收配套，不能只新增一行矩阵。</p>
+</section><section class="chapter"><h2 id="部署接口与运维">9. 部署、接口与运维</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr>
+<th>项目</th>
+<th>当前方案</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>运行环境</td>
+<td>Python ≥3.12；本机 3.12.13；独立 venv，<code>.venv</code> 可指向仓内
+<code>.venv-cli</code></td>
+</tr>
+<tr>
+<td>必需依赖</td>
+<td>sympy、python-docx、Pillow、lxml；外部 pandoc，本机 3.9.0.2</td>
+</tr>
+<tr>
+<td>可选依赖</td>
+<td>matplotlib 公式渲染惰性加载、缺失降级；Playwright / classics
+后置</td>
+</tr>
+<tr>
+<td>分发</td>
+<td>setuptools wheel，含默认学科 JSON；skill 与 DSH bundle 单独提供</td>
+</tr>
+<tr>
+<td>CLI 输出</td>
+<td>JSON 与稳定退出码；失败 stderr 单行结构化 JSON</td>
+</tr>
+<tr>
+<td>退出码</td>
+<td>0 成功；1 未预期；2 用法；3 环境；4 校验；5 未找到；6 契约；7
+不支持</td>
+</tr>
+<tr>
+<td>工作区权限</td>
+<td>宿主注入 <code>JIAODUI_WORK_ROOT</code>，或显式
+<code>--work-root</code>；产物真实路径必须在内</td>
+</tr>
+<tr>
+<td>并发</td>
+<td>同材料写入序列化；模型判断可按单元并行；共享 JSON
+仍是持久化中心</td>
+</tr>
+<tr>
+<td>CI</td>
+<td>Ubuntu 24.04、Python 3.12、Node 22、pandoc；全量 pytest 与 wheel
+构建</td>
+</tr>
+</tbody>
+</table>
+</div><p>独立 Python 环境用于避免 macOS 宿主签名解释器拒绝加载 pip
+原生扩展。插件优先发现仓库 <code>.venv/bin/jiaodui</code>，找不到时回退
+PATH 或显式配置 CLI 路径。</p>
+<p>本地核心记录阶段、恢复、调用结果和产物摘要；模型
+token、费用与真实调用耗时归宿主采集。本次没有新增宿主用量实测，也不根据测试时长推导生产吞吐或成本。</p>
+</section><section class="chapter"><h2 id="关键设计取舍与质量证据">10. 关键设计取舍与质量证据</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr>
+<th>取舍</th>
+<th>得到的价值</th>
+<th>需要接受的代价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>宿主 agent 驱动</td>
+<td>核心不绑定模型 API，复用宿主权限与读图能力</td>
+<td>不同宿主必须分别验证工具和调度语义</td>
+</tr>
+<tr>
+<td>结构化提案生成报告</td>
+<td>源文完整性可确定性约束，证据与定位可核对</td>
+<td>模型必须适应 schema；源文改变需重新定位与提交</td>
+</tr>
+<tr>
+<td>磁盘推导状态</td>
+<td>跨会话恢复，避免内存状态与文件脱节</td>
+<td>扫描、摘要和共享 JSON 会增加 I/O</td>
+</tr>
+<tr>
+<td>材料锁 + 文件原子替换</td>
+<td>实现简单、可本地部署，保护协作写入</td>
+<td>按平台使用系统锁；Windows
+尚待实机验收；多文件断电恢复非完整事务</td>
+</tr>
+<tr>
+<td>单一 verify 闸门</td>
+<td>CLI、提交、Word、整卷消费判据一致</td>
+<td>校验较严格，需要清晰诊断与明确历史兼容边界</td>
+</tr>
+<tr>
+<td>原文 + Word 批注</td>
+<td>修改建议可见且不擅自改源材料</td>
+<td>公式与复杂表格需兜底，仍需版式验收</td>
+</tr>
+</tbody>
+</table>
+</div><p>本次在 <code>07d0f38</code> 上执行：</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">.venv/bin/python</span> <span class="at">-m</span> pytest</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co"># 1268 passed, 4 subtests passed in 43.35s</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="ex">.venv/bin/python</span> <span class="at">-m</span> pytest <span class="at">-o</span> addopts=<span class="st">''</span> <span class="at">-q</span> <span class="at">-rs</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="co"># 1268 passed, 4 subtests passed in 43.73s</span></span></code></pre></div>
+<p>两个口径都无失败与跳过。测试覆盖契约接受与拒绝、旧语料、并发、版本变化、报告生成、Word
+锚点和插件行为。<code>check-env</code> 本地检查通过；Playwright
+未安装为可选项。审查基线仍复现了三个未被当时测试锁住的问题（R2
+已在审查后由 <code>c5af354</code>
+修复），说明测试全绿只代表已有用例覆盖范围内通过。</p>
+<p>仓内 <code>PROCESS_REWORK.md</code> 记录了历史真机
+catalog、读图、停止语义、结构化校对和交付冒烟；本次没有重跑真实宿主会话。PRD
+的首次校验通过率
+≥90%、模型用量可观测及校对质量下限，应按固定语料和当前宿主版本独立验收。</p>
+</section><section class="chapter"><h2 id="本次审查与改进优先级">11. 本次审查与改进优先级</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr>
+<th>编号</th>
+<th>级别</th>
+<th>审查基线问题</th>
+<th>影响与当前状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R1</td>
+<td>P1</td>
+<td>计算表达式借函数 globals 绕过正则黑名单，导入 pathlib
+并创建工作区外临时标记，返回 success=true</td>
+<td>当前计算子进程不构成权限沙箱；仍应限制表达式语法并配合系统级隔离，保留合法数学与几何双向回归</td>
+</tr>
+<tr>
+<td>R2</td>
+<td>P1（已修复）</td>
+<td>attempt-A 被取消并撤销，B 开始后，A 的迟到技术取消把 B 记为
+cancelled 并停止调度</td>
+<td><code>c5af354</code> 已把技术取消绑定当前 attempt；旧 attempt 被
+<code>attempt-terminated</code> 拒绝，B 保持在途且调度不停止</td>
+</tr>
+<tr>
+<td>R3</td>
+<td>P2</td>
+<td><code>pi*1e-12</code> 返回 <code>3e-12</code>，相对独立期望值误差约
+4.51%</td>
+<td>当前 round(…,12)
+是小数位而非有效数字；保留数值精度或按有效数字与相对误差处理</td>
+</tr>
+</tbody>
+</table>
+</div><p>详细触发条件、代码位置、证据和验收建议见 <a href="REVIEW-2026-10-13.md">本次审查报告</a>。审查阶段只新增文档和复现材料；R2
+的修复与回归测试见提交 <code>c5af354</code>。</p>
+<p>除此之外，需要收口两个已有产品决策：v1
+人工兼容交付是否允许登记，以及恢复预算是否升级为全入口硬上限。README
+仍保留“Phase 2 待收尾”与旧测试数字，而 IMPLEMENTATION
+已记录收尾完成，汇报进度宜采用本次核验结果并统一后续口径。</p>
+<p>R2 已由 <code>c5af354</code> 完成；建议继续修 R1、R3，在此基础上明确
+T09 / T10，补当前版本宿主回放与首次通过率、用量观测，再推进独立 MCP
+和逐学科落地。不将扩科和新增接入壳置于当前高优先级问题之前。</p>
+</section><section class="chapter"><h2 id="依据与追溯">12. 依据与追溯</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="可滚动数据表"><table>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr>
+<th>资料</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="PRD.html">PRD</a></td>
+<td>产品目标、契约和验收口径；部分早期决策需与结构化主链现状一起解读</td>
+</tr>
+<tr>
+<td><a href="IMPLEMENTATION.md">IMPLEMENTATION</a> / <a href="PROCESS_REWORK.md">PROCESS_REWORK</a></td>
+<td>实施与历史宿主验收记录</td>
+</tr>
+<tr>
+<td><a href="adr/0002-workspace-material-layout.md">ADR 0002</a></td>
+<td>工作区布局、路径与轮次</td>
+</tr>
+<tr>
+<td><a href="adr/0003-material-type-entry.md">ADR 0003</a></td>
+<td>材料类型识别和入口读取边界</td>
+</tr>
+<tr>
+<td><a href="adr/0004-gate-single-implementation.md">ADR 0004</a></td>
+<td>单一校验闸门</td>
+</tr>
+<tr>
+<td><a href="adr/0005-dimensional-declaration-and-ambiguity.md">ADR
+0005</a></td>
+<td>量纲声明与歧义</td>
+</tr>
+<tr>
+<td><a href="adr/0006-v2-lossless-marker-encoding-and-envelope.md">ADR
+0006</a></td>
+<td>v2 无损标记、正文边界和摘要</td>
+</tr>
+<tr>
+<td><a href="TICKETS-full-chain-2026-10-10.md">既有审查 tickets</a></td>
+<td>区分已修复问题与 T09 / T10 待决策项</td>
+</tr>
+<tr>
+<td><a href="REVIEW-2026-10-13.md">本次审查报告</a> / <a href="review-2026-10-13/evidence.json">审查基线证据</a> / <a href="review-2026-10-13/evidence-2026-10-23.json">2026-10-23
+复跑证据</a></td>
+<td>审查基线三个问题、当前 R2 修复状态与实测结果</td>
+</tr>
+</tbody>
+</table>
+</div><p>本文可直接作为汇报讲稿或设计评审资料。离线 HTML
+版提供目录、架构图和打印样式；Markdown 版用于持续维护。</p>
+</section><footer class="foot">JiaoDuiAgentSkill · 架构与设计 · 2026-10-13</footer></body>
+</html>
