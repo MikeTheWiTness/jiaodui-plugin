@@ -58,7 +58,9 @@ def cmd_inspect_images(args: argparse.Namespace) -> int:
 def cmd_check_env(args: argparse.Namespace) -> int:
     from .checkenv import check_env
 
-    report = check_env()
+    report = check_env(expect_schema_version=args.expect_schema_version,
+                       expect_bundle_version=args.expect_bundle_version,
+                       expect_schema_file=args.expect_schema_file)
     if args.json:
         _json_out(report.to_dict())
     else:
@@ -81,14 +83,31 @@ def cmd_convert(args: argparse.Namespace) -> int:
     result = convert_material(args.file, args.out_dir, args.base_name,
                               material_name=args.material_name, use_mathjax=args.mathjax,
                               legacy_layout=args.legacy_layout, mode=args.mode,
-                              mode_origin=args.mode_origin, mode_reason=args.mode_reason)
+                              mode_origin=args.mode_origin, mode_reason=args.mode_reason,
+                              import_engine=args.import_engine)
     payload = {"ok": True, "raw_md": result.raw_md, "images_dir": result.images_dir,
                "copied": result.copied, "missing": result.missing,
-               "warnings": result.warnings, "source_kind": result.source_kind, "mode": result.mode}
+               "warnings": result.warnings, "source_kind": result.source_kind,
+               "mode": result.mode, "engine": result.engine}
     if args.json:
         _json_out(payload)
     else:
         log(f" ✅ 转换完成（{result.source_kind}）：{result.raw_md}")
+        print(json.dumps(payload, ensure_ascii=False))
+    return ExitCode.OK
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    from .workflow import import_material
+    payload = import_material(args.file, subject=args.subject, mode=args.mode,
+                              material_name=args.material_name,
+                              import_engine=args.import_engine,
+                              rerun=args.rerun, replace_units=args.replace_units)
+    if args.json:
+        _json_out(payload)
+    else:
+        log(f" ✅ 导入完成（{payload['engine']}）：{payload['units']} 个单元"
+            f"（题目 {payload['question_units']} / 知识 {payload['knowledge_units']}）")
         print(json.dumps(payload, ensure_ascii=False))
     return ExitCode.OK
 
@@ -462,7 +481,10 @@ def cmd_calc(args: argparse.Namespace) -> int:
         call_id = record_calc_call(args.task_id, args.unit_id, internal, params, result)
     if not result.get("code") or not args.show_code:
         result = {k: v for k, v in result.items() if k != "code"}
-    payload = {"ok": bool(result.get("success")), "op": op, "result": result}
+    # 回显实际参与记账的参数：多参数调用（formula 的 formula+solve_for、
+    # equality 的 expression_a+expression_b）必须能逐字复制，不能凭记忆重写。
+    payload = {"ok": bool(result.get("success")), "op": op, "params": params,
+               "result": result}
     if call_id is not None:
         payload["call_id"] = call_id
     if args.json:
@@ -520,7 +542,9 @@ def cmd_build_docx(args: argparse.Namespace) -> int:
         if result.image_missing_count:
             anomaly += f"，图片未嵌入 {result.image_missing_count}"
         if result.comment_formula_fallback_count:
-            anomaly += f"，公式降级 {result.comment_formula_fallback_count}"
+            anomaly += (f"，公式降级 {result.comment_formula_fallback_count}"
+                        f"（依赖 {result.comment_formula_dependency_missing_count}"
+                        f" / 语法 {result.comment_formula_syntax_unsupported_count}）")
         log(f" 标记 {result.marker_count} = 锚点 {result.anchor_count} + 公式兜底 "
             f"{result.formula_fallback_count}，缺失 {result.missing_count}，"
             f"标题批注 {result.heading_comment_count}{anomaly}")
@@ -558,7 +582,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--work-root", help="当前工作区绝对路径（也可由宿主注入 JIAODUI_WORK_ROOT）")
     sub = p.add_subparsers(dest="command", required=True)
 
-    sp = sub.add_parser("check-env", help="环境预检（无凭证项）")
+    sp = sub.add_parser("check-env", help="环境预检（无凭证项，含插件↔CLI契约探针）")
+    sp.add_argument("--expect-schema-version", type=int,
+                    help="插件期望的提案 schema 版本；与核心能力不一致即预检失败")
+    sp.add_argument("--expect-bundle-version",
+                    help="插件 bundle 版本；与核心版本不一致即预检失败")
+    sp.add_argument("--expect-schema-file",
+                    help="插件随包的提案 schema 文件；与核心导出逐字段比对")
     sp.set_defaults(func=cmd_check_env)
 
     sp = sub.add_parser("inspect-source", help="只读检查 Word 嵌套表格与有限正文节选")
@@ -576,7 +606,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--base-name")
     sp.add_argument("--mathjax", action="store_true", default=None)
     sp.add_argument("--mode", choices=["exam", "lecture"], help="材料类型，讲义自动启用其专用转换参数")
+    sp.add_argument("--import-engine", choices=["auto", "docx", "pandoc"], default="auto",
+                    help="docx 导入引擎：原生读取固定模板 / 强制 pandoc / 自动（默认）")
     sp.set_defaults(func=cmd_convert)
+
+    sp = sub.add_parser("import", help="一次完成转换、结构拆分与预检，返回紧凑摘要")
+    sp.add_argument("file")
+    sp.add_argument("--subject", required=True)
+    sp.add_argument("--mode", choices=["exam", "lecture"],
+                    help="材料类型；省略时仅固定 docx 模板可按结构判定")
+    sp.add_argument("--material-name")
+    sp.add_argument("--import-engine", choices=["auto", "docx", "pandoc"], default="auto")
+    sp.add_argument("--rerun", action="store_true")
+    sp.add_argument("--replace-units", action="store_true")
+    sp.set_defaults(func=cmd_import)
 
     sp = sub.add_parser("split", help="规则拆分：源文 → 单元目录")
     sp.add_argument("raw_md")

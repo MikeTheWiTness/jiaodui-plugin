@@ -111,7 +111,7 @@ def convert_material(file: str | Path, out_dir: str | Path | None = None,
                      base_name: str | None = None, *, material_name: str | None = None,
                      use_mathjax: bool | None = None, legacy_layout: bool = False,
                      mode: str | None = None, mode_origin: str | None = None,
-                     mode_reason: str | None = None):
+                     mode_reason: str | None = None, import_engine: str = "auto"):
     from .convert import _IMG_RE, convert_to_raw, image_destination
     src = input_path(file)
     if not src.is_file():
@@ -129,7 +129,8 @@ def convert_material(file: str | Path, out_dir: str | Path | None = None,
     if legacy_layout:
         if out_dir is None:
             raise BusinessError("历史转换需显式 --out-dir", code="output-required")
-        return convert_to_raw(str(src), str(ensure_inside(out_dir)), name, use_mathjax, mode=mode)
+        return convert_to_raw(str(src), str(ensure_inside(out_dir)), name, use_mathjax,
+                               mode=mode, import_engine=import_engine)
     directory = ensure_tree(root / "校对" / name)
     raw_dir = ensure_tree(out_dir if out_dir is not None else directory / "raw")
     if raw_dir != directory / "raw":
@@ -198,17 +199,20 @@ def convert_material(file: str | Path, out_dir: str | Path | None = None,
         action = {"at": material.now(), "command": "convert", "status": "running",
                   "args": {"file": str(src), "out_dir": str(raw_dir),
                            "material_name": name, "mathjax": effective_mathjax,
+                           "import_engine": import_engine,
                            "material_type": selection}, "tool_version": __version__}
         data["runs"][-1]["actions"].append(action)
         material.write(directory, data)
         try:
-            result = convert_to_raw(str(src), str(raw_dir), name, effective_mathjax, mode=effective_mode)
+            result = convert_to_raw(str(src), str(raw_dir), name, effective_mathjax,
+                                    mode=effective_mode, import_engine=import_engine)
         except Exception as exc:
             action.update(status="failed", error=str(exc), finished_at=material.now())
             material.write(directory, data)
             raise
         conversion = {"raw_sha256": material.sha256(result.raw_md), "mathjax": effective_mathjax,
-                      "mode": effective_mode,
+                      "mode": effective_mode, "engine": result.engine,
+                      "blocks": result.blocks,
                       "resources": material.resources(directory, Path(result.images_dir)),
                       "source_resources": snapshot}
         action.update(status="completed", finished_at=material.now(), missing=result.missing,
@@ -231,7 +235,8 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
                    legacy_layout: bool = False,
                    mode_origin: str | None = None, mode_reason: str | None = None,
                    strategy: str = "rule"):
-    from .split import SplitResult, slice_by_boundaries, split_exam, split_lecture, split_by_strategy
+    from .split import (SplitResult, slice_by_boundaries, split_by_strategy, split_exam,
+                        split_lecture, split_structural)
     raw = input_path(raw_md)
     if not raw.is_file():
         raise NotFoundError(f"raw md 不存在：{raw}")
@@ -278,17 +283,25 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
             raise BusinessError("拆分输出与材料清单不一致", code="layout-conflict")
     if images_dir:
         config["images_source"] = str(input_path(images_dir))
+    engine = ""
+    block_plan: list[dict] = []
+
     def split(before_write=None):
+        native_clean = clean and engine != "docx"
         if boundaries is not None:
             return slice_by_boundaries(str(raw), boundaries, str(target), name, mode,
-                                       clean=clean, config=config, scope=scope, scope_reason=scope_reason,
-                                       before_write=before_write)
+                                       clean=native_clean, config=config, scope=scope,
+                                       scope_reason=scope_reason, before_write=before_write)
         if strategy != "rule":
             return split_by_strategy(str(raw), str(target), name, config, mode=mode,
-                                     strategy=strategy, clean=clean, before_write=before_write)
+                                     strategy=strategy, clean=native_clean,
+                                     before_write=before_write)
         if mode == "exam":
             return split_exam(str(raw), str(target), name, config, before_write=before_write)
-        return split_lecture(str(raw), str(target), name, config, clean=clean,
+        if engine == "docx" and block_plan:
+            return split_structural(str(raw), block_plan, str(target), name,
+                                    before_write=before_write)
+        return split_lecture(str(raw), str(target), name, config, clean=native_clean,
                              before_write=before_write)
     if legacy_layout:
         if adopt_units or replace_units or rerun:
@@ -296,6 +309,8 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
         return split()
     with material.locked(directory):
         data = material.load(directory)
+        engine = (data.get("conversion") or {}).get("engine") or ""
+        block_plan = (data.get("conversion") or {}).get("blocks") or []
         paper = ensure_tree(material.relative_path(directory, data["paths"]["paper"]))
         from .units import scan_unit_dirs
         if adopt_units and replace_units:
@@ -336,12 +351,19 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
                              "hint": "如需变更单元集，请用 split / slice --replace-units："
                                      "陈旧单元会归档到单元根目录的 .superseded/<run_id>/，只移动不删除"})
 
-        params = {"subject": subject, "mode": mode, "clean": clean,
+        params = {"subject": subject, "mode": mode, "clean": clean, "engine": engine,
                   "strategy": "boundaries" if boundaries is not None else strategy,
                   "boundaries_sha256": boundaries_sha256,
                   "raw_sha256": material.sha256(raw),
                   "config_sha256": hashlib.sha256(json.dumps(config, ensure_ascii=False, sort_keys=True).encode()).hexdigest()}
         result = split(before_write=check_unit_set)
+        # 导航/封面段按学科 nav_patterns 标记跳过；只打标记，不删除单元。
+        from .split import mark_navigation_units
+
+        marked = mark_navigation_units(str(target), name,
+                                       (config.get("nav_patterns") or None))
+        if marked:
+            log(f"   ⏭️ 已标记 {marked} 个导航单元跳过校对")
         if result.coverage is not None:
             params["slice_coverage"] = result.coverage
         data["material_type"] = selection
@@ -374,6 +396,68 @@ def split_material(raw_md: str | Path, *, subject: str | None = None, mode: str 
         return result
 
 
+
+def import_material(file: str | Path, *, subject: str, mode: str | None = None,
+                    material_name: str | None = None, use_mathjax: bool | None = None,
+                    import_engine: str = "auto", rerun: bool = False,
+                    replace_units: bool = False) -> dict:
+    """一次完成 convert → split → precheck，返回供父 agent 直接消费的紧凑摘要。
+
+    原生 docx 模板可以由结构确定类型（题目表 + 标题表），因此 mode 可省略；
+    其他格式或回退 pandoc 时无法可靠判断，仍要求显式 mode。
+    """
+    from .split import precheck_split
+
+    converted = convert_material(file, material_name=material_name, use_mathjax=use_mathjax,
+                                 mode=mode, import_engine=import_engine)
+    selection = None
+    if mode is None:
+        questions = [block for block in converted.blocks if block.get("kind") == "question"]
+        if converted.engine == "docx" and questions:
+            selection = {"mode": "lecture", "origin": "structure",
+                         "reason": f"固定讲义模板：{len(questions)} 个题目表"}
+            mode = "lecture"
+        else:
+            raise UsageError("无法自动判断材料类型（非固定模板），请指定 --mode")
+    directory = material.find_material(converted.raw_md)
+    if directory is None:
+        raise BusinessError("导入后的材料清单缺失", code="manifest-required")
+    split = split_material(converted.raw_md, subject=subject, mode=mode, rerun=rerun,
+                           replace_units=replace_units,
+                           mode_origin=(selection or {}).get("origin"),
+                           mode_reason=(selection or {}).get("reason"))
+    data = material.load(directory)
+    paper_dir = material.relative_path(directory, data["paths"]["paper"])
+    precheck = precheck_split(str(paper_dir))
+    question_units = sum(1 for unit in split.units
+                         if str(unit.get("title") or "").lstrip().startswith("**"))
+    warnings: list[str] = []
+    for item in [*converted.warnings, *split.warnings, *precheck.warnings]:
+        if item not in warnings:
+            warnings.append(item)
+    return {
+        "ok": True,
+        "material": data["material_name"],
+        "material_dir": str(directory),
+        "paper": str(paper_dir),
+        "mode": mode,
+        "mode_origin": (selection or {}).get("origin"),
+        "engine": converted.engine,
+        "units": len(split.units),
+        "question_units": question_units,
+        "knowledge_units": len(split.units) - question_units,
+        "copied": split.copied,
+        "missing": split.missing,
+        "empty": len(precheck.empty_units),
+        "overlong": len(precheck.overlong_units),
+        "chars": {"min": precheck.length_min, "median": precheck.length_median,
+                  "max": precheck.length_max},
+        "first_units": [{"name": unit.get("name"), "title": unit.get("title")}
+                        for unit in split.units[:3]],
+        "task_id": data.get("task_id"),
+        "warnings": warnings,
+    }
+
 def slice_material(boundaries_file: str | Path | None, *, raw: str | Path | None = None,
                    subject: str | None = None, mode: str | None = None,
                    out_root: str | Path | None = None, base_name: str | None = None,
@@ -397,8 +481,10 @@ def slice_material(boundaries_file: str | Path | None, *, raw: str | Path | None
         if data is not None and not legacy_layout and data.get("conversion", {}).get("mode") != effective_mode:
             raise BusinessError("请先按已确定 --mode 转换材料，再生成同一类型的切片预览", code="mode-conflict")
         config = subject_config(subject) if subject else {}
+        native = ((data or {}).get("conversion") or {}).get("engine") == "docx"
         cleaned = (lecture_cleaned_text(str(path), base_name or path.stem.removesuffix("_raw"), config)
-                   if clean and effective_mode == "lecture" else path.read_text(encoding="utf-8"))
+                   if clean and effective_mode == "lecture" and not native
+                   else path.read_text(encoding="utf-8"))
         return {"ok": True, "mode": effective_mode, "cleaned": cleaned}
     if boundaries_file is None:
         raise UsageError("slice 需要 --boundaries <清单.json>，或用 --preview")

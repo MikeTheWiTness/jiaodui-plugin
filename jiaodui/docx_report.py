@@ -89,10 +89,11 @@ def find_pandoc() -> str | None:
     return None
 
 
-def latex_to_png(latex_body, out_path, fontsize: float = 14, dpi: int = 200) -> bool:
-    """惰性转发到 jiaodui.formula_render（matplotlib 缺失时返回 False）。"""
+def latex_to_png(latex_body, out_path, fontsize: float = 14, dpi: int = 200,
+                  *, diagnostics: dict | None = None) -> bool:
+    """惰性转发到 jiaodui.formula_render；diagnostics 透传失败原因。"""
     from .formula_render import latex_to_png as _render
-    return _render(latex_body, out_path, fontsize, dpi)
+    return _render(latex_body, out_path, fontsize, dpi, diagnostics=diagnostics)
 
 
 @dataclass
@@ -106,6 +107,9 @@ class DocxBuildResult:
     - over_count：逐单元「锚点+兜底 多于报告标记数」的超出量之和（记账异常，必须为 0）
     - image_missing_count：单元图片未能嵌入交付的数量（缺图，必须为 0）
     - comment_formula_fallback_count：批注内公式渲染失败降级为文本的数量（允许，只告警）
+    - comment_formula_dependency_missing_count：其中因 matplotlib / 中文字体不可用而降级的数量
+    - comment_formula_syntax_unsupported_count：其中因 mathtext 语法不支持而降级的数量
+    - comment_formula_failures：降级公式原文与原因（{formula, reason, detail?}）
     - heading_comment_count：无问题单元的标题批注数（单列，不参与缺失计算）
     - units：每单元 {unit, markers, anchors, fallbacks, missing, heading_comment}
     """
@@ -119,7 +123,13 @@ class DocxBuildResult:
     image_missing_count: int = 0
     """单元图片未能嵌入交付的数量（悬空引用会让 Word 缺图，必须为 0）。"""
     comment_formula_fallback_count: int = 0
-    """批注内公式渲染失败、降级为文本的数量（可选依赖缺失属允许降级，只计数告警）。"""
+    """批注内公式渲染失败、降级为文本的数量（允许降级，只计数告警）。"""
+    comment_formula_dependency_missing_count: int = 0
+    """其中因 matplotlib / 中文字体等渲染依赖不可用而降级的数量。"""
+    comment_formula_syntax_unsupported_count: int = 0
+    """其中因公式语法不受 mathtext 支持而降级的数量。"""
+    comment_formula_failures: list[dict] = field(default_factory=list)
+    """降级的公式原文与失败原因（{formula, reason, detail?}），供告警直接列出。"""
     heading_comment_count: int = 0
     units: list[dict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -310,6 +320,15 @@ def _check_anchor_pairing(doc_xml: str, comment_ids: set[str]) -> tuple[bool, li
     return (not problems), problems
 
 
+def _formula_failure_sample(failures: list[dict], limit: int = 5) -> str:
+    """把降级公式原文列成可直接排查的一行；过多时只列前几条并注明总数。"""
+    shown = [str(item.get("formula", "")) for item in failures[:limit]]
+    text = "、".join("$" + formula + "$" for formula in shown if formula)
+    if len(failures) > limit:
+        text += f" 等 {len(failures)} 条"
+    return text or "（公式原文未回传）"
+
+
 def build_docx(paper_dir: str, out_dir: str | None = None,
                *, legacy_layout: bool = False) -> DocxBuildResult:
     """生成 Word 批注版，并在生成后解压复核「实际锚点」是否与错误标记对账。
@@ -398,7 +417,8 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
         result.missing_count = result.marker_count
         return result
 
-    gen_stats: dict[str, int] = {"image_missing": 0, "comment_formula_fallback": 0}
+    gen_stats: dict[str, object] = {"image_missing": 0, "comment_formula_fallback": 0,
+                                    "comment_formula_failures": []}
     safe_delivery_name = "".join(c for c in paper_path.name if c not in r'\\/:*?"<>|')
     delivery_path = Path(out_dir) / f"{safe_delivery_name}_校对批注版.docx"
     Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -415,15 +435,29 @@ def build_docx(paper_dir: str, out_dir: str | None = None,
     generation_ok = generated_path is not None
     out_path = str(temporary_path) if temporary_path.is_file() else None
     result.out_path = out_path
-    result.image_missing_count = gen_stats["image_missing"]
-    result.comment_formula_fallback_count = gen_stats["comment_formula_fallback"]
+    result.image_missing_count = int(gen_stats["image_missing"])
+    result.comment_formula_fallback_count = int(gen_stats["comment_formula_fallback"])
+    failures = [item for item in gen_stats.get("comment_formula_failures", [])
+                if isinstance(item, dict)]
+    result.comment_formula_failures = failures
+    dependency_missing = [item for item in failures
+                          if item.get("reason") == "dependency_missing"]
+    syntax_unsupported = [item for item in failures
+                          if item.get("reason") != "dependency_missing"]
+    result.comment_formula_dependency_missing_count = len(dependency_missing)
+    result.comment_formula_syntax_unsupported_count = len(syntax_unsupported)
     if result.image_missing_count:
         result.warnings.append(
             f"{result.image_missing_count} 张单元图片未嵌入交付（Word 缺图），该交付不通过")
-    if result.comment_formula_fallback_count:
+    if dependency_missing:
         result.warnings.append(
-            f"{result.comment_formula_fallback_count} 处批注内公式降级为文本"
-            "（可选依赖缺失属允许降级，不影响交付）")
+            f"{len(dependency_missing)} 处批注内公式因渲染依赖不可用降级为文本"
+            "（matplotlib 或中文字体缺失，属允许降级，不影响交付）："
+            + _formula_failure_sample(dependency_missing))
+    if syntax_unsupported:
+        result.warnings.append(
+            f"{len(syntax_unsupported)} 处批注内公式语法不受 mathtext 支持，已降级为文本"
+            "（不属依赖缺失，不影响交付）：" + _formula_failure_sample(syntax_unsupported))
     if not generation_ok:
         result.warnings.append("Word 生成器未能完成批注注入")
     elif out_path is None:
@@ -1374,9 +1408,10 @@ def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path,
     """
     items = []
     images = []
+    failures: list[dict] = []
     pic_id = itertools.count(1)
     degraded = 0
-    """批注内公式渲染失败、降级为文本的数量（可选依赖缺失属允许降级，但要可见）。"""
+    """批注内公式渲染失败、降级为文本的数量（允许降级，但要可见并区分原因）。"""
 
     def _escape_run(text: str) -> str:
         return f'<w:r><w:t xml:space="preserve">{escape(text)}</w:t></w:r>'
@@ -1393,13 +1428,17 @@ def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path,
                 body = part[1:-1]
                 num = next(pic_id)
                 media_name = f"comment_pic{num}.png"
-                if latex_to_png(body, work_dir / media_name):
+                diagnostics: dict = {}
+                if latex_to_png(body, work_dir / media_name, diagnostics=diagnostics):
                     png_bytes = (work_dir / media_name).read_bytes()
                     r_id = f"rIdPic{len(images) + 1}"
                     images.append((media_name, png_bytes, r_id))
                     runs.append(_inline_image_xml(num, media_name, r_id, png_bytes))
                     continue
                 degraded += 1
+                failures.append({"formula": body,
+                                 "reason": diagnostics.get("reason", "render_failed"),
+                                 "detail": diagnostics.get("detail", "")})
             runs.append(_escape_run(part))
         return "".join(runs)
 
@@ -1416,6 +1455,7 @@ def _build_comments_xml(comments: dict, kept_ids: set, work_dir: Path,
             f'w:date="{_comment_timestamp()}">' + "".join(paras) + '</w:comment>')
     if stats is not None and degraded:
         stats["comment_formula_fallback"] = stats.get("comment_formula_fallback", 0) + degraded
+        stats.setdefault("comment_formula_failures", []).extend(failures)
     return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             f'<w:comments {_NS}>' + "".join(items) + "</w:comments>"), images
 

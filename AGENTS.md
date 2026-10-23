@@ -24,7 +24,7 @@
   .venv/bin/python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -e '.[dev,render]' build
   ```
 - `.venv` 也可指向仓库内已验证的独立环境（本机为 `.venv-cli`）；插件仍从 `.venv/bin/jiaodui` 自动发现 CLI。旧 DSH 环境只作备份，不参与测试或运行。
-- 外部依赖 `pandoc`（docx↔md）；路径可用 `JIAODUI_PANDOC` 覆盖。
+- 外部依赖 `pandoc`（docx 回退 / md→docx）；路径可用 `JIAODUI_PANDOC` 覆盖。固定讲义模板的 docx 导入走原生读取（`jiaodui/docx_reader.py`，`convert --import-engine auto`），结构不认识时自动回退。
 - 测试：`.venv/bin/python -m pytest -q`；CI 口径用 `.venv/bin/python -m pytest -o addopts='' -q -rs`（清空 addopts，用于确认默认参数没有隐藏差异）。默认已不做标记过滤（tests/ 里没有 e2e/network/slow 用例），并开启 `--strict-markers`：写错标记名会直接报错。CLI 子进程测试用 `sys.executable`，确保与测试进程使用同一环境；pip 安装优先清华源。
 
 ## 分层与禁令

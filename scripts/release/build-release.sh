@@ -3,7 +3,57 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
-PYTHON="${PYTHON:-python3.12}"
+# 构建解释器：显式 PYTHON 优先；否则按 python3.12 → 仓库 .venv → python3
+# 选择第一个满足「>=3.12 且已安装 build」的解释器。必须解析成绝对路径：
+# 脚本后面会 cd 到临时目录，相对路径会失效。
+resolve_python() {
+  local candidate="$1"
+  if [[ "$candidate" != */* ]]; then
+    candidate="$(command -v "$candidate" 2>/dev/null || true)"
+  fi
+  [[ -n "$candidate" ]] || return 0
+  if [[ "$candidate" != /* ]]; then
+    candidate="$(cd -- "$(dirname -- "$candidate")" && pwd -P)/$(basename -- "$candidate")"
+  fi
+  [[ -x "$candidate" ]] && printf '%s\n' "$candidate"
+  return 0
+}
+
+python_can_build() {
+  local candidate="$1"
+  [[ -n "$candidate" && -x "$candidate" ]] || return 1
+  "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1 || return 1
+  "$candidate" -m build --version >/dev/null 2>&1 || return 1
+  "$candidate" -m pip --version >/dev/null 2>&1
+}
+
+EXPLICIT_PYTHON="$(printenv PYTHON || true)"
+if [[ -n "$EXPLICIT_PYTHON" ]]; then
+  PYTHON_BIN="$(resolve_python "$EXPLICIT_PYTHON")"
+  if ! python_can_build "$PYTHON_BIN"; then
+    printf '指定的 PYTHON=%s 不可用于构建：需要 Python >=3.12、build 与 pip。\n' "$EXPLICIT_PYTHON" >&2
+    printf '请先执行：<该解释器> -m pip install build，或用 PYTHON=/path/to/python 重新运行。\n' >&2
+    exit 3
+  fi
+else
+  PYTHON_BIN=""
+  for candidate in python3.12 "$REPOSITORY_ROOT/.venv/bin/python" python3; do
+    resolved="$(resolve_python "$candidate")"
+    if python_can_build "$resolved"; then
+      PYTHON_BIN="$resolved"
+      break
+    fi
+  done
+  if [[ -z "$PYTHON_BIN" ]]; then
+    printf '%s\n' '未找到可用于构建的 Python：已检查 python3.12、仓库 .venv/bin/python、python3。' >&2
+    printf '%s\n' '需要 Python >=3.12 且已安装 build 与 pip；请执行 python3.12 -m pip install build，' >&2
+    printf '%s\n' '或设置 PYTHON 指向带 build 的解释器后重试。' >&2
+    exit 3
+  fi
+fi
+PYTHON="$PYTHON_BIN"
+printf '使用构建解释器：%s\n' "$PYTHON" >&2
+
 # 已落地的学科插件包：一次发布同时带全部包，目标机只装需要的那一个。
 BUNDLE_PACKAGES=(dsh-jiaodui dsh-jiaodui-chemistry)
 CORE_VERSION="$("$PYTHON" -c 'import pathlib,sys,tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["project"]["version"])' "$REPOSITORY_ROOT/pyproject.toml")"
@@ -33,7 +83,6 @@ hash_files() {
   fi
 }
 
-"$PYTHON" -c 'import sys; assert sys.version_info >= (3, 12), "需要独立 Python 3.12+"'
 "$PYTHON" -m pip --version >/dev/null
 command -v pandoc >/dev/null || {
   printf '%s\n' '未找到 pandoc。请先按 https://pandoc.org/installing.html 安装 Pandoc 后重试。' >&2

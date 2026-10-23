@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -27,11 +28,16 @@ class CheckItem:
                 "required": self.required, "scope": self.scope}
 
 
+SUPPORTED_PROPOSAL_SCHEMA_VERSIONS = (2, 3)
+"""CLI 实际能校验的提案 schema 版本；插件在这里声明它的期望版本。"""
+
+
 @dataclass
 class EnvReport:
     items: list[CheckItem] = field(default_factory=list)
     host_checks_required: list[str] = field(default_factory=list)
     runtime: dict = field(default_factory=dict)
+    contract: dict = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -44,6 +50,7 @@ class EnvReport:
             "items": [i.to_dict() for i in self.items],
             "host_checks_required": self.host_checks_required,
             "runtime": self.runtime,
+            "contract": self.contract,
         }
 
 
@@ -89,7 +96,93 @@ def _module_state(name: str) -> tuple[bool, str]:
         return False, f"已安装但无法加载（{type(exc).__name__}）"
 
 
-def check_env() -> EnvReport:
+def _canonical_schema(value: dict) -> str:
+    """契约比对用 canonical JSON：忽略键序和空白，只比较实际结构。"""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _schema_file_check(path: str | None) -> tuple[list[str], dict]:
+    """读取插件随包 schema 并与核心导出逐字段比对，捕获同版本的内容漂移。"""
+    if path is None:
+        return [], {"schema_file": None, "schema_matches": None}
+    info: dict = {"schema_file": path, "schema_matches": None}
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return [f"插件 schema 文件不可读：{type(exc).__name__}"], info
+    schema = payload.get("schema") if isinstance(payload, dict) and "schema" in payload else payload
+    if not isinstance(schema, dict):
+        return ["插件 schema 文件不是 JSON 对象"], info
+    try:
+        version = schema["properties"]["schema_version"]["const"]
+    except (KeyError, TypeError):
+        version = None
+    if version not in SUPPORTED_PROPOSAL_SCHEMA_VERSIONS:
+        return [f"插件 schema 文件的 schema_version 无效：{version!r}"], info
+    from .report_suggestions import proposal_json_schema
+
+    matches = _canonical_schema(schema) == _canonical_schema(
+        proposal_json_schema(schema_version=version))
+    info["schema_matches"] = matches
+    info["schema_version"] = version
+    if not matches:
+        return [f"插件 schema 文件与核心导出的 v{version} 不一致（字段或默认值已漂移）"], info
+    return [], info
+
+
+def _contract_check(expect_schema_version: int | None,
+                    expect_bundle_version: str | None,
+                    expect_schema_file: str | None = None) -> tuple[CheckItem, dict]:
+    """插件 ↔ CLI 契约探针：版本号相同不代表内容相同，必须显式核对 schema 能力与内容。"""
+    from . import __version__
+
+    supported = list(SUPPORTED_PROPOSAL_SCHEMA_VERSIONS)
+    problems: list[str] = []
+    if (expect_schema_version is not None
+            and expect_schema_version not in SUPPORTED_PROPOSAL_SCHEMA_VERSIONS):
+        problems.append(
+            f"插件期望提案 schema v{expect_schema_version}，核心只支持 "
+            + "、".join(f"v{version}" for version in supported))
+    if expect_bundle_version is not None and expect_bundle_version != __version__:
+        bundle_problem_label = "空字符串" if expect_bundle_version == "" else expect_bundle_version
+        problems.append(
+            f"插件 bundle 版本 {bundle_problem_label} 与核心 {__version__} 不一致")
+    schema_problems, schema_info = _schema_file_check(expect_schema_file)
+    problems.extend(schema_problems)
+    ok = not problems
+    bundle_label = "未声明" if expect_bundle_version is None else (expect_bundle_version or "空字符串")
+    schema_label = "未声明" if expect_schema_version is None else str(expect_schema_version)
+    if (expect_schema_version is None and expect_bundle_version is None
+            and expect_schema_file is None):
+        detail = (f"核心 {__version__}；支持提案 schema "
+                  + "、".join(f"v{version}" for version in supported)
+                  + "；调用方未声明插件期望（CLI 直调）")
+    else:
+        detail = (f"插件 bundle {bundle_label} / 核心 {__version__} / "
+                  f"期望提案 schema v{schema_label} / 核心支持 "
+                  + "、".join(f"v{version}" for version in supported))
+    if schema_info["schema_matches"] is True:
+        detail += "；插件 schema 文件与核心一致"
+    elif schema_info["schema_matches"] is False:
+        detail += "；插件 schema 文件与核心不一致"
+    if problems:
+        detail += "；" + "；".join(problems)
+    item = CheckItem("contract（插件↔CLI 契约）", ok, detail)
+    contract = {
+        "ok": ok,
+        "core_version": __version__,
+        "bundle_version": expect_bundle_version,
+        "supported_schema_versions": supported,
+        "expected_schema_version": expect_schema_version,
+        "problems": problems,
+        **schema_info,
+    }
+    return item, contract
+
+
+def check_env(*, expect_schema_version: int | None = None,
+              expect_bundle_version: str | None = None,
+              expect_schema_file: str | None = None) -> EnvReport:
     report = EnvReport()
     from .workflow import resolve_config_dir
     from .workdir import workspace_root
@@ -129,6 +222,11 @@ def check_env() -> EnvReport:
     report.items.append(CheckItem("playwright（classics 古籍检索，后置能力）", playwright,
                                   "已安装" if playwright else "未安装（classics 后置，不影响 v1）",
                                   required=False))
+
+    contract_item, contract = _contract_check(
+        expect_schema_version, expect_bundle_version, expect_schema_file)
+    report.items.append(contract_item)
+    report.contract = contract
 
     # 宿主能力不在 CLI 证明范围（D14）：只列出必须由主 agent 实测的项目
     report.host_checks_required = [

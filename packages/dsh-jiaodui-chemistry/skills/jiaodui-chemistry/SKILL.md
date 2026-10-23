@@ -26,7 +26,7 @@ description: 高中化学试卷/讲义校对入口。优先采用用户指定材
 - 确定后按需加载 [`references/subjects/高中化学.md`](references/subjects/高中化学.md) 与 [`references/subject-matrix.md`](references/subject-matrix.md)，简短告知处理口径后继续。**只走化学口径。**
 
 ### 2.2 执行前硬门槛（失败即拒绝执行）
-1. `jiaodui check-env` 必须通过（Python≥3.12、sympy / python-docx / Pillow / lxml、pandoc）。它只证明本地依赖，**不证明宿主能力**。`matplotlib` 属可选：check-env 按真实 import 区分「未安装 / 已安装但无法加载」；不可用只让**批注内公式图片**降级为 `$…$` 文本，不阻塞流程。化学方程式与算式同此降级路径。
+1. `jiaodui_task_prepare`（check-env）必须通过（本地依赖 + 插件↔CLI 契约）。它仍不证明宿主能力。`matplotlib` 属可选：check-env 按真实 import 区分「未安装 / 已安装但无法加载」；不可用只让**批注内公式图片**降级为 `$…$` 文本，不阻塞流程。化学方程式与算式同此降级路径。
 2. 首次校对派发前，按 [`references/vision-probe.md`](references/vision-probe.md) 派一个干净上下文的子 agent，实际读取**随包 `assets/vision-probe.png` 白底测试图**并描述内容。以 skill 安装位置解析绝对路径；不从教材找图，不现场绘图，不向子 agent 预告图片答案。无图片讲义/试卷同样可以验证；同会话同模型/工具配置验证成功后可复用，配置改变或新会话重测。
 3. 同时确认宿主支持：一层扁平子 agent、真实read_image、结构化单元读取/提交，以及回传一行摘要。
 4. 图片必须用真实读图工具；DSH `read_image` 用 `file_path`。参数错误在预算内最多修正2次，权限拒绝和用户取消不重试。固定探针用随包白底图；教材透明线稿按实际读取清单取白底图，仍无法确认视觉时拒绝校对。单元读取每页最多2000行。宿主schema与历史run_code调用纪律按需读 `references/failure-modes.md` 第七节，不混用内外层字段。read limit≤2000；续页调offset。

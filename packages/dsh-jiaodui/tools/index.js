@@ -89,9 +89,8 @@ function render(args, value) {
 const CALC_SCHEMAS = JSON.parse(
   readFileSync(fileURLToPath(new URL('./calc-schemas.json', import.meta.url)), 'utf8'),
 ).operations
-const SUBMIT_PROPOSAL_SCHEMA = JSON.parse(
-  readFileSync(fileURLToPath(new URL('./proposal-schema-v3.json', import.meta.url)), 'utf8'),
-).schema
+const PROPOSAL_SCHEMA_V3_PATH = fileURLToPath(new URL('./proposal-schema-v3.json', import.meta.url))
+const SUBMIT_PROPOSAL_SCHEMA = JSON.parse(readFileSync(PROPOSAL_SCHEMA_V3_PATH, 'utf8')).schema
 const SUBMIT_PROPOSAL_V2_SCHEMA = JSON.parse(
   readFileSync(fileURLToPath(new URL('./proposal-schema-bind-current.json', import.meta.url)), 'utf8'),
 ).schema
@@ -121,7 +120,7 @@ function toolVisible(config) {
 /** 共用工具 schema 接受两门已落地学科；具体配置与工具权限仍由 core 校验。 */
 const SUPPORTED_SUBJECTS = ['高中物理', '高中化学']
 
-const TASK_PREPARE_OPERATIONS = ['check-env', 'inspect-source', 'convert', 'split',
+const TASK_PREPARE_OPERATIONS = ['check-env', 'inspect-source', 'inspect-images', 'convert', 'split',
   'precheck-split', 'status', 'execution-policy']
 /** 准备阶段的子命令白名单：与 `jiaodui <command> --help` 实际注册一致。 */
 
@@ -141,11 +140,17 @@ function taskPrepareArgs(args) {
   ]
   switch (args.operation) {
     case 'check-env':
-      return ['check-env']
+      // 契约探针：版本号相同不代表内容相同，check-env 必须比对插件期望与核心能力
+      return ['check-env',
+        '--expect-schema-version', String(SUBMIT_PROPOSAL_SCHEMA.properties.schema_version.const),
+        '--expect-bundle-version', BUNDLE_VERSION,
+        '--expect-schema-file', PROPOSAL_SCHEMA_V3_PATH]
     case 'inspect-source':
       return ['inspect-source', ...target,
         ...(args.preview_chars === undefined || args.preview_chars === null
           ? [] : ['--preview-chars', String(args.preview_chars)])]
+    case 'inspect-images':
+      return ['inspect-images', ...(args.path ? ['--unit', args.path] : [])]
     case 'convert':
       return ['convert', ...target, ...modeFlags,
         ...(args.material_name ? ['--material-name', args.material_name] : [])]
@@ -397,7 +402,7 @@ function registerStructuredTools(ctx, cliTool, visible) {
       },
       path: {
         type: 'string',
-        description: '位置参数：inspect-source/convert 传源文件；split 传 raw md；precheck-split/status 传单元根目录（units/<材料名>）；execution-policy 传材料目录。',
+        description: '位置参数：inspect-source/convert 传源文件；inspect-images 传单元目录；split 传 raw md；precheck-split/status 传单元根目录（units/<材料名>）；execution-policy 传材料目录。',
       },
       preview_chars: {
         type: 'integer', minimum: 0, maximum: 2000,

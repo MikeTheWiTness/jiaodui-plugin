@@ -1,0 +1,68 @@
+{
+  "R1": {
+    "operation": "evaluate",
+    "expression": "sqrt.__globals__['__buil'+'tins__']['__im'+'port__']('path'+'lib').Path('/var/folders/bn/t2ly6srd2xz_y2djnzhny2940000gn/T/jiaodui-review-ddo79kwz/sandbox-escape.txt').touch()",
+    "result": {
+      "success": true,
+      "result": null,
+      "error": null,
+      "elapsed_ms": 195
+    },
+    "marker_exists": true,
+    "marker_inside_work_root": false,
+    "expected": "拒绝非数学属性访问与导入，且不创建文件"
+  },
+  "R2": {
+    "before": {
+      "unit": "单元1",
+      "unit_id": "cdd7ba66aa774dd68c8d9f9a7711326b",
+      "phase": "read",
+      "attempt_id": "attempt-B",
+      "agent_id": "agent-B",
+      "last_event_at": "2026-10-23T07:13:25.700462+00:00",
+      "age_seconds": 0,
+      "event_count": 2,
+      "in_flight": true,
+      "stale": false,
+      "cancelled": null
+    },
+    "late_cancel": {
+      "rejected": true,
+      "code": "attempt-terminated",
+      "message": "技术取消目标 attempt 已终结",
+      "details": {
+        "attempt_id": "attempt-A",
+        "phase": "cancelled"
+      }
+    },
+    "after": {
+      "unit": "单元1",
+      "unit_id": "cdd7ba66aa774dd68c8d9f9a7711326b",
+      "phase": "read",
+      "attempt_id": "attempt-B",
+      "agent_id": "agent-B",
+      "last_event_at": "2026-10-23T07:13:25.700462+00:00",
+      "age_seconds": 0,
+      "event_count": 2,
+      "in_flight": true,
+      "stale": false,
+      "cancelled": null
+    },
+    "terminated_attempts": {
+      "attempt-A": "cancelled"
+    },
+    "dispatch_stop": false,
+    "expected": "旧 attempt-A 的迟到技术取消应被 attempt-terminated 拒绝，attempt-B 保持在途且调度不停止"
+  },
+  "R3": {
+    "expression": "pi*1e-12",
+    "result": {
+      "success": true,
+      "result": 3e-12,
+      "error": null,
+      "elapsed_ms": 132
+    },
+    "expected": 3.141592653589793e-12,
+    "relative_error": 0.04507034144862789
+  }
+}
